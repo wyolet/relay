@@ -57,12 +57,27 @@ func (s *Snapshot) indexModelAliases(m *model.Model, provSlug string) {
 				suffix: suffix,
 				ref:    AliasRef{Model: m, Snapshot: tgt, Name: a, Pattern: true},
 			})
+		}
+	}
+	s.eachExactAlias(m, provSlug, s.insertAliasExact)
+	s.sortAliasPatterns()
+}
+
+// eachExactAlias calls fn with every exact-alias key of m and the ref it
+// resolves to: bare, provider-qualified, and host-pinned forms.
+func (s *Snapshot) eachExactAlias(m *model.Model, provSlug string, fn func(key string, ref AliasRef)) {
+	tgt := m.PointerSnapshot()
+	if tgt == nil {
+		return
+	}
+	for _, a := range m.Spec.Aliases {
+		if _, _, isPattern := model.AliasPattern(a); isPattern {
 			continue
 		}
 		base := AliasRef{Model: m, Snapshot: tgt, Name: a}
-		s.insertAliasExact(slug.From(a), base)
+		fn(slug.From(a), base)
 		if provSlug != "" {
-			s.insertAliasExact(slug.From(provSlug+"/"+a), base)
+			fn(slug.From(provSlug+"/"+a), base)
 		}
 		for _, hb := range s.BindingsForModel(m.Meta.ID) {
 			if !hb.IsEnabled() {
@@ -76,13 +91,12 @@ func (s *Snapshot) indexModelAliases(m *model.Model, provSlug string) {
 				continue
 			}
 			pinned := AliasRef{Model: m, Snapshot: tgt, HostID: hb.Spec.HostID, Name: a}
-			s.insertAliasExact(slug.From(a+"@"+h.Meta.Name), pinned)
+			fn(slug.From(a+"@"+h.Meta.Name), pinned)
 			if provSlug != "" {
-				s.insertAliasExact(slug.From(provSlug+"/"+a+"@"+h.Meta.Name), pinned)
+				fn(slug.From(provSlug+"/"+a+"@"+h.Meta.Name), pinned)
 			}
 		}
 	}
-	s.sortAliasPatterns()
 }
 
 // insertAliasExact writes ref under key unless an entry from another model
@@ -130,10 +144,18 @@ func (s *Snapshot) sortAliasPatterns() {
 // structures, sweeping by owning-model id (robust even when the model's
 // hosts were already evicted, mirroring deindexModelSnapshots).
 func (s *Snapshot) deindexModelAliases(m *model.Model) {
+	var vacated map[string]struct{}
 	for k, ref := range s.aliasExact {
 		if ref.Model.Meta.ID == m.Meta.ID {
 			delete(s.aliasExact, k)
+			if vacated == nil {
+				vacated = map[string]struct{}{}
+			}
+			vacated[k] = struct{}{}
 		}
+	}
+	if vacated != nil {
+		s.reelectAliasExact(m.Meta.ID, vacated)
 	}
 	if len(s.aliasPatterns) == 0 {
 		return
@@ -145,6 +167,23 @@ func (s *Snapshot) deindexModelAliases(m *model.Model) {
 		}
 	}
 	s.aliasPatterns = kept
+}
+
+// reelectAliasExact hands each vacated key to the next model that declares
+// it, so a collision loser takes over without a full rebuild. Only runs when
+// the leaving model held an exact alias.
+func (s *Snapshot) reelectAliasExact(leavingID string, vacated map[string]struct{}) {
+	for id, other := range s.modelsByID {
+		if id == leavingID || len(other.Spec.Aliases) == 0 {
+			continue
+		}
+		provSlug, _ := s.ProviderSlug(other.Meta.Owner.ID)
+		s.eachExactAlias(other, provSlug, func(key string, ref AliasRef) {
+			if _, ok := vacated[key]; ok {
+				s.insertAliasExact(key, ref)
+			}
+		})
+	}
 }
 
 // ResolveAlias maps a slug-normalized ref to a declared model alias:

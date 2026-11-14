@@ -106,13 +106,24 @@ func TestAlias_CrossModelCollisionIsDeterministic(t *testing.T) {
 }
 
 func TestAlias_CollisionLoserTakesOverWhenTheWinnerDropsIt(t *testing.T) {
-	t.Skip("bug: models A and B declare one alias, A (the tiebreak winner) drops it → the alias resolves to nothing instead of B until a full reload")
 	c := catalogFromFixture(t)
 	declare(t, c, "gpt-4o", "shared-nick")
 	declare(t, c, "gpt-4o-mini", "shared-nick")
 	declare(t, c, "gpt-4o")
 	if got := resolveAlias(c.Current(), "shared-nick", true); got.Model != "gpt-4o-mini" {
 		t.Errorf("shared-nick = %+v after gpt-4o dropped it, want gpt-4o-mini, which still declares it", got)
+	}
+}
+
+func TestAlias_CollisionLoserTakesOverWhenTheWinnerIsDeleted(t *testing.T) {
+	c := catalogFromFixture(t)
+	winner := declare(t, c, "gpt-4o", "shared-nick")
+	declare(t, c, "gpt-4o-mini", "shared-nick")
+	if err := c.ApplyModelDelete(winner.Meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveAlias(c.Current(), "shared-nick", true); got.Model != "gpt-4o-mini" {
+		t.Errorf("shared-nick = %+v after gpt-4o was deleted, want gpt-4o-mini, which still declares it", got)
 	}
 }
 
