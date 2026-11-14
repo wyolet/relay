@@ -323,8 +323,8 @@ func runSuite(t *testing.T, store newStore) {
 		p.sync()
 		p.admitN(t, 99, small)
 		before := p.rec.RoundTrips()
-		if r := p.refused(t, small); r.RetryAfter <= 0 {
-			t.Fatalf("local refusal has retry-after %v", r.RetryAfter)
+		if r := p.refused(t, small); r.Counter.ID != small.ID || r.RetryAfter != 9*time.Minute+50*time.Second {
+			t.Fatalf("local refusal by %s with retry-after %v, want the 10-minute counter and the 9m50s left of its window", r.Counter.ID, r.RetryAfter)
 		}
 		if trips := p.rec.RoundTrips() - before; trips != 0 {
 			t.Fatalf("local refusal made %d round trips", trips)
@@ -413,8 +413,8 @@ func runSuite(t *testing.T, store newStore) {
 			t.Fatalf("at 80%% spent the budget is %s, want exact", m)
 		}
 		p.admit(t, hard).Settle(limits.Usage{CostNanos: 2000})
-		if r := p.refused(t, hard); r.RetryAfter <= 0 {
-			t.Fatalf("spent budget refusal has retry-after %v", r.RetryAfter)
+		if r := p.refused(t, hard); r.Counter.ID != hard.ID || r.RetryAfter != time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC).Sub(now) {
+			t.Fatalf("spent budget refusal by %s with retry-after %v, want the budget and the time left of the month", r.Counter.ID, r.RetryAfter)
 		}
 	})
 
@@ -433,8 +433,9 @@ func runSuite(t *testing.T, store newStore) {
 				t.Fatalf("lua admit %d after 150 hybrid admits: %v", i+1, err)
 			}
 		}
-		if _, err := l.Admit(context.Background(), []limits.Counter{long}, limits.Usage{}); err == nil {
-			t.Fatal("lua admitted past the cap the hybrid counted towards")
+		var refused *limits.Refused
+		if _, err := l.Admit(context.Background(), []limits.Counter{long}, limits.Usage{}); !errors.As(err, &refused) || refused.Counter.ID != long.ID {
+			t.Fatalf("lua admit past the cap the hybrid counted towards = %v, want a refusal by that counter", err)
 		}
 	})
 
@@ -458,8 +459,9 @@ func runSuite(t *testing.T, store newStore) {
 		}
 		// Exact fails closed.
 		down := newPodOn(&failing{ScriptStore: s, all: true}, s, &now)
-		if _, err := down.Admit(context.Background(), []limits.Counter{fixed}, limits.Usage{}); err == nil {
-			t.Fatal("exact admit on a failing store was admitted")
+		var refused *limits.Refused
+		if res, err := down.Admit(context.Background(), []limits.Counter{fixed}, limits.Usage{}); res != nil || !errors.Is(err, kv.ErrUnavailable) || errors.As(err, &refused) {
+			t.Fatalf("exact admit on a failing store = %v, %v; want no reservation and the store's error, not a cap refusal", res, err)
 		}
 		syncOn.fail.Store(false)
 		p.sync()
@@ -574,6 +576,34 @@ func TestCloseSyncsUnsyncedCounts(t *testing.T) {
 	}
 }
 
+// Counts a failed sync left behind are sent again by the next one, with no request touching the counter in between.
+func TestUnansweredCountsAreSentAgainWithoutNewTraffic(t *testing.T) {
+	now := time.Date(2026, 11, 4, 10, 0, 10, 0, time.UTC)
+	s := memStore(t)
+	syncOn := &failing{ScriptStore: s}
+	c := callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1000, time.Minute))
+	p := newPodOn(s, syncOn, &now)
+	p.admitN(t, 1, c)
+	p.sync()
+	p.admitN(t, 5, c)
+	syncOn.fail.Store(true)
+	now = now.Add(time.Second)
+	p.sync()
+	if got := stored(t, s, c, now); got != 1 {
+		t.Fatalf("store holds %d after a failed sync, want 1", got)
+	}
+	syncOn.fail.Store(false)
+	now = now.Add(time.Second)
+	p.sync()
+	if got := stored(t, s, c, now); got != 6 {
+		t.Fatalf("store holds %d after the next sync, want 6", got)
+	}
+	p.sync()
+	if got := stored(t, s, c, now); got != 6 {
+		t.Fatalf("store holds %d after one more sync, want 6 (sent once)", got)
+	}
+}
+
 func TestAddedSlotSurvivesIdleDrop(t *testing.T) {
 	now := time.Date(2026, 11, 4, 10, 0, 10, 0, time.UTC)
 	p := newPod(memStore(t), &now)
@@ -586,9 +616,11 @@ func TestAddedSlotSurvivesIdleDrop(t *testing.T) {
 	lk.hash = p.tab.hash(c.Group, c.ID, r.Meter)
 	p.mu.Lock()
 	p.addSlot(&c, &lk)
+	// A second request racing to add the same counter finds it there.
+	p.addSlot(&c, &lk)
 	p.mu.Unlock()
 	p.dropIdle(now)
-	if _, found, _ := p.tab.find(lk.hash, c.Group, c.ID, r.Meter); !found {
-		t.Fatal("the sync freed a slot added for a request still counting in it")
+	if _, found, _ := p.tab.find(lk.hash, c.Group, c.ID, r.Meter); !found || len(p.tab.slots) != 1 {
+		t.Fatalf("after two adds and a sync the table holds %d slots, found %v; want the one slot kept for the request still counting in it", len(p.tab.slots), found)
 	}
 }

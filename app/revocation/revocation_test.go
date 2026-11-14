@@ -2,8 +2,10 @@ package revocation
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
@@ -31,9 +33,88 @@ func TestRevokeReachesEveryPodOnRefresh(t *testing.T) {
 	if !b.Set().Revoked("jti-1", now) || b.Set().Revoked("jti-2", now) {
 		t.Fatal("refresh must copy exactly the shared list")
 	}
-	if b.Set().Revoked("jti-1", now.Add(2*time.Hour)) {
-		t.Fatal("an entry past the token's expiry no longer denies")
+	exp := time.Unix(now.Add(time.Hour).Unix(), 0)
+	if !b.Set().Revoked("jti-1", exp.Add(-time.Second)) || b.Set().Revoked("jti-1", exp) {
+		t.Fatal("an entry denies until the token's expiry and not from it on")
 	}
+	var none *Set
+	if none.Revoked("jti-1", now) || b.Set().Revoked("", now) || new(Set).Revoked("jti-1", now) {
+		t.Fatal("a missing set, an unfilled one, or an empty token id denies")
+	}
+}
+
+// flakyStore is a single-key Store that fails every call while down and records the TTL of its last write.
+type flakyStore struct {
+	raw  []byte
+	ttl  time.Duration
+	down bool
+}
+
+func (s *flakyStore) Get(context.Context, string) ([]byte, error) {
+	if s.down {
+		return nil, errors.New("store down")
+	}
+	if s.raw == nil {
+		return nil, kv.ErrNotFound
+	}
+	return s.raw, nil
+}
+
+func (s *flakyStore) Set(_ context.Context, _ string, v []byte, ttl time.Duration) error {
+	if s.down {
+		return errors.New("store down")
+	}
+	s.raw, s.ttl = v, ttl
+	return nil
+}
+
+func (s *flakyStore) WithLock(ctx context.Context, _ []string, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// A revocation the shared list did not take is not served from this pod alone, a failed poll keeps the previous copy, and the stored key lives as long as its latest entry.
+func TestStoreFailuresKeepThePreviousCopy(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		store := &flakyStore{}
+		l, other := New(store), New(store)
+		go l.Run(ctx, time.Minute)
+		revoked := func(id string) bool { return l.Set().Revoked(id, time.Now()) }
+
+		if err := other.Revoke(ctx, "short", time.Now().Add(10*time.Minute)); err != nil || store.ttl != 10*time.Minute {
+			t.Fatalf("Revoke: err %v, key TTL %v; want 10m", err, store.ttl)
+		}
+		if err := other.Revoke(ctx, "long", time.Now().Add(time.Hour)); err != nil || store.ttl != time.Hour {
+			t.Fatalf("Revoke: err %v, key TTL %v; want the latest expiry, 1h", err, store.ttl)
+		}
+		synctest.Sleep(time.Minute)
+		if !revoked("short") || !revoked("long") {
+			t.Fatal("the poll did not pick up another pod's revocations")
+		}
+
+		store.down = true
+		if err := l.Revoke(ctx, "unsaved", time.Now().Add(time.Hour)); err == nil || revoked("unsaved") || len(l.pending) != 0 {
+			t.Fatalf("Revoke with the store down: err %v, served locally %v", err, revoked("unsaved"))
+		}
+		if err := l.Refresh(ctx); err == nil {
+			t.Fatal("Refresh with the store down reported success")
+		}
+		synctest.Sleep(time.Minute)
+		if !revoked("long") {
+			t.Fatal("a failed poll dropped the previous copy")
+		}
+
+		store.down, store.raw = false, []byte(`{"fresh":99999999999}`)
+		synctest.Sleep(time.Minute)
+		if !revoked("fresh") || revoked("long") {
+			t.Fatal("the poll after the store came back did not replace the copy")
+		}
+		store.raw = []byte(`not json`)
+		if err := l.Refresh(ctx); err == nil || !revoked("fresh") {
+			t.Fatalf("Refresh over a corrupt list: err %v, previous copy kept %v", err, revoked("fresh"))
+		}
+		cancel()
+	})
 }
 
 func TestExpiredEntriesArePruned(t *testing.T) {

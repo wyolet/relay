@@ -2,22 +2,17 @@ package hostkey
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-func fix(name string, kind ValueKind) *HostKey {
+const someID = "01a19bc3-0000-7000-8000-000000000001"
+
+func fix(kind ValueKind) *HostKey {
 	k := &HostKey{
-		Meta: meta.Metadata{
-			Name:  name,
-			Owner: meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()},
-		},
-		Spec: Spec{
-			HostID:    meta.NewID(),
-			ValueFrom: ValueFrom{Kind: kind},
-		},
+		Meta: meta.Metadata{Name: "k", Owner: meta.Owner{Kind: meta.OwnerUser, ID: someID}},
+		Spec: Spec{HostID: someID, ValueFrom: ValueFrom{Kind: kind}},
 	}
 	switch kind {
 	case ValueKindEnv:
@@ -26,152 +21,89 @@ func fix(name string, kind ValueKind) *HostKey {
 		k.Spec.Value = "sk-test"
 	case ValueKindOAuth:
 		k.Spec.Value = `{"access_token":"at","refresh_token":"rt"}`
-		k.Spec.ValueFrom.Provider = "anthropic"
+		k.Spec.ValueFrom.Provider = "claude"
 	}
 	return k
 }
 
-func TestValidate(t *testing.T) {
-	t.Run("ok env", func(t *testing.T) {
-		if err := fix("k", ValueKindEnv).Validate(); err != nil {
-			t.Fatalf("unexpected: %v", err)
+// Owners see the first characters of a long secret; everyone else only a known format prefix and the last 4. Neither shows anything of an unresolved or short secret.
+func TestPrefixAndHint(t *testing.T) {
+	for _, tc := range []struct{ value, prefix, hint string }{
+		{"", "", ""},
+		{"sk-short", "", ""},
+		{"sk-ant-api03-0123456789a", "sk-ant-a", "sk-ant-...789a"},
+		{"sk-ant-api03-0123456789", "", ""},
+		{"sk-proj-0123456789abcdefghijkl", "sk-proj-", "sk-proj-...ijkl"},
+		{"sk-0123456789abcdefghijklmnop", "sk-01234", "sk-...mnop"},
+		{"AIzaSyD0123456789abcdefghijk", "AIzaSyD0", "AIza...hijk"},
+		{"f3a91c0d77e24b5c9a1d2e3f4a5b6c7d", "f3a91c0d", "...6c7d"},
+	} {
+		k := &HostKey{Resolved: tc.value}
+		if prefix, hint := k.Prefix(), k.Hint(); prefix != tc.prefix || hint != tc.hint {
+			t.Errorf("%q: Prefix %q Hint %q, want %q %q", tc.value, prefix, hint, tc.prefix, tc.hint)
 		}
-	})
-	t.Run("ok stored", func(t *testing.T) {
-		if err := fix("k", ValueKindStored).Validate(); err != nil {
-			t.Fatalf("unexpected: %v", err)
-		}
-	})
-	t.Run("ok oauth", func(t *testing.T) {
-		if err := fix("k", ValueKindOAuth).Validate(); err != nil {
-			t.Fatalf("unexpected: %v", err)
-		}
-	})
-	t.Run("ok team-owned", func(t *testing.T) {
-		k := fix("k", ValueKindEnv)
-		k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
-		if err := k.Validate(); err != nil {
-			t.Fatalf("unexpected: %v", err)
-		}
-	})
-	t.Run("ok with account", func(t *testing.T) {
-		k := fix("k", ValueKindEnv)
-		k.Spec.AccountID = meta.NewID()
-		if err := k.Validate(); err != nil {
-			t.Fatalf("unexpected: %v", err)
-		}
-	})
+	}
+}
 
+func TestValidate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		k    *HostKey
+		kind ValueKind
+		edit func(k *HostKey)
 		want string
 	}{
-		{
-			name: "host owner rejected",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.Kind = meta.OwnerHost; return k }(),
-			want: "owner.kind must be user, system, team or project",
-		},
-		{
-			name: "team owner without id",
-			k: func() *HostKey {
-				k := fix("k", ValueKindEnv)
-				k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam}
-				return k
-			}(),
-			want: "a team owner needs the team's id",
-		},
-		{
-			name: "missing host id",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.HostID = ""; return k }(),
-			want: "HostID",
-		},
-		{
-			name: "account must be an id",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.AccountID = "acme-openai"; return k }(),
-			want: "AccountID",
-		},
-		{
-			name: "env mode missing env",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.ValueFrom.Env = ""; return k }(),
-			want: "valueFrom.env required",
-		},
-		{
-			name: "env mode with cleartext rejected",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.Value = "sk-x"; return k }(),
-			want: "value must be empty",
-		},
-		{
-			name: "stored mode missing value",
-			k:    func() *HostKey { k := fix("k", ValueKindStored); k.Spec.Value = ""; return k }(),
-			want: "value required",
-		},
-		{
-			name: "stored mode with env rejected",
-			k: func() *HostKey {
-				k := fix("k", ValueKindStored)
-				k.Spec.ValueFrom.Env = "X"
-				return k
-			}(),
-			want: "valueFrom.env must be empty",
-		},
-		{
-			name: "oauth mode missing value",
-			k:    func() *HostKey { k := fix("k", ValueKindOAuth); k.Spec.Value = ""; return k }(),
-			want: "value (oauth token blob) required",
-		},
-		{
-			name: "oauth mode missing provider",
-			k:    func() *HostKey { k := fix("k", ValueKindOAuth); k.Spec.ValueFrom.Provider = ""; return k }(),
-			want: "valueFrom.provider required",
-		},
-		{
-			name: "oauth mode with env rejected",
-			k: func() *HostKey {
-				k := fix("k", ValueKindOAuth)
-				k.Spec.ValueFrom.Env = "X"
-				return k
-			}(),
-			want: "valueFrom.env must be empty",
-		},
-		{
-			name: "unknown kind",
-			k: func() *HostKey {
-				k := fix("k", ValueKindEnv)
-				k.Spec.ValueFrom.Kind = "bogus"
-				return k
-			}(),
-			want: "Kind",
-		},
+		{"env", ValueKindEnv, func(*HostKey) {}, ""},
+		{"stored", ValueKindStored, func(*HostKey) {}, ""},
+		{"stored, value already resolved", ValueKindStored, func(k *HostKey) { k.Spec.Value, k.Resolved = "", "sk-x" }, ""},
+		{"oauth", ValueKindOAuth, func(*HostKey) {}, ""},
+		{"oauth, value already resolved", ValueKindOAuth, func(k *HostKey) { k.Spec.Value, k.Resolved = "", "blob" }, ""},
+		{"team-owned", ValueKindEnv, func(k *HostKey) { k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: someID} }, ""},
+		{"system-owned", ValueKindEnv, func(k *HostKey) { k.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem} }, ""},
+		{"project-owned", ValueKindEnv, func(k *HostKey) { k.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: someID} }, ""},
+		{"with account", ValueKindEnv, func(k *HostKey) { k.Spec.AccountID = someID }, ""},
+		{"host owner", ValueKindEnv, func(k *HostKey) { k.Meta.Owner.Kind = meta.OwnerHost }, `hostkey "k": owner.kind must be user, system, team or project, got "host"`},
+		{"no owner", ValueKindEnv, func(k *HostKey) { k.Meta.Owner = meta.Owner{} }, `hostkey "k": owner.kind must be user, system, team or project, got ""`},
+		{"team owner without id", ValueKindEnv, func(k *HostKey) { k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam} }, `hostkey "k": a team owner needs the team's id`},
+		{"missing host id", ValueKindEnv, func(k *HostKey) { k.Spec.HostID = "" }, "Key: 'HostKey.Spec.HostID' Error:Field validation for 'HostID' failed on the 'required' tag"},
+		{"a host id that is no uuid is left to the host lookup", ValueKindEnv, func(k *HostKey) { k.Spec.HostID = "openai" }, ""},
+		{"account not an id", ValueKindEnv, func(k *HostKey) { k.Spec.AccountID = "acme-openai" }, "Key: 'HostKey.Spec.AccountID' Error:Field validation for 'AccountID' failed on the 'uuid' tag"},
+		{"env mode missing env", ValueKindEnv, func(k *HostKey) { k.Spec.ValueFrom.Env = "" }, `hostkey "k": valueFrom.env required for env mode`},
+		{"env mode with cleartext", ValueKindEnv, func(k *HostKey) { k.Spec.Value = "sk-x" }, `hostkey "k": value must be empty for env mode`},
+		{"stored mode missing value", ValueKindStored, func(k *HostKey) { k.Spec.Value = "" }, `hostkey "k": value required for stored mode`},
+		{"stored mode with env", ValueKindStored, func(k *HostKey) { k.Spec.ValueFrom.Env = "X" }, `hostkey "k": valueFrom.env must be empty for stored mode`},
+		{"oauth mode missing value", ValueKindOAuth, func(k *HostKey) { k.Spec.Value = "" }, `hostkey "k": value (oauth token blob) required for oauth mode`},
+		{"oauth mode missing provider", ValueKindOAuth, func(k *HostKey) { k.Spec.ValueFrom.Provider = "" }, `hostkey "k": valueFrom.provider required for oauth mode`},
+		{"oauth mode with env", ValueKindOAuth, func(k *HostKey) { k.Spec.ValueFrom.Env = "X" }, `hostkey "k": valueFrom.env must be empty for oauth mode`},
+		{"unknown kind", ValueKindEnv, func(k *HostKey) { k.Spec.ValueFrom.Kind = "bogus" }, "Key: 'HostKey.Spec.ValueFrom.Kind' Error:Field validation for 'Kind' failed on the 'oneof' tag"},
+		{"no kind", ValueKindEnv, func(k *HostKey) { k.Spec.ValueFrom.Kind = "" }, "Key: 'HostKey.Spec.ValueFrom.Kind' Error:Field validation for 'Kind' failed on the 'required' tag"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.k.Validate()
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("got %v, want substring %q", err, tc.want)
-			}
-		})
+		k := fix(tc.kind)
+		tc.edit(k)
+		got := ""
+		if err := k.Validate(); err != nil {
+			got = err.Error()
+		}
+		if got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %s", tc.name, got, tc.want)
+		}
 	}
 }
 
 // A key's value goes to its host, so an env ref may not name relay's own configuration, and the refusal does not echo the name.
 func TestValidateRefusesReservedEnvNames(t *testing.T) {
-	for _, name := range []string{"RELAY_MASTER_KEY", "RELAY_ADMIN_TOKEN", "RELAY_PG_DSN", "WYOLET_OIDC_CLIENT_SECRET", "relay_master_key"} {
-		k := fix("k", ValueKindEnv)
+	const refusal = `hostkey "k": valueFrom.env names a variable reserved for relay's own configuration (RELAY_*, WYOLET_*)`
+	for name, reserved := range map[string]bool{
+		"RELAY_MASTER_KEY": true, "RELAY_": true, "WYOLET_OIDC_CLIENT_SECRET": true, "relay_master_key": true, "Wyolet_x": true,
+		"OPENAI_API_KEY": false, "MY_RELAY_KEY": false, "RELAYER_KEY": false, "RELAY": false, " RELAY_X": false,
+	} {
+		k := fix(ValueKindEnv)
 		k.Spec.ValueFrom.Env = name
 		err := k.Validate()
-		if !errors.Is(err, ErrReservedEnv) {
-			t.Errorf("%s: err = %v, want ErrReservedEnv", name, err)
-			continue
-		}
-		if strings.Contains(err.Error(), name) {
-			t.Errorf("%s: error echoes the variable name: %v", name, err)
-		}
-	}
-	for _, name := range []string{"OPENAI_API_KEY", "MY_RELAY_KEY", "RELAYER_KEY"} {
-		k := fix("k", ValueKindEnv)
-		k.Spec.ValueFrom.Env = name
-		if err := k.Validate(); err != nil {
-			t.Errorf("%s: unexpected: %v", name, err)
+		switch {
+		case !reserved && err != nil:
+			t.Errorf("%q: Validate() = %v, want it accepted", name, err)
+		case reserved && (!errors.Is(err, ErrReservedEnv) || err.Error() != refusal):
+			t.Errorf("%q: Validate() = %v, want ErrReservedEnv as %q", name, err, refusal)
 		}
 	}
 }

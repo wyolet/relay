@@ -147,17 +147,20 @@ spec:
 }
 
 // The v0.20 fields a policy and a binding no longer have are refused, not dropped: a silently dropped restriction would widen access.
-func TestRemovedFieldsAreRefused(t *testing.T) {
-	for field, doc := range map[string]string{
-		"credentials":           "kind: Policy\nmetadata: {name: p}\nspec: {credentials: [k]}",
-		"includeDeprecated":     "kind: Policy\nmetadata: {name: p}\nspec: {includeDeprecated: true}",
-		"payloadLoggingEnabled": "kind: Policy\nmetadata: {name: p}\nspec: {payloadLoggingEnabled: true}",
-		"subjects":              "kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, subjects: [{kind: team, name: t}]}",
-		"project":               "kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, project: x, accounts: [a]}",
+func TestRemovedPolicyAndBindingFieldsAreRefused(t *testing.T) {
+	for _, tc := range []struct{ doc, want string }{
+		{"kind: Policy\nmetadata: {name: p}\nspec: {credentials: [k]}", "wire: doc 0 kind=Policy name=p: Policy no longer has spec.credentials (use pools (a Pool of the one host key))"},
+		{"kind: Policy\nmetadata: {name: p}\nspec: {includeDeprecated: true}", "wire: doc 0 kind=Policy name=p: Policy no longer has spec.includeDeprecated (use nothing: models grant deprecated models like any other)"},
+		{"kind: Policy\nmetadata: {name: p}\nspec: {payloadLoggingEnabled: true}", "wire: doc 0 kind=Policy name=p: Policy no longer has spec.payloadLoggingEnabled (use payloadLogging on the accounts the policy is bound to)"},
+		{"kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, subjects: [{kind: team, name: t}]}", "wire: doc 0 kind=PolicyBinding name=b: PolicyBinding no longer has spec.subjects (use accounts (account names))"},
+		{"kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, project: x, accounts: [a]}", "wire: doc 0 kind=PolicyBinding name=b: PolicyBinding no longer has spec.project (use metadata.owner)"},
+		{"kind: ServiceAccount\nmetadata: {name: sa}\nspec: {project: p, policy: x}", "wire: doc 0 kind=ServiceAccount name=sa: ServiceAccount no longer has spec.policy (use a PolicyBinding on the service account's account)"},
+		{"kind: HostKey\nmetadata: {name: k}\nspec: {hostId: h, policyId: p}", "wire: doc 0 kind=HostKey name=k: HostKey no longer has spec.policyId (use account, plus a PolicyBinding of the account's tier policy)"},
+		{"kind: RelayKey\nmetadata: {name: legacy}\nspec: {policy: p}", `wire: doc 0 kind=RelayKey name=legacy: unknown kind "RelayKey"`},
 	} {
-		_, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha3\n" + doc))
-		if err == nil || !strings.Contains(err.Error(), "spec."+field) {
-			t.Errorf("%s: err = %v, want a refusal naming spec.%s", field, err, field)
+		_, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha3\n" + tc.doc))
+		if got := errText(err); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %s", tc.doc, got, tc.want)
 		}
 	}
 }

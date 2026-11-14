@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 const subjectsYAML = `
@@ -115,17 +116,6 @@ func TestRoundTrip_Subjects(t *testing.T) {
 	}
 }
 
-// A service account binds through a PolicyBinding; spec.policy is refused
-// under either apiVersion rather than dropped.
-func TestParse_ServiceAccountPolicyIsRefused(t *testing.T) {
-	for _, v := range []string{manifest.APIVersion, manifest.PreviousAPIVersion} {
-		doc := "apiVersion: " + v + "\nkind: ServiceAccount\nmetadata: {name: sa}\nspec: {project: p, policy: x}\n"
-		if _, err := manifest.Parse(strings.NewReader(doc)); err == nil || !strings.Contains(err.Error(), "spec.policy") {
-			t.Errorf("%s: Parse = %v, want a refusal naming spec.policy", v, err)
-		}
-	}
-}
-
 func TestParse_UserPrincipalKey(t *testing.T) {
 	const yaml = `
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -145,22 +135,7 @@ spec:
 	if err != nil {
 		t.Fatalf("ToKey: %v", err)
 	}
-	if k.Spec.Principal.Kind != key.PrincipalUser || k.Spec.Principal.ID != aliceUUID {
-		t.Errorf("key principal = %+v", k.Spec.Principal)
-	}
-}
-
-func TestParse_RelayKeyIsNotAKind(t *testing.T) {
-	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha3
-kind: RelayKey
-metadata:
-  name: legacy
-spec:
-  policy: ml-search-default
-`
-	_, err := manifest.Parse(strings.NewReader(yaml))
-	if err == nil || !strings.Contains(err.Error(), "unknown kind") {
-		t.Fatalf("got %v, want an unknown-kind error", err)
+	if want := (key.Principal{Kind: key.PrincipalUser, ID: aliceUUID}); k.Spec.Principal != want || k.Meta.Owner != (meta.Owner{Kind: meta.OwnerUser}) {
+		t.Errorf("key principal %+v owner %+v, want alice and a user owner left for the write path to stamp", k.Spec.Principal, k.Meta.Owner)
 	}
 }

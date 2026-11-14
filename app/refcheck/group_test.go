@@ -4,71 +4,50 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"testing"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-func groupSubject(name string) []rolebinding.Subject {
-	return []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: name}}
-}
-
-func bindingRows(rbs []*rolebinding.RoleBinding) Lookup {
-	return Lookup{RoleBindings: func(context.Context) ([]*rolebinding.RoleBinding, error) { return rbs, nil }}
-}
-
-func refusal(t *testing.T, err error) *Error {
-	t.Helper()
-	var re *Error
-	if !errors.As(err, &re) {
-		t.Fatalf("err = %v, want a refcheck refusal", err)
+// Group subjects match by name, so renaming a group a binding names would silently strip its members of what the binding grants. A binding the caller may not see still blocks, counted but unnamed.
+func TestGroupRename(t *testing.T) {
+	binding := func(id, name string, s rolebinding.Subject) *rolebinding.RoleBinding {
+		return &rolebinding.RoleBinding{Meta: meta.Metadata{ID: id, Name: name}, Spec: rolebinding.Spec{Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: "u-0"}, s}}}
 	}
-	if re.Status != http.StatusConflict || re.Code != CodeInUse {
-		t.Fatalf("status/code = %d/%q, want 409/%q", re.Status, re.Code, CodeInUse)
+	group := func(name string) rolebinding.Subject {
+		return rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: name}
 	}
-	return re
-}
-
-// Group subjects match by name, so renaming a group a binding names would
-// silently strip its members of what the binding grants.
-func TestGroupRenameRefusedWhileARoleBindingNamesIt(t *testing.T) {
-	rbs := []*rolebinding.RoleBinding{
-		{Meta: meta.Metadata{ID: "rb-1", Name: "eng-admins"}, Spec: rolebinding.Spec{Subjects: groupSubject("eng")}},
-		{Meta: meta.Metadata{ID: "rb-2", Name: "ops-admins"}, Spec: rolebinding.Spec{Subjects: groupSubject("ops")}},
+	few := []*rolebinding.RoleBinding{
+		binding("rb-1", "eng-admins", group("eng")),
+		binding("rb-2", "ops-admins", group("ops")),
+		// A user whose id equals a group's name is no match.
+		binding("rb-3", "by-user", rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: "sales"}),
 	}
-	err := Checker{Rows: bindingRows(rbs)}.GroupRename(context.Background(), "eng", "engineering")
-	want := `group "eng" is named by 1 binding (role-binding "eng-admins"); remove the group from them or point them at the new name first`
-	if got := refusal(t, err).Msg; got != want {
-		t.Fatalf("msg = %q\nwant  %q", got, want)
-	}
-}
-
-func TestGroupRenameListsAtMostTenBindings(t *testing.T) {
-	var rbs []*rolebinding.RoleBinding
+	var many []*rolebinding.RoleBinding
 	for i := range 13 {
-		rbs = append(rbs, &rolebinding.RoleBinding{Meta: meta.Metadata{ID: fmt.Sprint("rb-", i), Name: fmt.Sprint("b", i)}, Spec: rolebinding.Spec{Subjects: groupSubject("eng")}})
+		many = append(many, binding(fmt.Sprint("rb-", i), fmt.Sprint("b", i), group("eng")))
 	}
-	err := Checker{Rows: bindingRows(rbs)}.GroupRename(context.Background(), "eng", "x")
-	want := `group "eng" is named by 13 bindings (role-binding "b0", role-binding "b1", role-binding "b2", role-binding "b3", role-binding "b4", role-binding "b5", role-binding "b6", role-binding "b7", role-binding "b8", role-binding "b9", and 3 more); remove the group from them or point them at the new name first`
-	if got := refusal(t, err).Msg; got != want {
-		t.Fatalf("msg = %q\nwant  %q", got, want)
+	const tail = "; remove the group from them or point them at the new name first"
+	for _, tc := range []struct {
+		name     string
+		authz    authz.Authorizer
+		rows     []*rolebinding.RoleBinding
+		old, new string
+		want     string
+	}{
+		{"one binding names it", nil, few, "eng", "engineering", `409 resource_in_use: group "eng" is named by 1 binding (role-binding "eng-admins")` + tail},
+		{"the name is kept", nil, few, "eng", "eng", ""},
+		{"no binding names it", nil, few, "sales", "revenue", ""},
+		{"at most ten are listed", nil, many, "eng", "x", `409 resource_in_use: group "eng" is named by 13 bindings (role-binding "b0", role-binding "b1", role-binding "b2", role-binding "b3", role-binding "b4", role-binding "b5", role-binding "b6", role-binding "b7", role-binding "b8", role-binding "b9", and 3 more)` + tail},
+		{"a hidden binding is counted, not named", hiding("rb-0", "rb-12"), many[:3], "eng", "x", `409 resource_in_use: group "eng" is named by 3 bindings (role-binding "b1", role-binding "b2", and 1 more)` + tail},
+		{"only hidden bindings", hiding("rb-1"), few, "eng", "x", `409 resource_in_use: group "eng" is named by 1 binding (and 1 more)` + tail},
+	} {
+		c := Checker{Authz: tc.authz, Rows: Lookup{RoleBindings: func(context.Context) ([]*rolebinding.RoleBinding, error) { return tc.rows, nil }}}
+		wantRefused(t, tc.name, c.GroupRename(context.Background(), tc.old, tc.new), tc.want)
 	}
-}
-
-// Keeping the name (a display-name edit) and renaming a group nothing names
-// both pass; a user subject whose id happens to equal the name is no match.
-func TestGroupRenameAllowedWhenNoBindingNamesTheGroup(t *testing.T) {
-	rbs := []*rolebinding.RoleBinding{
-		{Meta: meta.Metadata{ID: "rb-1", Name: "eng-admins"}, Spec: rolebinding.Spec{Subjects: groupSubject("eng")}},
-		{Meta: meta.Metadata{ID: "rb-2", Name: "by-user"}, Spec: rolebinding.Spec{Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: "ops"}}}},
-	}
-	c := Checker{Rows: bindingRows(rbs)}
-	if err := c.GroupRename(context.Background(), "eng", "eng"); err != nil {
-		t.Fatalf("unchanged name: %v", err)
-	}
-	if err := c.GroupRename(context.Background(), "ops", "operations"); err != nil {
-		t.Fatalf("unreferenced rename: %v", err)
-	}
+	failing := Checker{Rows: Lookup{RoleBindings: func(context.Context) ([]*rolebinding.RoleBinding, error) { return nil, errors.New("store down") }}}
+	wantRefused(t, "the binding list failing", failing.GroupRename(context.Background(), "eng", "x"), "500: store down")
+	wantRefused(t, "no binding lookup", Checker{}.GroupRename(context.Background(), "eng", "x"), "")
 }

@@ -103,8 +103,8 @@ func runSuite(t *testing.T, store newStore) {
 
 		admit(t, l, lease, bucket, upA).Settle(limits.Usage{})
 		r := refused(t, l, lease, bucket, upA)
-		if r.Counter.ID != upA.ID || r.Counter.Rung != limits.RungAccount || r.RetryAfter <= 0 {
-			t.Fatalf("refusal = %+v after %v, want account counter %s with a retry-after", r.Counter, r.RetryAfter, upA.ID)
+		if r.Counter.ID != upA.ID || r.Counter.Rung != limits.RungAccount || r.RetryAfter != time.Minute {
+			t.Fatalf("refusal = %+v after %v, want account counter %s and the minute left of its window", r.Counter, r.RetryAfter, upA.ID)
 		}
 		// The caller group reserved before the account refused; its lease and bucket token must be back.
 		held := admit(t, l, lease, bucket, upB)

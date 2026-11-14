@@ -553,59 +553,35 @@ func TestExportAcceptsGzip(t *testing.T) {
 	}
 }
 
+// Every refusal answers before anything is recorded, with its exact body: a credential error as inference gives it, the rest as an OTLP Status.
 func TestExportRefusals(t *testing.T) {
-	good := func(t *testing.T) []byte { return export(t, chatSpan(1, "acme-large")) }
-
-	t.Run("receiver disabled", func(t *testing.T) {
+	good := mustJSON(t, chatSpan(1, "acme-large"))
+	for _, tc := range []struct {
+		name        string
+		disabled    bool
+		contentType string
+		body        []byte
+		header      []string
+		wantStatus  int
+		wantBody    string
+	}{
+		{"receiver disabled", true, otlp.MediaTypeJSON, good, nil, http.StatusNotFound, `{"code":5,"message":"the OTLP receiver is disabled"}`},
+		{"no credential", false, otlp.MediaTypeJSON, good, []string{"Authorization", ""}, http.StatusUnauthorized, `{"error":{"type":"invalid_request_error","code":"unauthenticated","message":"missing relay key"}}`},
+		{"unknown key", false, otlp.MediaTypeJSON, good, []string{"Authorization", "Bearer sk-wr-nobody"}, http.StatusUnauthorized, `{"error":{"type":"invalid_request_error","code":"unauthenticated","message":"invalid api key"}}`},
+		{"unsupported content type", false, "text/plain", good, nil, http.StatusUnsupportedMediaType, `{"code":3,"message":"Content-Type must be application/x-protobuf or application/json"}`},
+		{"undecodable body", false, otlp.MediaTypeJSON, []byte(`{"resourceSpans":`), nil, http.StatusBadRequest, `{"code":3,"message":"could not decode the export body"}`},
+		// A protobuf export is answered with a protobuf Status: code 3, then the 32-byte message.
+		{"undecodable protobuf body", false, otlp.MediaTypeProtobuf, []byte("not an export"), nil, http.StatusBadRequest, "\x08\x03\x12\x20could not decode the export body"},
+		{"unsupported encoding", false, otlp.MediaTypeJSON, good, []string{"Content-Encoding", "br"}, http.StatusUnsupportedMediaType, `{"code":3,"message":"Content-Encoding must be gzip or identity"}`},
+		{"gzip encoding over a plain body", false, otlp.MediaTypeJSON, good, []string{"Content-Encoding", "gzip"}, http.StatusBadRequest, `{"code":3,"message":"could not read the export body"}`},
+	} {
 		fx := newFixture(t)
-		fx.enabled = false
-		rec := fx.post(t, otlp.MediaTypeProtobuf, good(t))
-		if rec.Code != http.StatusNotFound || len(fx.events) != 0 {
-			t.Errorf("status = %d events = %d", rec.Code, len(fx.events))
+		fx.enabled = !tc.disabled
+		rec := fx.post(t, tc.contentType, tc.body, tc.header...)
+		if got := rec.Body.String(); rec.Code != tc.wantStatus || got != tc.wantBody || len(fx.events) != 0 {
+			t.Errorf("%s: status %d, %d events, want %d and none; body:\n got %q\nwant %s", tc.name, rec.Code, len(fx.events), tc.wantStatus, got, tc.wantBody)
 		}
-	})
-	t.Run("no credential", func(t *testing.T) {
-		fx := newFixture(t)
-		rec := fx.post(t, otlp.MediaTypeProtobuf, good(t), "Authorization", "")
-		if rec.Code != http.StatusUnauthorized || len(fx.events) != 0 {
-			t.Errorf("status = %d events = %d", rec.Code, len(fx.events))
-		}
-	})
-	t.Run("unknown key", func(t *testing.T) {
-		fx := newFixture(t)
-		rec := fx.post(t, otlp.MediaTypeProtobuf, good(t), "Authorization", "Bearer sk-wr-nobody")
-		if rec.Code != http.StatusUnauthorized || len(fx.events) != 0 {
-			t.Errorf("status = %d events = %d", rec.Code, len(fx.events))
-		}
-	})
-	t.Run("unsupported content type", func(t *testing.T) {
-		fx := newFixture(t)
-		rec := fx.post(t, "text/plain", good(t))
-		if rec.Code != http.StatusUnsupportedMediaType || len(fx.events) != 0 {
-			t.Errorf("status = %d events = %d", rec.Code, len(fx.events))
-		}
-	})
-	t.Run("undecodable body", func(t *testing.T) {
-		fx := newFixture(t)
-		rec := fx.post(t, otlp.MediaTypeJSON, []byte(`{"resourceSpans":`))
-		if rec.Code != http.StatusBadRequest || len(fx.events) != 0 {
-			t.Errorf("status = %d events = %d", rec.Code, len(fx.events))
-		}
-		var status struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil || status.Code != 3 || status.Message == "" {
-			t.Errorf("error body = %q (%v), want a Status with code 3", rec.Body, err)
-		}
-	})
-	t.Run("unsupported encoding", func(t *testing.T) {
-		fx := newFixture(t)
-		rec := fx.post(t, otlp.MediaTypeProtobuf, good(t), "Content-Encoding", "br")
-		if rec.Code != http.StatusUnsupportedMediaType || len(fx.events) != 0 {
-			t.Errorf("status = %d events = %d", rec.Code, len(fx.events))
-		}
-	})
+	}
 }
 
 func TestFailedCallIsALogOnlyRow(t *testing.T) {
@@ -845,8 +821,8 @@ func TestFullUsageQueueRefusesTheExport(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" {
 		t.Fatalf("status = %d Retry-After = %q, want 503 and 1", rec.Code, rec.Header().Get("Retry-After"))
 	}
-	if code, _ := statusOf(t, rec); code != int(otlp.StatusUnavailable) {
-		t.Errorf("status code = %d, want UNAVAILABLE", code)
+	if code, msg := statusOf(t, rec); code != int(otlp.StatusUnavailable) || msg != "usage queue is full; send the export again" {
+		t.Errorf("status = %d %q, want UNAVAILABLE usage queue is full; send the export again", code, msg)
 	}
 	if len(fx.events) != 3 {
 		t.Fatalf("a refused export queued %d events", len(fx.events)-3)
@@ -960,8 +936,8 @@ func TestStartTimes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("response %q: %v", rec.Body, err)
 	}
-	if resp.PartialSuccess.RejectedSpans != "1" || !strings.Contains(resp.PartialSuccess.ErrorMessage, "future") {
-		t.Errorf("partial success = %+v, want 1 span rejected for starting in the future", resp.PartialSuccess)
+	if got, want := resp.PartialSuccess.RejectedSpans+" "+resp.PartialSuccess.ErrorMessage, "1 model-call spans rejected: 1 starting more than 5 minutes in the future"; got != want {
+		t.Errorf("partial success = %q, want %q", got, want)
 	}
 	i := slices.IndexFunc(fx.events, func(ev usagelog.Event) bool { return ev.Extras["span_id"] == spanIDsOf(4)[0] })
 	if ts := fx.events[i].Timestamp; ts.Before(before) || ts.After(time.Now()) {
@@ -1105,8 +1081,8 @@ func TestExportOverTheRecordLimitIsRefused(t *testing.T) {
 		if rec.Code != http.StatusBadRequest || len(fx.events) != 0 {
 			t.Fatalf("status = %d events = %d, want 400 and none", rec.Code, len(fx.events))
 		}
-		if code, msg := statusOf(t, rec); code != int(otlp.StatusInvalidArgument) || msg == "" {
-			t.Errorf("error body = %d %q, want INVALID_ARGUMENT with a message", code, msg)
+		if code, msg := statusOf(t, rec); code != int(otlp.StatusInvalidArgument) || msg != "export reports 10001 model calls; the limit is 10000 per export" {
+			t.Errorf("error body = %d %q, want INVALID_ARGUMENT naming the count and the limit", code, msg)
 		}
 	})
 	t.Run("at the limit, beside spans that are not model calls", func(t *testing.T) {
@@ -1137,8 +1113,8 @@ func TestExportRateLimit(t *testing.T) {
 	if secs, err := strconv.Atoi(rec.Header().Get("Retry-After")); err != nil || secs < 1 || secs > 60 {
 		t.Errorf("Retry-After = %q, want whole seconds within the window", rec.Header().Get("Retry-After"))
 	}
-	if code, _ := statusOf(t, rec); code != int(otlp.StatusResourceExhausted) {
-		t.Errorf("status code = %d, want RESOURCE_EXHAUSTED", code)
+	if code, msg := statusOf(t, rec); code != int(otlp.StatusResourceExhausted) || msg != "export rate limit exceeded" {
+		t.Errorf("status = %d %q, want RESOURCE_EXHAUSTED export rate limit exceeded", code, msg)
 	}
 	if len(fx.events) != 2 {
 		t.Errorf("events = %d, want only the two exports inside the limit", len(fx.events))
