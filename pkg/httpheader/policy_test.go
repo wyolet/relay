@@ -83,7 +83,6 @@ func TestStripRemovesTheTrailerHeader(t *testing.T) {
 }
 
 func TestStripHonoursEveryConnectionLine(t *testing.T) {
-	t.Skip("bug: Strip of two Connection lines, [close] and [X-Hop], keeps X-Hop; only the first line's tokens are removed")
 	got := Strip(http.Header{"Connection": {"close", "X-Hop"}, "X-Hop": {"1"}, "Accept": {"*/*"}})
 	if diff := cmp.Diff(http.Header{"Accept": {"*/*"}}, got); diff != "" {
 		t.Errorf("headers forwarded upstream (-want +got):\n%s", diff)

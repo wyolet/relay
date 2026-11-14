@@ -125,7 +125,7 @@ var StripDenylist = []string{
 // has captured what it needs into ctx. Returns the same map for chaining.
 func Strip(h http.Header) http.Header {
 	// RFC 7230: remove headers named in Connection value.
-	if conn := h.Get("Connection"); conn != "" {
+	for _, conn := range h["Connection"] {
 		for _, tok := range strings.Split(conn, ",") {
 			h.Del(strings.TrimSpace(tok))
 		}
@@ -145,7 +145,7 @@ func Strip(h http.Header) http.Header {
 // upstream response before they are propagated back to the caller.
 // Modifies h in place. Returns the same map.
 func SanitizeUpstreamResponse(h http.Header) http.Header {
-	if conn := h.Get("Connection"); conn != "" {
+	for _, conn := range h["Connection"] {
 		for _, tok := range strings.Split(conn, ",") {
 			h.Del(strings.TrimSpace(tok))
 		}
