@@ -72,7 +72,6 @@ func TestMakeMasterKey(t *testing.T) {
 	})
 
 	t.Run("argon2id", func(t *testing.T) {
-		t.Skip("bug: Argon2id account → master key derived with the email itself as salt; Bitwarden salts Argon2id with SHA-256(email), so the derived key opens nothing")
 		hashed := sha256.Sum256([]byte(salt))
 		for _, tc := range []struct {
 			name     string

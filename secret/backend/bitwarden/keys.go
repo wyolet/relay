@@ -53,7 +53,9 @@ func makeMasterKey(password, email string, kdfType, iterations int, memory, para
 		if par < 1 || par > argon2MaxParallelism {
 			return nil, fmt.Errorf("bitwarden: Argon2id parallelism must be 1-%d, got %d", argon2MaxParallelism, par)
 		}
-		return argon2.IDKey([]byte(password), salt, uint32(iterations), uint32(memMiB*1024), uint8(par), 32), nil
+		// Bitwarden salts Argon2id with SHA-256 of the email, PBKDF2 with the email itself.
+		saltHash := sha256.Sum256(salt)
+		return argon2.IDKey([]byte(password), saltHash[:], uint32(iterations), uint32(memMiB*1024), uint8(par), 32), nil
 
 	default:
 		return nil, fmt.Errorf("bitwarden: unsupported KDF type: %d", kdfType)
