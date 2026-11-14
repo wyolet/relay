@@ -4,442 +4,334 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// ---- ParseResponse tests ----
+// respBody is a Messages response with the fixed envelope members and the given ones.
+func respBody(members string) string {
+	return `{"id":"msg_1","type":"message","role":"assistant","model":"` + testModel + `",` + members + `}`
+}
 
-func TestAnthropicParseResponse_SimpleText(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":          "msg_abc",
-		"type":        "message",
-		"role":        "assistant",
-		"model":       "claude-3-5-sonnet-20241022",
-		"content":     []any{map[string]any{"type": "text", "text": "Hello!"}},
-		"stop_reason": "end_turn",
-		"usage": map[string]any{
-			"input_tokens":  10,
-			"output_tokens": 5,
-		},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.ID != "msg_abc" {
-		t.Errorf("id: %q", resp.ID)
-	}
-	if resp.Status != v1.StatusCompleted {
-		t.Errorf("status: %q", resp.Status)
-	}
-	if resp.FinishReason != v1.FinishReasonStop {
-		t.Errorf("finish_reason: %q", resp.FinishReason)
-	}
-	if len(resp.Output) != 1 {
-		t.Fatalf("output len: %d", len(resp.Output))
-	}
-	msg, ok := resp.Output[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	tp, ok := msg.Content[0].(*v1.OutputTextPart)
-	if !ok {
-		t.Fatalf("content[0] is %T", msg.Content[0])
-	}
-	if tp.Text != "Hello!" {
-		t.Errorf("text: %q", tp.Text)
-	}
-	if resp.Usage["input"] != 10 || resp.Usage["output"] != 5 {
-		t.Errorf("usage: %+v", resp.Usage)
+// response is the canonical form of an end_turn respBody with no content, edited.
+func response(edit func(*v1.Response)) *v1.Response {
+	r := &v1.Response{ID: "msg_1", Object: "response", Model: testModel, Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop}
+	edit(r)
+	return r
+}
+
+func outputText(id, text string) *v1.Message {
+	return &v1.Message{ID: id, Status: v1.StatusCompleted, Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: text}}}
+}
+
+var responseCases = []struct {
+	name string
+	dir  direction
+	wire string
+	resp *v1.Response
+}{
+	{
+		name: "text with usage",
+		wire: respBody(`"content":[{"type":"text","text":"Hello!"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}`),
+		resp: response(func(r *v1.Response) {
+			r.Output = []v1.Item{outputText("msg_0", "Hello!")}
+			r.Usage = usage.Tokens{"input": 10, "output": 5}
+		}),
+	},
+	{
+		name: "text then tool call",
+		wire: respBody(`"content":[{"type":"text","text":"calling"},{"type":"tool_use","id":"toolu_1","name":"search","input":{"q":"x"}}],"stop_reason":"tool_use"`),
+		resp: response(func(r *v1.Response) {
+			r.FinishReason = v1.FinishReasonToolCalls
+			r.Output = []v1.Item{
+				outputText("msg_0", "calling"),
+				&v1.FunctionCall{ID: "fc_1", CallID: "toolu_1", Name: "search", Arguments: `{"q":"x"}`, Status: v1.StatusCompleted},
+			}
+		}),
+	},
+	{
+		name: "tool call without input",
+		dir:  parseOnly,
+		wire: respBody(`"content":[{"type":"tool_use","id":"toolu_1","name":"now"}],"stop_reason":"tool_use"`),
+		resp: response(func(r *v1.Response) {
+			r.FinishReason = v1.FinishReasonToolCalls
+			r.Output = []v1.Item{&v1.FunctionCall{ID: "fc_0", CallID: "toolu_1", Name: "now", Arguments: `{}`, Status: v1.StatusCompleted}}
+		}),
+	},
+	{
+		name: "empty and unparseable call arguments",
+		dir:  serializeOnly,
+		wire: respBody(`"content":[{"type":"tool_use","id":"t1","name":"f","input":{}},{"type":"tool_use","id":"t2","name":"g","input":{"_raw":"{\"a\":"}}],"stop_reason":"tool_use"`),
+		resp: response(func(r *v1.Response) {
+			r.FinishReason = v1.FinishReasonToolCalls
+			r.Output = []v1.Item{&v1.FunctionCall{CallID: "t1", Name: "f"}, &v1.FunctionCall{CallID: "t2", Name: "g", Arguments: `{"a":`}}
+		}),
+	},
+	{
+		name: "signed thinking, with and without text",
+		wire: respBody(`"content":[{"type":"thinking","thinking":"plan","signature":"SIG"},{"type":"thinking","thinking":"","signature":"SIG2"},{"type":"text","text":"done"}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			plan := signedThinking("plan", "SIG")
+			plan.ID, plan.Status = "rs_0", v1.StatusCompleted
+			r.Output = []v1.Item{
+				plan,
+				&v1.Reasoning{ID: "rs_1", Status: v1.StatusCompleted, ProviderData: json.RawMessage(`{"signature":"SIG2","thinking":"","type":"thinking"}`)},
+				outputText("msg_2", "done"),
+			}
+		}),
+	},
+	{
+		name: "unsigned thinking",
+		wire: respBody(`"content":[{"type":"thinking","thinking":"plan"}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			r.Output = []v1.Item{&v1.Reasoning{ID: "rs_0", Content: "plan", Summary: []v1.SummaryText{{Text: "plan"}}, Status: v1.StatusCompleted}}
+		}),
+	},
+	{
+		name: "blocks with no canonical item take no output index",
+		dir:  parseOnly,
+		wire: respBody(`"content":[{"type":"thinking","thinking":""},{"type":"redacted_thinking","data":"x"},{"type":"server_tool_use","id":"s1","name":"web_search"},{"type":"future"},{"type":"text","text":"x"}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) { r.Output = []v1.Item{outputText("msg_0", "x")} }),
+	},
+	{
+		name: "reasoning from another vendor",
+		dir:  serializeOnly,
+		wire: respBody(`"content":[{"type":"thinking","thinking":"content"},{"type":"thinking","thinking":"summary"},{"type":"text","text":"in"}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			r.Output = []v1.Item{
+				&v1.Reasoning{Content: "content", Summary: []v1.SummaryText{{Text: "ignored"}}},
+				&v1.Reasoning{Summary: []v1.SummaryText{{Text: "summary"}}, ProviderData: json.RawMessage(`{"type":"other"}`)},
+				&v1.Reasoning{ProviderData: json.RawMessage(`{"type":"other"}`)},
+				&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.TextPart{Text: "in"}}},
+			}
+		}),
+	},
+	{
+		name: "url citations",
+		wire: respBody(`"content":[{"type":"text","text":"cited","citations":[{"type":"url_citation","url":"https://x","title":"T","start_index":1,"end_index":5}]}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			msg := outputText("msg_0", "cited")
+			msg.Content[0].(*v1.OutputTextPart).Annotations = []v1.Annotation{&v1.URLCitationAnnotation{URL: "https://x", Title: "T", StartIndex: 1, EndIndex: 5}}
+			r.Output = []v1.Item{msg}
+		}),
+	},
+	{
+		name: "cache usage with its ttl split and service tier",
+		dir:  parseOnly,
+		wire: respBody(`"content":[],"stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":300,"cache_read_input_tokens":30,"cache_creation_input_tokens":4000,"cache_creation":{"ephemeral_5m_input_tokens":2500,"ephemeral_1h_input_tokens":1500},"service_tier":"priority"}`),
+		resp: response(func(r *v1.Response) {
+			r.Usage = usage.Tokens{"input": 1000, "output": 300, "cache_read": 30, "cache_creation": 4000, "cache_creation_1h": 1500}
+			r.ServiceTier = "priority"
+		}),
+	},
+	{
+		name: "cache usage writes the ttl split back",
+		dir:  serializeOnly,
+		wire: respBody(`"content":[],"stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":300,"cache_read_input_tokens":30,"cache_creation_input_tokens":4000,"cache_creation":{"ephemeral_5m_input_tokens":2500,"ephemeral_1h_input_tokens":1500}}`),
+		resp: response(func(r *v1.Response) {
+			r.Usage = usage.Tokens{"input": 1000, "output": 300, "cache_read": 30, "cache_creation": 4000, "cache_creation_1h": 1500}
+		}),
+	},
+	{
+		// Without a reported 1h share the split is unknown.
+		name: "cache write without a 1h share has no ttl split",
+		wire: respBody(`"content":[],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":4000}`),
+		resp: response(func(r *v1.Response) { r.Usage = usage.Tokens{"input": 10, "output": 5, "cache_creation": 4000} }),
+	},
+	{
+		name: "matched stop sequence",
+		dir:  parseOnly,
+		wire: respBody(`"content":[],"stop_reason":"stop_sequence","stop_sequence":"END"`),
+		resp: response(func(r *v1.Response) {
+			r.Extensions = map[string]json.RawMessage{"stop_sequence": json.RawMessage(`"END"`)}
+		}),
+	},
+	{
+		name: "unknown stop reason keeps its raw value beside the stop sequence",
+		dir:  parseOnly,
+		wire: respBody(`"content":[],"stop_reason":"new_reason","stop_sequence":"END"`),
+		resp: response(func(r *v1.Response) {
+			r.Status, r.FinishReason = v1.StatusIncomplete, v1.FinishReasonOther
+			r.IncompleteDetails = &v1.IncompleteDetails{Reason: "anthropic:new_reason"}
+			r.Extensions = map[string]json.RawMessage{"stop_sequence": json.RawMessage(`"END"`), "anthropic.stop_reason": json.RawMessage(`"new_reason"`)}
+		}),
+	},
+	{
+		name: "failed response carries its error",
+		dir:  serializeOnly,
+		wire: respBody(`"content":[],"stop_reason":"refusal","error":{"type":"server_error","message":"boom"}`),
+		resp: response(func(r *v1.Response) {
+			r.Status, r.FinishReason = v1.StatusFailed, ""
+			r.Error = &v1.Error{Code: "server_error", Message: "boom"}
+		}),
+	},
+}
+
+func TestResponseMapping(t *testing.T) {
+	for _, tc := range responseCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.dir != serializeOnly {
+				got, err := AnthropicTranslator{}.ParseResponse([]byte(tc.wire))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.CreatedAt <= 0 {
+					t.Errorf("created_at = %d, want the parse time", got.CreatedAt)
+				}
+				got.CreatedAt = 0
+				if diff := cmp.Diff(tc.resp, got); diff != "" {
+					t.Errorf("(-want +got):\n%s", diff)
+				}
+			}
+			if tc.dir != parseOnly {
+				got, err := AnthropicTranslator{}.SerializeResponse(tc.resp, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertJSONEqual(t, got, tc.wire)
+			}
+		})
 	}
 }
 
-func TestAnthropicParseResponse_ToolUse(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":    "msg_tool",
-		"type":  "message",
-		"role":  "assistant",
-		"model": "claude-3-5-sonnet-20241022",
-		"content": []any{
-			map[string]any{
-				"type":  "tool_use",
-				"id":    "toolu_01",
-				"name":  "search",
-				"input": map[string]any{"q": "something"},
-			},
-		},
-		"stop_reason": "tool_use",
-		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 3},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.FinishReason != v1.FinishReasonToolCalls {
-		t.Errorf("finish_reason: %q", resp.FinishReason)
-	}
-	if len(resp.Output) != 1 {
-		t.Fatalf("output len: %d", len(resp.Output))
-	}
-	fc, ok := resp.Output[0].(*v1.FunctionCall)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	if fc.CallID != "toolu_01" || fc.Name != "search" {
-		t.Errorf("fc: callID=%q name=%q", fc.CallID, fc.Name)
+func TestParseResponse_RejectsInvalidJSON(t *testing.T) {
+	if resp, err := (AnthropicTranslator{}).ParseResponse([]byte(`{"id":`)); err == nil {
+		t.Errorf("parsed to %s, want an error", mustJSON(resp))
 	}
 }
 
-func TestAnthropicParseResponse_ThinkingBlock(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":    "msg_think",
-		"type":  "message",
-		"role":  "assistant",
-		"model": "claude-3-7-sonnet-20250219",
-		"content": []any{
-			map[string]any{
-				"type":      "thinking",
-				"thinking":  "let me think...",
-				"signature": "sig_abc123",
-			},
-			map[string]any{"type": "text", "text": "Answer."},
-		},
-		"stop_reason": "end_turn",
-		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 20},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
+var stopReasonCases = []struct {
+	dir        direction
+	wire       string
+	status     v1.Status
+	finish     v1.FinishReason
+	incomplete string
+}{
+	{both, "end_turn", v1.StatusCompleted, v1.FinishReasonStop, ""},
+	{both, "max_tokens", v1.StatusIncomplete, v1.FinishReasonLength, "max_output_tokens"},
+	{both, "tool_use", v1.StatusCompleted, v1.FinishReasonToolCalls, ""},
+	{both, "refusal", v1.StatusCompleted, v1.FinishReasonRefusal, ""},
+	{both, "pause_turn", v1.StatusIncomplete, "", "pause_turn"},
+	// An unknown reason is never a clean stop; its raw value survives the round trip.
+	{both, "new_reason", v1.StatusIncomplete, v1.FinishReasonOther, "anthropic:new_reason"},
+	{parseOnly, "", v1.StatusCompleted, v1.FinishReasonStop, ""},
+	{parseOnly, "stop_sequence", v1.StatusCompleted, v1.FinishReasonStop, ""},
+	{serializeOnly, "end_turn", v1.StatusCompleted, "", ""},
+	{serializeOnly, "max_tokens", v1.StatusIncomplete, v1.FinishReasonLength, ""},
+	// Signals with no Anthropic stop_reason of their own must not read as end_turn.
+	{serializeOnly, "refusal", v1.StatusCompleted, v1.FinishReasonContentFilter, ""},
+	{serializeOnly, "refusal", v1.StatusIncomplete, v1.FinishReasonOther, ""},
+	{serializeOnly, "refusal", v1.StatusIncomplete, v1.FinishReasonOther, "openai:new_reason"},
+	{serializeOnly, "refusal", v1.StatusFailed, "", ""},
+}
+
+// Each stop reason maps the same way buffered and streamed, in both directions.
+func TestStopReasonMapping(t *testing.T) {
+	type outcome struct {
+		Status     v1.Status
+		Finish     v1.FinishReason
+		Incomplete string
 	}
-	if len(resp.Output) != 2 {
-		t.Fatalf("output len: %d", len(resp.Output))
+	reason := func(d *v1.IncompleteDetails) string {
+		if d == nil {
+			return ""
+		}
+		return d.Reason
 	}
-	reasoning, ok := resp.Output[0].(*v1.Reasoning)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	if reasoning.Content != "let me think..." {
-		t.Errorf("reasoning content: %q", reasoning.Content)
-	}
-	// ProviderData should carry the signature.
-	if len(reasoning.ProviderData) == 0 {
-		t.Error("expected ProviderData for thinking signature")
-	}
-	var pd map[string]string
-	_ = json.Unmarshal(reasoning.ProviderData, &pd)
-	if pd["signature"] != "sig_abc123" {
-		t.Errorf("signature in ProviderData: %q", pd["signature"])
+	for _, tc := range stopReasonCases {
+		want := outcome{tc.status, tc.finish, tc.incomplete}
+		var details *v1.IncompleteDetails
+		if tc.incomplete != "" {
+			details = &v1.IncompleteDetails{Reason: tc.incomplete}
+		}
+		if tc.dir != serializeOnly {
+			resp, err := AnthropicTranslator{}.ParseResponse([]byte(respBody(`"content":[],"stop_reason":"` + tc.wire + `"`)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := (outcome{resp.Status, resp.FinishReason, reason(resp.IncompleteDetails)}); got != want {
+				t.Errorf("parse %q = %+v, want %+v", tc.wire, got, want)
+			}
+			completed := lastGenerationCompleted(t, frames(
+				"message_start", `{"message":{"id":"msg_1","model":"m"}}`,
+				"message_delta", `{"delta":{"stop_reason":"`+tc.wire+`"}}`,
+				"message_stop", `{}`,
+			))
+			if got := (outcome{completed.Status, completed.FinishReason, reason(completed.IncompleteDetails)}); got != want {
+				t.Errorf("stream %q = %+v, want %+v", tc.wire, got, want)
+			}
+		}
+		if tc.dir != parseOnly {
+			if got := bufferedStopReason(t, tc.status, tc.finish, details); got != tc.wire {
+				t.Errorf("serialize %+v = %q, want %q", want, got, tc.wire)
+			}
+			if got := streamedStopReason(t, tc.status, tc.finish, details); got != tc.wire {
+				t.Errorf("stream serialize %+v = %q, want %q", want, got, tc.wire)
+			}
+		}
 	}
 }
 
-func TestAnthropicParseResponse_MaxTokens(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":          "msg_len",
-		"type":        "message",
-		"role":        "assistant",
-		"model":       "claude-3-5-sonnet-20241022",
-		"content":     []any{map[string]any{"type": "text", "text": "truncated"}},
-		"stop_reason": "max_tokens",
-		"usage":       map[string]any{"input_tokens": 10, "output_tokens": 100},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Status != v1.StatusIncomplete {
-		t.Errorf("status: %q", resp.Status)
-	}
-	if resp.FinishReason != v1.FinishReasonLength {
-		t.Errorf("finish_reason: %q", resp.FinishReason)
-	}
-	if resp.IncompleteDetails == nil || resp.IncompleteDetails.Reason != "max_output_tokens" {
-		t.Errorf("incomplete_details: %v", resp.IncompleteDetails)
+func TestStopReason_IncompleteWithoutFinishReasonAgreesBufferedAndStreamed(t *testing.T) {
+	t.Skip(`bug: status incomplete with no finish_reason → buffered "end_turn" but streamed "pause_turn"; with incomplete_details max_output_tokens → buffered "max_tokens" but streamed "pause_turn"`)
+	for _, details := range []*v1.IncompleteDetails{nil, {Reason: "max_output_tokens"}} {
+		buffered := bufferedStopReason(t, v1.StatusIncomplete, "", details)
+		streamed := streamedStopReason(t, v1.StatusIncomplete, "", details)
+		if buffered != streamed || buffered == "end_turn" {
+			t.Errorf("details %+v: buffered %q, streamed %q, want one reason that is not a clean stop", details, buffered, streamed)
+		}
 	}
 }
 
-func TestAnthropicParseResponse_PauseTurn(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":          "msg_pause",
-		"type":        "message",
-		"role":        "assistant",
-		"model":       "claude-3-5-sonnet-20241022",
-		"content":     []any{map[string]any{"type": "text", "text": "..."}},
-		"stop_reason": "pause_turn",
-		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
+func TestParseResponse_KeepsDocumentAndSearchCitations(t *testing.T) {
+	t.Skip(`bug: text block citations of type char_location / web_search_result_location → no annotations; only the non-Anthropic type "url_citation" is read and the rest vanish unannotated`)
+	wire := respBody(`"content":[{"type":"text","text":"cited","citations":[{"type":"char_location","cited_text":"c","document_index":0,"start_char_index":0,"end_char_index":1},{"type":"web_search_result_location","url":"https://x","title":"T","cited_text":"c"}]}],"stop_reason":"end_turn"`)
+	resp, err := AnthropicTranslator{}.ParseResponse([]byte(wire))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Status != v1.StatusIncomplete {
-		t.Errorf("status: %q", resp.Status)
-	}
-	if resp.IncompleteDetails == nil || resp.IncompleteDetails.Reason != "pause_turn" {
-		t.Errorf("incomplete_details: %v", resp.IncompleteDetails)
+	if got := resp.Output[0].(*v1.Message).Content[0].(*v1.OutputTextPart).Annotations; len(got) != 2 {
+		t.Errorf("annotations = %s, want both citations", mustJSON(got))
 	}
 }
 
-func TestAnthropicParseResponse_Refusal(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":          "msg_ref",
-		"type":        "message",
-		"role":        "assistant",
-		"model":       "claude-3-5-sonnet-20241022",
-		"content":     []any{map[string]any{"type": "text", "text": "I cannot do that."}},
-		"stop_reason": "refusal",
-		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
+func bufferedStopReason(t *testing.T, status v1.Status, finish v1.FinishReason, details *v1.IncompleteDetails) string {
+	t.Helper()
+	out, err := AnthropicTranslator{}.SerializeResponse(&v1.Response{Status: status, FinishReason: finish, IncompleteDetails: details}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.FinishReason != v1.FinishReasonRefusal {
-		t.Errorf("finish_reason: %q", resp.FinishReason)
+	var wire struct {
+		StopReason string `json:"stop_reason"`
 	}
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatal(err)
+	}
+	return wire.StopReason
 }
 
-func TestAnthropicParseResponse_CachedTokens(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":          "msg_cache",
-		"type":        "message",
-		"role":        "assistant",
-		"model":       "claude-3-5-sonnet-20241022",
-		"content":     []any{map[string]any{"type": "text", "text": "ok"}},
-		"stop_reason": "end_turn",
-		"usage": map[string]any{
-			"input_tokens":            50,
-			"output_tokens":           10,
-			"cache_read_input_tokens": 30,
-		},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
+func streamedStopReason(t *testing.T, status v1.Status, finish v1.FinishReason, details *v1.IncompleteDetails) string {
+	t.Helper()
+	completed := mustJSON(v1.GenerationCompletedEvent{ID: "msg_1", Status: status, FinishReason: finish, IncompleteDetails: details})
+	out := translateAll(t, AnthropicTranslator{}.NewFromCanonicalStream(), frames(v1.EventGenerationCompleted, string(completed)))
+	events := decodeSSE(t, out)
+	if len(events) != 2 || events[0].Event != "message_delta" || events[1].Event != "message_stop" {
+		t.Fatalf("generation.completed → %s, want message_delta then message_stop", out)
 	}
-	if len(resp.Usage) == 0 {
-		t.Fatal("no usage")
-	}
-	if resp.Usage["cache_read"] != 30 {
-		t.Errorf("cache_read: %d", resp.Usage["cache_read"])
-	}
+	return events[0].Data.(map[string]any)["delta"].(map[string]any)["stop_reason"].(string)
 }
 
-// ---- SerializeResponse tests ----
-
-func TestAnthropicSerializeResponse_SimpleText(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "msg_abc",
-		Model:        "claude-3-5-sonnet-20241022",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
-		Output: []v1.Item{
-			&v1.Message{
-				ID:      "msg_0",
-				Role:    v1.RoleAssistant,
-				Status:  v1.StatusCompleted,
-				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello!"}},
-			},
-		},
-		Usage: usage.Tokens{"input": 10, "output": 5},
+func lastGenerationCompleted(t *testing.T, chunks [][]byte) v1.GenerationCompletedEvent {
+	t.Helper()
+	out := translateAll(t, AnthropicTranslator{}.NewToCanonicalStream(), chunks)
+	events := decodeSSE(t, out)
+	if len(events) == 0 || events[len(events)-1].Event != v1.EventGenerationCompleted {
+		t.Fatalf("last frame is not generation.completed:\n%s", out)
 	}
-	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
+	var completed v1.GenerationCompletedEvent
+	if err := json.Unmarshal(mustJSON(events[len(events)-1].Data), &completed); err != nil {
 		t.Fatal(err)
 	}
-	m := decodeMap(t, out)
-	if m["id"] != "msg_abc" {
-		t.Errorf("id: %v", m["id"])
-	}
-	if m["stop_reason"] != "end_turn" {
-		t.Errorf("stop_reason: %v", m["stop_reason"])
-	}
-	content := m["content"].([]any)
-	if len(content) != 1 {
-		t.Fatalf("content len: %d", len(content))
-	}
-	block := content[0].(map[string]any)
-	if block["type"] != "text" || block["text"] != "Hello!" {
-		t.Errorf("content block: %v", block)
-	}
-}
-
-func TestAnthropicSerializeResponse_ToolUse(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "msg_tool",
-		Model:        "claude-3-5-sonnet-20241022",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonToolCalls,
-		Output: []v1.Item{
-			&v1.FunctionCall{
-				ID:        "fc_0",
-				CallID:    "toolu_01",
-				Name:      "search",
-				Arguments: `{"q":"something"}`,
-				Status:    v1.StatusCompleted,
-			},
-		},
-		Usage: usage.Tokens{"input": 5, "output": 3},
-	}
-	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, out)
-	if m["stop_reason"] != "tool_use" {
-		t.Errorf("stop_reason: %v", m["stop_reason"])
-	}
-	content := m["content"].([]any)
-	block := content[0].(map[string]any)
-	if block["type"] != "tool_use" {
-		t.Errorf("block type: %v", block["type"])
-	}
-	if block["id"] != "toolu_01" || block["name"] != "search" {
-		t.Errorf("tool_use: %v", block)
-	}
-}
-
-func TestAnthropicSerializeResponse_ThinkingBlock(t *testing.T) {
-	pd, _ := json.Marshal(map[string]string{
-		"type":      "thinking",
-		"thinking":  "my thoughts",
-		"signature": "sig_xyz",
-	})
-	resp := &v1.Response{
-		ID:           "msg_think",
-		Model:        "claude-3-7-sonnet-20250219",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
-		Output: []v1.Item{
-			&v1.Reasoning{
-				ID:           "rs_0",
-				Content:      "my thoughts",
-				ProviderData: pd,
-				Status:       v1.StatusCompleted,
-			},
-			&v1.Message{
-				ID:      "msg_0",
-				Role:    v1.RoleAssistant,
-				Status:  v1.StatusCompleted,
-				Content: []v1.Part{&v1.OutputTextPart{Text: "Answer."}},
-			},
-		},
-		Usage: usage.Tokens{"input": 5, "output": 20},
-	}
-	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, out)
-	content := m["content"].([]any)
-	if len(content) != 2 {
-		t.Fatalf("content len: %d", len(content))
-	}
-	thinkBlock := content[0].(map[string]any)
-	if thinkBlock["type"] != "thinking" {
-		t.Errorf("block type: %v", thinkBlock["type"])
-	}
-	if thinkBlock["thinking"] != "my thoughts" {
-		t.Errorf("thinking: %v", thinkBlock["thinking"])
-	}
-	if thinkBlock["signature"] != "sig_xyz" {
-		t.Errorf("signature: %v", thinkBlock["signature"])
-	}
-}
-
-func TestAnthropicSerializeResponse_ReqParamIsNilSafe(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "msg_nil",
-		Model:        "claude-3-5-sonnet-20241022",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
-		Output: []v1.Item{
-			&v1.Message{
-				Role:    v1.RoleAssistant,
-				Content: []v1.Part{&v1.OutputTextPart{Text: "ok"}},
-			},
-		},
-	}
-	// req=nil must not panic
-	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) == 0 {
-		t.Error("empty output")
-	}
-}
-
-func TestAnthropicSerializeResponse_MaxTokens(t *testing.T) {
-	resp := &v1.Response{
-		ID:                "msg_len",
-		Model:             "claude-3-5-sonnet-20241022",
-		Status:            v1.StatusIncomplete,
-		FinishReason:      v1.FinishReasonLength,
-		IncompleteDetails: &v1.IncompleteDetails{Reason: "max_output_tokens"},
-		Output: []v1.Item{
-			&v1.Message{
-				Role:    v1.RoleAssistant,
-				Content: []v1.Part{&v1.OutputTextPart{Text: "truncated"}},
-			},
-		},
-		Usage: usage.Tokens{"input": 10, "output": 100},
-	}
-	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, out)
-	if m["stop_reason"] != "max_tokens" {
-		t.Errorf("stop_reason: %v", m["stop_reason"])
-	}
-}
-
-// ---- stop_sequence in Extensions ----
-
-// TestParseResponse_StopSequenceInExtensions verifies that a matched stop_sequence
-// is surfaced in Response.Extensions["stop_sequence"].
-func TestParseResponse_StopSequenceInExtensions(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id": "msg_ss", "type": "message", "role": "assistant",
-		"model":         "claude-3-5-sonnet-20241022",
-		"content":       []any{map[string]any{"type": "text", "text": "done"}},
-		"stop_reason":   "stop_sequence",
-		"stop_sequence": "END",
-		"usage":         map[string]any{"input_tokens": 5, "output_tokens": 3},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, ok := resp.Extensions["stop_sequence"]
-	if !ok {
-		t.Fatal("Extensions[stop_sequence] absent")
-	}
-	var got string
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("unmarshal stop_sequence: %v", err)
-	}
-	if got != "END" {
-		t.Errorf("stop_sequence: got %q want END", got)
-	}
-}
-
-// TestParseResponse_NoStopSequence_NoExtensions verifies that absent stop_sequence
-// does not pollute Extensions.
-func TestParseResponse_NoStopSequence_NoExtensions(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id": "msg_noss", "type": "message", "role": "assistant",
-		"model":       "claude-3-5-sonnet-20241022",
-		"content":     []any{map[string]any{"type": "text", "text": "done"}},
-		"stop_reason": "end_turn",
-		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 3},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := resp.Extensions["stop_sequence"]; ok {
-		t.Error("Extensions[stop_sequence] present but stop_sequence was absent in response")
-	}
+	return completed
 }
