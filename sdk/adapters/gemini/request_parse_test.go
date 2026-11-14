@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -29,19 +30,18 @@ func assertJSON(t *testing.T, got any, want string) {
 			t.Fatal(err)
 		}
 	}
-	if gn, wn := normJSON(t, g), normJSON(t, []byte(want)); gn != wn {
-		t.Errorf("got  %s\nwant %s", gn, wn)
+	if diff := cmp.Diff(decodeJSON(t, []byte(want)), decodeJSON(t, g)); diff != "" {
+		t.Errorf("JSON mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func normJSON(t *testing.T, b []byte) string {
+func decodeJSON(t *testing.T, b []byte) any {
 	t.Helper()
 	var v any
 	if err := json.Unmarshal(b, &v); err != nil {
 		t.Fatalf("invalid JSON %s: %v", b, err)
 	}
-	n, _ := json.Marshal(v)
-	return string(n)
+	return v
 }
 
 func TestParseRequest_Contents(t *testing.T) {

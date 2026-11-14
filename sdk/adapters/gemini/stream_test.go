@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -153,9 +155,14 @@ func TestToCanonicalStream_MatchesParseResponse(t *testing.T) {
 		{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Calling."}]},
 		{"type":"function_call","id":"fc_2","call_id":"lookup__relay_call_2","name":"lookup","arguments":"{\"x\":1}","status":"completed","provider_data":{"thoughtSignature":"sig-fc"}}]`
 
+	wantDone := v1.GenerationCompletedEvent{Status: v1.StatusCompleted, FinishReason: v1.FinishReasonToolCalls, Usage: usage.Tokens{"input": 10, "output": 8, "reasoning": 3}}
+
 	resp := parseResponse(t, body)
 	assertJSON(t, resp.Output, want)
-	assertJSON(t, resp.Usage, `{"input":10,"output":8,"reasoning":3}`)
+	buffered := v1.GenerationCompletedEvent{Status: resp.Status, FinishReason: resp.FinishReason, Usage: resp.Usage, IncompleteDetails: resp.IncompleteDetails}
+	if diff := cmp.Diff(wantDone, buffered); diff != "" {
+		t.Errorf("buffered completion (-want +got):\n%s", diff)
+	}
 
 	var frame bytes.Buffer
 	if err := json.Compact(&frame, []byte(body)); err != nil {
@@ -163,8 +170,13 @@ func TestToCanonicalStream_MatchesParseResponse(t *testing.T) {
 	}
 	s := toCanonical(t, frame.String())
 	assertJSON(t, s.items, want)
-	if s.done == nil || s.done.Status != resp.Status || s.done.FinishReason != v1.FinishReasonToolCalls || !reflect.DeepEqual(s.done.Usage, resp.Usage) {
-		t.Errorf("stream completion %+v, buffered %s/%s %v", s.done, resp.Status, resp.FinishReason, resp.Usage)
+	if s.done == nil {
+		t.Fatalf("stream has no completion: %v", s.events)
+	}
+	streamed := *s.done
+	streamed.ID = ""
+	if diff := cmp.Diff(wantDone, streamed); diff != "" {
+		t.Errorf("streamed completion (-want +got):\n%s", diff)
 	}
 	wantEvents := []string{v1.EventGenerationCreated}
 	for range 3 {

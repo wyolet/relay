@@ -1,10 +1,10 @@
 package gemini
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -76,8 +76,11 @@ func TestGeminiSummaryFrameSequences(t *testing.T) {
 			body := []byte(strings.Join(c.frames, "\n\n") + "\n\n")
 			for _, translator := range []v1.Translator{GeminiTranslator{}, translateAll{GeminiTranslator{}}} {
 				got, err := v1.ExtractSummary(translator, body)
-				if err != nil || !reflect.DeepEqual(got, c.want) {
-					t.Errorf("%T: summary %+v (%v), want %+v", translator, got, err, c.want)
+				if err != nil {
+					t.Fatalf("%T: %v", translator, err)
+				}
+				if diff := cmp.Diff(c.want, got); diff != "" {
+					t.Errorf("%T summary (-want +got):\n%s", translator, diff)
 				}
 			}
 		})
