@@ -110,12 +110,26 @@ func TestResponsesCustomToolCallStreamToCanonical(t *testing.T) {
 	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(), respCustomCallStream()...)
 	respJSONEq(t, frames, `[
 		{"event":"item.started","data":{"item_id":"ctc_1","item_type":"function_call","index":0,"name":"apply_patch","call_id":"call_1"}},
+		{"event":"item.delta","data":{"item_id":"ctc_1","index":0,"kind":"arguments","delta":"{\"input\":\"*** Begin Patch"}},
+		{"event":"item.delta","data":{"item_id":"ctc_1","index":0,"kind":"arguments","delta":"\"}"}},
 		{"event":"item.completed","data":{"item_id":"ctc_1","index":0,"item":{"type":"function_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\"}","status":"completed","provider_data":{"type":"custom_tool_call"}}}}]`)
+}
+
+// Deltas are escaped as JSON string bodies, and a done with no preceding delta carries the whole input.
+func TestResponsesCustomToolCallStreamToCanonical_ArgumentDeltaEdges(t *testing.T) {
+	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(),
+		respSSE(ResponsesEventCustomToolCallInputDelta, `{"item_id":"a","output_index":0,"delta":"say \"<hi>\"\n"}`),
+		respSSE(ResponsesEventCustomToolCallInputDone, `{"item_id":"a","output_index":0,"input":"say \"<hi>\"\n"}`),
+		respSSE(ResponsesEventCustomToolCallInputDone, `{"item_id":"b","output_index":1,"input":""}`),
+	)
+	respJSONEq(t, frames, `[
+		{"event":"item.delta","data":{"item_id":"a","index":0,"kind":"arguments","delta":"{\"input\":\"say \\\"\\u003chi\\u003e\\\"\\n"}},
+		{"event":"item.delta","data":{"item_id":"a","index":0,"kind":"arguments","delta":"\"}"}},
+		{"event":"item.delta","data":{"item_id":"b","index":1,"kind":"arguments","delta":"{\"input\":\"\"}"}}]`)
 }
 
 // A consumer that builds tool calls from argument deltas (every vendor stream serializer) must see the arguments the completed item carries.
 func TestResponsesCustomToolCallStreamToCanonical_ArgumentDeltas(t *testing.T) {
-	t.Skip("bug: a streamed custom_tool_call → canonical item.started + item.completed with no arguments delta, so a cross-shape stream (e.g. Chat Completions) emits the tool call with empty arguments")
 	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(), respCustomCallStream()...)
 	var args string
 	for _, f := range frames {
