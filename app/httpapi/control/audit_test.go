@@ -16,6 +16,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -50,121 +52,72 @@ func (s *auditSink) all() []audit.Event {
 	return append([]audit.Event(nil), s.events...)
 }
 
-// newAuditHarness mounts one CRUD kind behind the audit middleware and the
-// audit Authorizer wrapper, with the actor named by X-Test-Actor injected
-// the way the session/admin-token middlewares would.
+// wantEvents compares recorded events with want, leaving out what a request stamps on its own: ids, the time and the client address.
+func wantEvents(t *testing.T, got []audit.Event, want ...audit.Event) {
+	t.Helper()
+	diff := cmp.Diff(want, got, cmpopts.EquateEmpty(),
+		cmpopts.IgnoreFields(audit.Event{}, "ID", "TS"),
+		cmpopts.IgnoreFields(audit.Actor{}, "IP", "SessionID"),
+		cmpopts.IgnoreFields(audit.Request{}, "ID"))
+	if diff != "" {
+		t.Fatalf("audit events (-want +got):\n%s", diff)
+	}
+}
+
+// newAuditHarness mounts one CRUD kind behind the audit middleware and the audit Authorizer wrapper.
 func newAuditHarness(t *testing.T, inner authz.Authorizer, seed ...*scopedThing) (http.Handler, *auditSink, *audit.Emitter) {
 	t.Helper()
 	sink := &auditSink{}
 	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
-	tmeta := func(v *scopedThing) *meta.Metadata { return &v.Meta }
-	store := &memStore[scopedThing]{metaOf: tmeta, items: map[string]*scopedThing{}}
-	for _, it := range seed {
-		store.items[it.Meta.ID] = it
-	}
-
+	store := newMemStore(thingMeta, seed...)
 	r, api := testAPI(t, scopeActors, audit.Middleware(em, nil))
-	registerKind[scopedThing](
-		api, "rate-limits", "rate-limit", store,
-		audit.Authorizer{Inner: inner}, tmeta,
-		nil,
-		meta.OwnerUser,
-		listScanResolver[scopedThing](store, tmeta),
-		nil, nil, nil, nil, nil,
-		noSettings{},
-		false,
-		nil,
-		nil,
-		nil,
-	)
+	mountKind[scopedThing](api, "rate-limits", "rate-limit", store, audit.Authorizer{Inner: inner}, thingMeta, nil, meta.OwnerUser, nil, noSettings{})
 	return r, sink, em
 }
 
-func TestAuditDeniedMutationByNonOwner(t *testing.T) {
-	h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
+// A write leaves one row whether it was allowed or refused, naming the caller, the action, the target and the status; an allowed read leaves none.
+func TestAuditCRUD(t *testing.T) {
+	bob := audit.Actor{Kind: audit.ActorUser, ID: "u-bob", Name: "bob"}
+	alice := audit.Actor{Kind: audit.ActorUser, ID: "u-alice", Name: "alice"}
+	row := func(id string, owner meta.Owner) audit.Resource {
+		return audit.Resource{Kind: "rate-limit", ID: id, Owner: &owner}
+	}
+	hostOwned, alices := meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
+	byID := func(id string) string { return "/rate-limits/by-id/" + id }
 
-	// A catalog-owned row is visible to everyone but mutable by admins
-	// only, so the Authorizer itself denies and the status is 403.
-	w := scopeReq(t, h, "bob", http.MethodDelete, "/rate-limits/by-id/"+catalogID, "")
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403: %s", w.Code, w.Body.String())
-	}
-	em.Close()
-
-	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d, want 1", len(evs))
-	}
-	ev := evs[0]
-	if ev.Action != "rate-limits.delete" || ev.Outcome.Status != audit.StatusDenied || ev.Outcome.Code != http.StatusForbidden {
-		t.Fatalf("event = action %q outcome %+v, want rate-limits.delete denied/403", ev.Action, ev.Outcome)
-	}
-	if ev.Actor.Kind != audit.ActorUser || ev.Actor.ID != "u-bob" {
-		t.Fatalf("actor = %+v, want the denied caller", ev.Actor)
-	}
-	if ev.Resource.Kind != "rate-limit" || ev.Resource.ID != catalogID {
-		t.Fatalf("resource = %+v, want the targeted row", ev.Resource)
-	}
-}
-
-// A row owned by another user is invisible, so the handler 404s before any
-// Authorize call — the middleware's route fallback is what records it.
-func TestAuditMutationRefusedByVisibility(t *testing.T) {
-	h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
-
-	w := scopeReq(t, h, "bob", http.MethodDelete, "/rate-limits/by-id/"+aliceID, "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404: %s", w.Code, w.Body.String())
-	}
-	em.Close()
-
-	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d, want 1", len(evs))
-	}
-	ev := evs[0]
-	if ev.Action != "rate-limits.delete" || ev.Outcome.Status != audit.StatusDenied || ev.Outcome.Code != http.StatusNotFound {
-		t.Fatalf("event = action %q outcome %+v, want rate-limits.delete denied/404", ev.Action, ev.Outcome)
-	}
-	if ev.Resource.ID != aliceID {
-		t.Fatalf("resource = %+v, want the targeted row id", ev.Resource)
-	}
-	if ev.Actor.ID != "u-bob" {
-		t.Fatalf("actor = %+v, want the refused caller", ev.Actor)
-	}
-}
-
-func TestAuditAllowedUpdateRecordsChangedPaths(t *testing.T) {
-	h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
-
-	body := `{"metadata":{"id":"` + aliceID + `","name":"alice-row","displayName":"Renamed"}}`
-	w := scopeReq(t, h, "alice", http.MethodPut, "/rate-limits/by-id/"+aliceID, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
-	}
-	em.Close()
-
-	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d, want 1", len(evs))
-	}
-	ev := evs[0]
-	if ev.Outcome.Status != audit.StatusAllowed || ev.Action != "rate-limits.update" {
-		t.Fatalf("event = action %q outcome %+v", ev.Action, ev.Outcome)
-	}
-	if ev.Change == nil || !contains(ev.Change.Fields, "metadata.displayName") {
-		t.Fatalf("change = %+v, want metadata.displayName", ev.Change)
-	}
-}
-
-func TestAuditSkipsAllowedRead(t *testing.T) {
-	h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
-	if w := scopeReq(t, h, "alice", http.MethodGet, "/rate-limits", ""); w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
-	}
-	em.Close()
-	if evs := sink.all(); len(evs) != 0 {
-		t.Fatalf("events = %d, want 0 for an allowed list", len(evs))
+	for _, tc := range []struct {
+		name, who, method, path, body string
+		want                          []audit.Event
+	}{
+		// A catalog row is visible to everyone and mutable by admins only, so the authorizer itself denies.
+		{"denied by the authorizer", "bob", "DELETE", byID(catalogID), "", []audit.Event{{
+			Actor: bob, Action: "rate-limits.delete", Resource: row(catalogID, hostOwned),
+			Outcome: audit.Outcome{Status: audit.StatusDenied, Code: 403}, Request: audit.Request{Method: "DELETE", Path: byID(catalogID)},
+		}}},
+		// Another user's row is invisible, so the handler answers 404 before any Authorize call and the route alone names the action.
+		{"refused as not visible", "bob", "DELETE", byID(aliceID), "", []audit.Event{{
+			Actor: bob, Action: "rate-limits.delete", Resource: audit.Resource{Kind: "rate-limit", ID: aliceID},
+			Outcome: audit.Outcome{Status: audit.StatusDenied, Code: 404}, Request: audit.Request{Method: "DELETE", Path: byID(aliceID)},
+		}}},
+		{"allowed update names the changed paths", "alice", "PUT", byID(aliceID), `{"metadata":{"name":"alice-row","displayName":"Renamed"}}`, []audit.Event{{
+			Actor: alice, Action: "rate-limits.update", Resource: row(aliceID, alices),
+			Outcome: audit.Outcome{Status: audit.StatusAllowed, Code: 200}, Request: audit.Request{Method: "PUT", Path: byID(aliceID)},
+			Change: &audit.Change{Fields: []string{"metadata.displayName"}},
+		}}},
+		{"allowed delete", "alice", "DELETE", byID(aliceID), "", []audit.Event{{
+			Actor: alice, Action: "rate-limits.delete", Resource: row(aliceID, alices),
+			Outcome: audit.Outcome{Status: audit.StatusAllowed, Code: 204}, Request: audit.Request{Method: "DELETE", Path: byID(aliceID)},
+			Change: &audit.Change{Fields: []string{audit.AnyField}},
+		}}},
+		{"allowed list", "alice", "GET", "/rate-limits", "", nil},
+		{"allowed get", "alice", "GET", "/rate-limits/" + aliceID, "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
+			scopeReq(t, h, tc.who, tc.method, tc.path, tc.body)
+			em.Close()
+			wantEvents(t, sink.all(), tc.want...)
+		})
 	}
 }
 
@@ -196,69 +149,37 @@ func newAuthAuditHarness(t *testing.T) (http.Handler, *auditSink, *audit.Emitter
 	return r, sink, em
 }
 
-func TestAuditLoginSuccess(t *testing.T) {
-	h, sink, em := newAuthAuditHarness(t)
-	if w := authPost(t, h, "/auth/login", `{"username":"alice","password":"secret123"}`); w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
-	}
-	em.Close()
-
-	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d, want 1", len(evs))
-	}
-	ev := evs[0]
-	if ev.Action != "auth.login" || ev.Outcome.Status != audit.StatusAllowed || ev.Outcome.Code != http.StatusOK {
-		t.Fatalf("event = action %q outcome %+v, want auth.login allowed/200", ev.Action, ev.Outcome)
-	}
-	if ev.Actor.Kind != audit.ActorUser || ev.Actor.Name != "alice" {
-		t.Fatalf("actor = %+v, want the logged-in user", ev.Actor)
-	}
-	if ev.Resource.Kind != "user" || ev.Resource.Name != "alice" {
-		t.Fatalf("resource = %+v, want the user row", ev.Resource)
-	}
-}
-
-func TestAuditLoginFailure(t *testing.T) {
-	h, sink, em := newAuthAuditHarness(t)
-	if w := authPost(t, h, "/auth/login", `{"username":"alice","password":"wrong"}`); w.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401: %s", w.Code, w.Body.String())
-	}
-	em.Close()
-
-	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d, want 1", len(evs))
-	}
-	ev := evs[0]
-	if ev.Action != "auth.login" || ev.Outcome.Status != audit.StatusDenied || ev.Outcome.Code != http.StatusUnauthorized {
-		t.Fatalf("event = action %q outcome %+v, want auth.login denied/401", ev.Action, ev.Outcome)
-	}
-	if ev.Actor.Kind != audit.ActorAnonymous || ev.Actor.Name != "alice" {
-		t.Fatalf("actor = %+v, want anonymous carrying the attempted username", ev.Actor)
-	}
-	if ev.Actor.ID != "" {
-		t.Fatalf("actor.ID = %q, want empty for a failed login", ev.Actor.ID)
-	}
-}
-
-func TestAuditLogout(t *testing.T) {
-	h, sink, em := newAuthAuditHarness(t)
-	if w := authPost(t, h, "/auth/logout", ""); w.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
-	}
-	em.Close()
-
-	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d, want 1", len(evs))
-	}
-	ev := evs[0]
-	if ev.Action != "auth.logout" || ev.Outcome.Status != audit.StatusAllowed {
-		t.Fatalf("event = action %q outcome %+v, want auth.logout allowed", ev.Action, ev.Outcome)
-	}
-	if ev.Actor.Kind != audit.ActorAnonymous {
-		t.Fatalf("actor = %+v, want anonymous for a logout with no live session", ev.Actor)
+// Login and logout record who tried: the user on success, anonymous carrying the attempted username on a wrong password, anonymous for a logout with no live session.
+func TestAuditAuth(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, body string
+		status           int
+		want             audit.Event
+	}{
+		{"login", "/auth/login", `{"username":"alice","password":"secret123"}`, 200, audit.Event{
+			Actor: audit.Actor{Kind: audit.ActorUser, ID: "u-alice", Name: "alice"}, Action: "auth.login",
+			Resource: audit.Resource{Kind: "user", ID: "u-alice", Name: "alice"},
+			Outcome:  audit.Outcome{Status: audit.StatusAllowed, Code: 200}, Request: audit.Request{Method: "POST", Path: "/auth/login"},
+		}},
+		{"login with a wrong password", "/auth/login", `{"username":"alice","password":"wrong"}`, 401, audit.Event{
+			Actor: audit.Actor{Kind: audit.ActorAnonymous, Name: "alice"}, Action: "auth.login",
+			Resource: audit.Resource{Kind: "user", Name: "alice"},
+			Outcome:  audit.Outcome{Status: audit.StatusDenied, Code: 401}, Request: audit.Request{Method: "POST", Path: "/auth/login"},
+		}},
+		{"logout with no session", "/auth/logout", "", 204, audit.Event{
+			Actor: audit.Actor{Kind: audit.ActorAnonymous}, Action: "auth.logout",
+			Resource: audit.Resource{Kind: "user"},
+			Outcome:  audit.Outcome{Status: audit.StatusAllowed, Code: 204}, Request: audit.Request{Method: "POST", Path: "/auth/logout"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, sink, em := newAuthAuditHarness(t)
+			if w := authPost(t, h, tc.path, tc.body); w.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tc.status, w.Body)
+			}
+			em.Close()
+			wantEvents(t, sink.all(), tc.want)
+		})
 	}
 }
 
@@ -299,27 +220,12 @@ func TestAuditSettingsUpdateRecordsSectionPath(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 	}
 	deps.Audit.Close()
-
-	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d, want 1", len(evs))
-	}
-	ev := evs[0]
-	if ev.Action != "settings.update" {
-		t.Fatalf("action = %q, want settings.update", ev.Action)
-	}
-	if ev.Change == nil || !contains(ev.Change.Fields, "sections.proxy-mode") {
-		t.Fatalf("change = %+v, want sections.proxy-mode", ev.Change)
-	}
-}
-
-func contains(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
+	wantEvents(t, sink.all(), audit.Event{
+		Actor: audit.Actor{Kind: audit.ActorAdminToken, Name: "admin-token"}, Action: "settings.update",
+		Resource: audit.Resource{Kind: "settings", Name: "proxy-mode"},
+		Outcome:  audit.Outcome{Status: audit.StatusAllowed, Code: 200}, Request: audit.Request{Method: "PUT", Path: "/settings/proxy-mode"},
+		Change:   &audit.Change{Fields: []string{"sections.proxy-mode"}},
+	})
 }
 
 func authPost(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRecorder {
