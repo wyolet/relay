@@ -542,7 +542,6 @@ func TestValidateGraph_DuplicateBindingBlamesTheLaterDocument(t *testing.T) {
 
 // Three documents under one name are one mistake, reported once.
 func TestValidateGraph_DuplicateNameReportedOncePerName(t *testing.T) {
-	t.Skip(`bug: three Host documents named "openai-host" → the same duplicate_name issue twice`)
 	got := lines(ValidateGraph(append(fixture(), host("openai-host"), host("openai-host"))))
 	want := []string{`error duplicate_name Host/openai-host: more than one Host named "openai-host" in the catalog`}
 	if diff := cmp.Diff(want, got); diff != "" {

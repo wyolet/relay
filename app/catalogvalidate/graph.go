@@ -1,6 +1,10 @@
 package catalogvalidate
 
-import "github.com/wyolet/relay/app/manifest"
+import (
+	"slices"
+
+	"github.com/wyolet/relay/app/manifest"
+)
 
 // graph indexes docs by kind+name for O(1) ref lookup during checks.
 // Slices of issues are intentionally separate from the lookup index so
@@ -31,8 +35,8 @@ type graph struct {
 	// "first declared" in the duplicate-pair check means first in the docs.
 	hostBindingNames []string
 
-	// duplicates tracks names that appeared more than once within a kind.
-	// Each entry holds the kind + name; checkDuplicateNames emits issues.
+	// duplicates tracks names that appeared more than once within a kind,
+	// once per name; checkDuplicateNames emits issues.
 	duplicates []Ref
 }
 
@@ -188,7 +192,7 @@ func indexOne(g *graph, kind, name string, insertReportDup func() bool) {
 	if name == "" {
 		return
 	}
-	if insertReportDup() {
-		g.duplicates = append(g.duplicates, Ref{Kind: kind, Name: name})
+	if dup := (Ref{Kind: kind, Name: name}); insertReportDup() && !slices.Contains(g.duplicates, dup) {
+		g.duplicates = append(g.duplicates, dup)
 	}
 }
