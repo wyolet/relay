@@ -68,6 +68,8 @@ type RouteHop struct {
 	Counters    [][]limits.Counter
 	// CallerN is how many leading counters of each Counters[i] are the caller's; they are the same for every slot of the hop, so a failover inside it keeps the caller's hold.
 	CallerN int
+	// ParamRenames are the request-body renames the host applies to the binding's wire shape, resolved with the route so a request reads them without a lookup.
+	ParamRenames []host.ParamRename
 }
 
 // CallerCounters returns the caller rungs' counters of this hop.
@@ -376,7 +378,7 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 			best.note(stepUnpriced, r)
 			continue
 		}
-		hop := RouteHop{Pool: p, Binding: sv.b, Host: sv.h, Pricing: sv.pricing, Priced: priced}
+		hop := RouteHop{Pool: p, Binding: sv.b, Host: sv.h, Pricing: sv.pricing, Priced: priced, ParamRenames: sv.h.Spec.ParamRenames(sv.b.Spec.Adapter)}
 		for _, s := range p.Slots {
 			// A key reached through two shares is tried once per hop, through the first that serves.
 			if _, dup := seen[s]; dup || slices.Contains(hop.Credentials, s.Credential) {

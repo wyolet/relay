@@ -15,9 +15,14 @@
 package host
 
 import (
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -96,6 +101,12 @@ type Spec struct {
 	// catalog-fixed property — Ollama Cloud still needs a key.
 	NoAuth bool `json:"noAuth,omitempty" yaml:"noAuth,omitempty" doc:"The upstream needs no API key (such as a self-hosted Ollama). Requests go out without credentials, reached through a pool that names the host."`
 
+	// RequestParamRenames maps a wire shape (an adapter name) to the top-level
+	// request-body keys this host expects under another name. Keyed by shape
+	// because one host can serve several, and a key one of them renames may be
+	// the right name in another.
+	RequestParamRenames map[adapters.Name]map[string]string `json:"requestParamRenames,omitempty" yaml:"requestParamRenames,omitempty" doc:"Top-level request-body keys the host expects under another name, per wire shape (adapter name, such as openai): {openai: {max_tokens: max_completion_tokens}}. Relay renames them before sending; when the caller already sent the new name, the old key is dropped and the drop reported."`
+
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops routing to the host. Omitted means true."`
 
@@ -134,6 +145,26 @@ func (s Spec) AllowsStrategy(strat string) bool {
 	return false
 }
 
+// ParamRename moves a top-level request-body member from one key to another.
+type ParamRename struct {
+	From, To string
+}
+
+// ParamRenames returns the renames the host applies to a request body in
+// shape, ordered by source key; nil when there are none.
+func (s Spec) ParamRenames(shape adapters.Name) []ParamRename {
+	table := s.RequestParamRenames[shape]
+	if len(table) == 0 {
+		return nil
+	}
+	out := make([]ParamRename, 0, len(table))
+	for from, to := range table {
+		out = append(out, ParamRename{From: from, To: to})
+	}
+	slices.SortFunc(out, func(a, b ParamRename) int { return strings.Compare(a.From, b.From) })
+	return out
+}
+
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the Host owner rule: a Host is shared catalog data owned by the
 // deployment (system, or empty), never by a user, team or project. A host
@@ -147,6 +178,37 @@ func (h *Host) Validate() error {
 	case "", meta.OwnerSystem:
 	default:
 		return fmt.Errorf("host %q: hosts are shared catalog data: owner.kind must be system or omitted, got %q", h.Meta.Name, h.Meta.Owner.Kind)
+	}
+	if err := validateParamRenames(h.Spec.RequestParamRenames); err != nil {
+		return fmt.Errorf("host %q: %w", h.Meta.Name, err)
+	}
+	return nil
+}
+
+// validateParamRenames refuses a table whose result would depend on the order
+// renames run in: a target that is also a source, or two sources sharing one.
+func validateParamRenames(tables map[adapters.Name]map[string]string) error {
+	for _, shape := range slices.Sorted(maps.Keys(tables)) {
+		if shape == "" {
+			return errors.New("requestParamRenames: adapter name must not be empty")
+		}
+		table := tables[shape]
+		targets := make(map[string]string, len(table))
+		for _, from := range slices.Sorted(maps.Keys(table)) {
+			to := table[from]
+			_, toIsSource := table[to]
+			switch {
+			case from == "" || to == "":
+				return fmt.Errorf("requestParamRenames[%s]: key names must not be empty", shape)
+			case from == to:
+				return fmt.Errorf("requestParamRenames[%s][%s]: renamed to itself", shape, from)
+			case toIsSource:
+				return fmt.Errorf("requestParamRenames[%s][%s]: target %q is also renamed", shape, from, to)
+			case targets[to] != "":
+				return fmt.Errorf("requestParamRenames[%s][%s]: target %q is also the target of %q", shape, from, to, targets[to])
+			}
+			targets[to] = from
+		}
 	}
 	return nil
 }

@@ -126,7 +126,8 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 
 	// Same-shape only (guarded above), so the body stays inbound-shaped and
 	// the inbound spec's ParamPaths address it — mirrors runBytePass.
-	wireBody, _ := inference.UpstreamBody(req, route.UpstreamModel, route.Model, inboundSpec.ParamPaths)
+	hops, renames := inference.KeepSameRenames(hops, inbound)
+	wireBody, _ := inference.UpstreamBody(req, route.UpstreamModel, route.Model, inboundSpec.ParamPaths, renames)
 
 	result, err := rn.Pipeline.Run(ctx, &pipeline.Request{
 		Body:          wireBody,

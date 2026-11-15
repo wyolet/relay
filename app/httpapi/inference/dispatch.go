@@ -32,6 +32,7 @@ import (
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -295,6 +296,7 @@ func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifec
 func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec) {
 	ctx := r.Context()
 
+	hops, renames := KeepSameRenames(hops, in.Inbound)
 	wireBody, usageRequested := in.Body, false
 	req := in.Request
 	if req == nil {
@@ -312,7 +314,12 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 		if u := route.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
 			var dropped []string
 			edits, dropped = req.stripParams(edits, u, inboundSpec.ParamPaths)
-			surfaceDroppedParams(w, route.Model.Meta.Name, dropped)
+			surfaceDroppedParams(w, route.Model.Meta.Name, dropped, metrics.DropUnsupportedByModel)
+		}
+		if len(renames) > 0 {
+			var superseded []string
+			edits, superseded = req.obj.renameMembers(edits, renames)
+			surfaceDroppedParams(w, route.Model.Meta.Name, superseded, metrics.DropSupersededByRename)
 		}
 		wireBody = req.upstreamBody(route.UpstreamModel, edits)
 	}
@@ -432,7 +439,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	canonReq.Model = v1.ModelRefs{route.UpstreamModel}
 	applyOutputDefaults(canonReq, route.Model.Spec.MaxOutputTokens)
 	if u := route.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
-		surfaceDroppedParams(w, route.Model.Meta.Name, stripCanonicalParams(canonReq, u))
+		surfaceDroppedParams(w, route.Model.Meta.Name, stripCanonicalParams(canonReq, u), metrics.DropUnsupportedByModel)
 	}
 
 	wireBody, err := upstreamV1.SerializeRequest(canonReq)
@@ -444,6 +451,12 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		}
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", err.Error())
 		return
+	}
+	hops, renames := KeepSameRenames(hops, hops[0].Binding.Spec.Adapter)
+	if len(renames) > 0 {
+		var superseded []string
+		wireBody, superseded = renameBodyParams(wireBody, renames)
+		surfaceDroppedParams(w, route.Model.Meta.Name, superseded, metrics.DropSupersededByRename)
 	}
 
 	lc := lifecycle.FromContext(ctx)
