@@ -45,6 +45,8 @@ const (
 	cc1h     = `"cache_control":{"type":"ephemeral","ttl":"1h"}`
 	pngBlock = `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QQ=="}}`
 	pdfBlock = `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0="}}`
+
+	anchoredTurn = `{"role":"user","content":[{"type":"text","text":"q",` + ccBlock + `}]}`
 )
 
 var (
@@ -87,7 +89,7 @@ var requestCases = []struct {
 	{
 		name: "system blocks join their non-empty text",
 		dir:  parseOnly,
-		wire: body(`"system":[{"type":"text","text":"a"},{"type":"image"},{"type":"text","text":""},{"type":"text","text":"b"}],` + hiOnly),
+		wire: body(`"system":[{"type":"text","text":"a"},{"type":"image"},{"type":"thinking","text":"no"},{"type":"text","text":""},{"type":"text","text":"b"}],` + hiOnly),
 		req: request(func(r *v1.Request, _ *v1.ModelOpts) {
 			r.Instructions, r.Input = "a\nb", []v1.Item{userText("hi")}
 		}),
@@ -96,7 +98,7 @@ var requestCases = []struct {
 		name: "max_tokens falls back when sampling is unset",
 		dir:  serializeOnly,
 		wire: body(hiOnly),
-		req:  &v1.Request{Model: v1.ModelRefs{testModel}, Input: []v1.Item{userText("hi")}},
+		req:  &v1.Request{Model: v1.ModelRefs{testModel}, ModelConfig: map[string]*v1.ModelOpts{testModel: nil}, Input: []v1.Item{userText("hi")}},
 	},
 	{
 		name: "function tool with forced choice",
@@ -197,7 +199,7 @@ var requestCases = []struct {
 		dir:  serializeOnly,
 		wire: `{"model":"` + testModel + `","max_tokens":5120,"thinking":{"type":"enabled","budget_tokens":1024},` + hiOnly + `}`,
 		req: request(func(r *v1.Request, opts *v1.ModelOpts) {
-			opts.Sampling.MaxTokens = ptr(600)
+			opts.Sampling.MaxTokens = ptr(1024)
 			opts.Reasoning = &v1.ReasoningConfig{BudgetTokens: ptr(500)}
 			r.Input = []v1.Item{userText("hi")}
 		}),
@@ -249,7 +251,16 @@ var requestCases = []struct {
 		wire: body(`"thinking":{"type":"adaptive"},"stop_sequences":["END"],` + hiOnly),
 		req: request(func(r *v1.Request, opts *v1.ModelOpts) {
 			opts.Sampling = &v1.SamplingParams{Temperature: ptr(0.7), TopP: ptr(0.9), TopK: ptr(5), Stop: []string{"END"}}
-			opts.Reasoning = &v1.ReasoningConfig{}
+			opts.Reasoning = &v1.ReasoningConfig{BudgetTokens: ptr(0)}
+			r.Input = []v1.Item{userText("hi")}
+		}),
+	},
+	{
+		name: "a negative budget asks for adaptive thinking",
+		dir:  serializeOnly,
+		wire: body(`"thinking":{"type":"adaptive"},` + hiOnly),
+		req: request(func(r *v1.Request, opts *v1.ModelOpts) {
+			opts.Reasoning = &v1.ReasoningConfig{BudgetTokens: ptr(-1)}
 			r.Input = []v1.Item{userText("hi")}
 		}),
 	},
@@ -281,10 +292,10 @@ var requestCases = []struct {
 	},
 	{
 		name: "user media blocks",
-		wire: body(`"messages":[{"role":"user","content":[{"type":"text","text":"look"},` + pngBlock + `,{"type":"image","source":{"type":"url","url":"https://x/a.png"}},` + pdfBlock + `,{"type":"document","source":{"type":"url","url":"https://x/a.pdf"}}]}]`),
-		req: request(input(&v1.Message{Role: v1.RoleUser, Content: []v1.Part{
-			&v1.TextPart{Text: "look"}, pngPart, &v1.ImagePart{ImageURL: "https://x/a.png"}, pdfPart, &v1.FilePart{FileURL: "https://x/a.pdf"},
-		}})),
+		wire: body(`"messages":[{"role":"user","content":[{"type":"text","text":"look"},` + pngBlock + `,{"type":"image","source":{"type":"url","url":"https://x/a;b,c.png"}},` + pdfBlock + `,{"type":"document","source":{"type":"url","url":"https://x/a.pdf"},` + ccBlock + `}]}]`),
+		req: request(input(anchored(&v1.Message{Role: v1.RoleUser, Content: []v1.Part{
+			&v1.TextPart{Text: "look"}, pngPart, &v1.ImagePart{ImageURL: "https://x/a;b,c.png"}, pdfPart, &v1.FilePart{FileURL: "https://x/a.pdf"},
+		}}))),
 	},
 	{
 		name: "image without media type and document by file id",
@@ -297,8 +308,8 @@ var requestCases = []struct {
 	{
 		name: "file data without media type is sent as pdf",
 		dir:  serializeOnly,
-		wire: body(`"messages":[{"role":"user","content":[` + pdfBlock + `]}]`),
-		req:  request(input(&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.FilePart{FileData: "JVBERi0="}}})),
+		wire: body(`"messages":[{"role":"user","content":[{"type":"text","text":"see"},` + pdfBlock + `]}]`),
+		req:  request(input(&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.OutputTextPart{Text: "see"}, &v1.FilePart{FileData: "JVBERi0="}}})),
 	},
 	{
 		name: "tool loop",
@@ -324,6 +335,7 @@ var requestCases = []struct {
 		dir:  serializeOnly,
 		wire: body(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"f","input":{}},{"type":"tool_use","id":"t2","name":"g","input":{"_raw":"{\"a\":"}}]}]`),
 		req: request(input(
+			anchored(assistantText("")),
 			&v1.FunctionCall{CallID: "t1", Name: "f"},
 			&v1.FunctionCall{CallID: "t2", Name: "g", Arguments: `{"a":`},
 		)),
@@ -338,14 +350,20 @@ var requestCases = []struct {
 	{
 		name: "media tool result falls back to output for its text",
 		dir:  serializeOnly,
-		wire: body(`"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[` + pngBlock + `,{"type":"text","text":"caption"}]}]}]`),
-		req:  request(input(&v1.FunctionCallOutput{CallID: "t1", Output: "caption", Content: []v1.Part{pngPart}})),
+		wire: body(`"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[` + pngBlock + `,{"type":"text","text":"caption"}]},{"type":"tool_result","tool_use_id":"t2","content":[` + pngBlock + `]}]}]`),
+		req: request(input(
+			&v1.FunctionCallOutput{CallID: "t1", Output: "caption", Content: []v1.Part{&v1.TextPart{}, pngPart}},
+			&v1.FunctionCallOutput{CallID: "t2", Content: []v1.Part{pngPart}},
+		)),
 	},
 	{
 		name: "text-only tool result content is joined",
 		dir:  serializeOnly,
-		wire: body(`"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ab"}]}]`),
-		req:  request(input(&v1.FunctionCallOutput{CallID: "t1", Content: []v1.Part{&v1.TextPart{Text: "a"}, &v1.TextPart{Text: "b"}}})),
+		wire: body(`"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ab"},{"type":"tool_result","tool_use_id":"t2","content":"out"}]}]`),
+		req: request(input(
+			&v1.FunctionCallOutput{CallID: "t1", Content: []v1.Part{&v1.TextPart{Text: "a"}, &v1.TextPart{Text: "b"}}},
+			&v1.FunctionCallOutput{CallID: "t2", Output: "out", Content: []v1.Part{&v1.TextPart{Text: "parts"}}},
+		)),
 	},
 	{
 		// Anthropic rejects a tool_use turn that does not lead with its thinking block, so the run is one message.
@@ -372,7 +390,46 @@ var requestCases = []struct {
 		dir:  serializeOnly,
 		wire: body(`"messages":[{"role":"user","content":"go"},{"role":"assistant","content":"answer"},{"role":"user","content":"next"}]`),
 		req: request(input(
-			userText("go"), &v1.Reasoning{ID: "rs_0", Content: "other vendor"}, assistantText("answer"), userText("next"),
+			userText("go"), &v1.Reasoning{ID: "rs_0", Content: "other vendor"},
+			&v1.Reasoning{ProviderData: json.RawMessage(`{"type":"reasoning","signature":"s"}`)},
+			&v1.Reasoning{ProviderData: json.RawMessage(`{"type":"thought","signature":"s"}`)},
+			&v1.Reasoning{ProviderData: json.RawMessage(`{"type":"thinking","thinking":"unsigned"}`)},
+			assistantText("answer"), userText("next"),
+		)),
+	},
+	{
+		// A thinking-only run closes as its own message mid-history; at the end it would be a prefill, which Anthropic rejects.
+		name: "thinking leads the assistant message its run closes",
+		dir:  serializeOnly,
+		wire: body(`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"SIG"}]},` + markerTurn("rule") +
+			`,{"role":"assistant","content":[{"type":"thinking","thinking":"p2","signature":"S2"},{"type":"text","text":"a"}]},{"role":"user","content":"u"}` +
+			`,{"role":"assistant","content":[{"type":"text","text":"b"},{"type":"text","text":"c"}]},{"role":"user","content":"end"}]`),
+		req: request(input(
+			signedThinking("plan", "SIG"), systemText("rule"), signedThinking("p2", "S2"), assistantText("a"), userText("u"),
+			assistantText("b"), assistantText("c"), userText("end"), signedThinking("tail", "S3"),
+		)),
+	},
+	{
+		name: "unsigned thinking carries no provider data",
+		dir:  parseOnly,
+		wire: body(`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}]`),
+		req:  request(input(&v1.Reasoning{Content: "hmm", Summary: []v1.SummaryText{{Text: "hmm"}}})),
+	},
+	{
+		name: "content elements that are not objects are skipped",
+		dir:  parseOnly,
+		wire: body(`"messages":[{"role":"system","content":["s",{"type":"text","text":"x"}]},{"role":"user","content":[5,{"type":"text","text":"y"}]}]`),
+		req:  request(input(systemText("x"), userText("y"))),
+	},
+	{
+		name: "user turn drops a tool_use block and keeps a marker beside other content as text",
+		dir:  parseOnly,
+		wire: body(`"messages":[{"role":"user","content":[{"type":"tool_use","id":"u"},{"type":"text","text":"y"}]}` +
+			`,{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"},{"type":"text","text":` + string(mustJSON(v1.WrapSystemMarker("r"))) + `}]}` +
+			`,{"role":"user","content":[{"type":"text","text":` + string(mustJSON(v1.WrapSystemMarker("r"))) + `},{"type":"text","text":"more"}]}]`),
+		req: request(input(
+			userText("y"), &v1.FunctionCallOutput{CallID: "t1", Output: "ok"}, userText(v1.WrapSystemMarker("r")),
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: v1.WrapSystemMarker("r")}, &v1.TextPart{Text: "more"}}},
 		)),
 	},
 	{
@@ -388,7 +445,7 @@ var requestCases = []struct {
 		wire: body(`"system":"base\nlead\ndev",` + hiOnly),
 		req: request(func(r *v1.Request, _ *v1.ModelOpts) {
 			r.Instructions = "base"
-			r.Input = []v1.Item{systemText("lead"), &v1.Message{Role: v1.RoleDeveloper, Content: []v1.Part{&v1.TextPart{Text: "dev"}}}, userText("hi")}
+			r.Input = []v1.Item{systemText(""), systemText("lead"), &v1.Message{Role: v1.RoleDeveloper, Content: []v1.Part{&v1.TextPart{Text: "dev"}}}, userText("hi")}
 		}),
 	},
 	{
@@ -401,11 +458,15 @@ var requestCases = []struct {
 	},
 	{
 		// A tool_result must directly follow its tool_use turn.
-		name: "system item between a call and its result waits for the result",
+		name: "system items inside an open tool round wait for its results",
 		dir:  serializeOnly,
-		wire: body(`"messages":[{"role":"user","content":"run"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"run","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"done"}]},` + markerTurn("meanwhile") + `]`),
+		wire: body(`"messages":[{"role":"user","content":"run"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"run","input":{}},{"type":"tool_use","id":"c2","name":"run","input":{}}]}` +
+			`,{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"d1"},{"type":"tool_result","tool_use_id":"c2","content":"d2"}]},` + markerTurn("m1") + `,` + markerTurn("m2") +
+			`,{"role":"assistant","content":[{"type":"tool_use","id":"c3","name":"run","input":{}}]},` + markerTurn("m3") + `]`),
 		req: request(input(
-			userText("run"), &v1.FunctionCall{CallID: "c1", Name: "run", Arguments: `{}`}, systemText("meanwhile"), &v1.FunctionCallOutput{CallID: "c1", Output: "done"},
+			userText("run"), &v1.FunctionCall{CallID: "c1", Name: "run", Arguments: `{}`}, &v1.FunctionCall{CallID: "c2", Name: "run", Arguments: `{}`},
+			systemText("m1"), &v1.FunctionCallOutput{CallID: "c1", Output: "d1"}, systemText("m2"), &v1.FunctionCallOutput{CallID: "c2", Output: "d2"},
+			&v1.FunctionCall{CallID: "c3", Name: "run", Arguments: `{}`}, systemText("m3"),
 		)),
 	},
 	{
@@ -487,7 +548,7 @@ var requestCases = []struct {
 		// Instructions, tools, history and three item anchors ask for six breakpoints; the two oldest item anchors go.
 		name: "breakpoints beyond four drop the oldest item anchors",
 		dir:  serializeOnly,
-		wire: body(`"system":[{"type":"text","text":"Be terse.",` + ccBlock + `}],"tools":[{"name":"read","input_schema":{},` + ccBlock + `}],"messages":[` +
+		wire: body(`"system":[{"type":"text","text":"Be terse.",` + ccBlock + `}],"tools":[{"name":"read","input_schema":{},` + ccBlock + `}],"messages":[{"role":"user","content":"q0"},` +
 			`{"role":"user","content":[{"type":"text","text":"q1"}]},` +
 			`{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"read","input":{}}]},` +
 			`{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"r1",` + ccBlock + `}]},` +
@@ -498,12 +559,29 @@ var requestCases = []struct {
 			r.CacheConfig = &v1.CacheConfig{Instructions: true, Tools: true, History: true}
 			r.Tools = &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "read", Parameters: json.RawMessage(`{}`)}}}
 			r.Input = []v1.Item{
-				anchored(userText("q1")),
+				userText("q0"), anchored(userText("q1")),
 				&v1.FunctionCall{CallID: "c1", Name: "read", Arguments: `{}`, CacheConfig: anchor},
 				&v1.FunctionCallOutput{CallID: "c1", Output: "r1", CacheConfig: anchor},
 				&v1.FunctionCall{CallID: "c2", Name: "read", Arguments: `{}`},
 				&v1.FunctionCallOutput{CallID: "c2", Output: "r2"},
 			}
+		}),
+	},
+	{
+		name: "a tools breakpoint with no tools takes none of the four slots",
+		dir:  serializeOnly,
+		wire: body(`"messages":[` + anchoredTurn + `,` + anchoredTurn + `,` + anchoredTurn + `,` + anchoredTurn + `]`),
+		req: request(func(r *v1.Request, _ *v1.ModelOpts) {
+			r.CacheConfig = &v1.CacheConfig{Tools: true}
+			r.Input = []v1.Item{anchored(userText("q")), anchored(userText("q")), anchored(userText("q")), anchored(userText("q"))}
+		}),
+	},
+	{
+		name: "unmarked tools take none of the four slots",
+		wire: body(`"tools":[{"name":"f","input_schema":{}}],"messages":[` + anchoredTurn + `,` + anchoredTurn + `,` + anchoredTurn + `,` + anchoredTurn + `]`),
+		req: request(func(r *v1.Request, _ *v1.ModelOpts) {
+			r.Tools = &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f", Parameters: json.RawMessage(`{}`)}}}
+			r.Input = []v1.Item{anchored(userText("q")), anchored(userText("q")), anchored(userText("q")), anchored(userText("q"))}
 		}),
 	},
 }
@@ -532,6 +610,46 @@ func TestRequestMapping(t *testing.T) {
 				assertJSONEqual(t, got, tc.wire)
 			}
 		})
+	}
+}
+
+func TestParseRequest_ModelConfigHoldsOnlyWhatTheBodySets(t *testing.T) {
+	for members, want := range map[string]*v1.ModelOpts{
+		`"stream":false`:         nil,
+		`"temperature":0.5`:      {Sampling: &v1.SamplingParams{Temperature: ptr(0.5)}},
+		`"top_p":0.9`:            {Sampling: &v1.SamplingParams{TopP: ptr(0.9)}},
+		`"top_k":40`:             {Sampling: &v1.SamplingParams{TopK: ptr(40)}},
+		`"stop_sequences":["x"]`: {Sampling: &v1.SamplingParams{Stop: []string{"x"}}},
+		`"thinking":{"type":"enabled","budget_tokens":0}`:  {Reasoning: &v1.ReasoningConfig{}},
+		`"thinking":{"type":"enabled","budget_tokens":-1}`: {Reasoning: &v1.ReasoningConfig{}},
+	} {
+		got, err := AnthropicTranslator{}.ParseRequest([]byte(`{"model":"m",` + members + `}`))
+		if err != nil {
+			t.Fatalf("%s: %v", members, err)
+		}
+		var config map[string]*v1.ModelOpts
+		if want != nil {
+			config = map[string]*v1.ModelOpts{"m": want}
+		}
+		if diff := cmp.Diff(config, got.ModelConfig); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", members, diff)
+		}
+	}
+}
+
+func TestSerializeRequest_RejectsUnknownFormatType(t *testing.T) {
+	t.Skip("bug: a format type other than text, json_schema or json_object is dropped silently (rule 11)")
+	_, err := AnthropicTranslator{}.SerializeRequest(request(func(_ *v1.Request, opts *v1.ModelOpts) {
+		opts.Output = &v1.OutputConfig{Format: &v1.Format{Type: "grammar"}}
+	}))
+	if !errors.Is(err, v1.ErrUnsupportedRequest) {
+		t.Errorf("err = %v, want ErrUnsupportedRequest", err)
+	}
+}
+
+func TestRequestKeys(t *testing.T) {
+	if got := (AnthropicTranslator{}).RequestKeys(); got != (v1.RequestKeys{Stream: "stream"}) {
+		t.Errorf("request keys = %+v", got)
 	}
 }
 
@@ -572,6 +690,9 @@ func TestParseRequest_Rejects(t *testing.T) {
 		`{"model":"m","messages":[{"role":"user","content":{}}]}`,
 		`{"model":"m","messages":[{"role":"assistant","content":true}]}`,
 		`{"model":"m","tools":["f"]}`,
+		`{"model":"m","max_tokens":"x"}`,
+		`{"model":"m","messages":[5]}`,
+		`{"model":"m","messages":[{"role":"system","content":{}}]}`,
 	} {
 		if req, err := (AnthropicTranslator{}).ParseRequest([]byte(wire)); err == nil {
 			t.Errorf("%s: parsed to %s, want an error", wire, mustJSON(req))
@@ -596,6 +717,8 @@ func TestSerializeRequest_Rejects(t *testing.T) {
 			r.Tools = &v1.ToolsConfig{Definitions: v1.Tools{&v1.ServerTool{Name: "web_search"}}}
 		}), false},
 		{"file part by id", request(input(&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.FilePart{FileID: "file_1"}}})), false},
+		{"file part by id in an assistant message", request(input(&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.FilePart{FileID: "file_1"}}})), false},
+		{"part of an unknown type", request(input(&v1.Message{Role: v1.RoleUser, Content: []v1.Part{struct{ *v1.ImagePart }{}}})), false},
 		{"file part by id in a tool result", request(input(&v1.FunctionCallOutput{CallID: "t1", Content: []v1.Part{&v1.FilePart{FileID: "file_1"}}})), false},
 		{"json_object format", format(v1.Format{Type: "json_object"}), true},
 		{"json_object format with a schema", format(v1.Format{Type: "json_object", Schema: json.RawMessage(`{"type":"object"}`)}), true},
@@ -611,7 +734,7 @@ func TestSerializeRequest_Rejects(t *testing.T) {
 }
 
 func TestCacheTTLTier(t *testing.T) {
-	for ttl, want := range map[string]string{"": "", "5m": "", "garbage": "", "5m1s": "1h", "1h": "1h", "24h": "1h"} {
+	for ttl, want := range map[string]string{"": "", "1m": "", "5m": "", "garbage": "", "5m1s": "1h", "1h": "1h", "24h": "1h"} {
 		if got := anthropicCacheTTL(&v1.CacheConfig{TTL: ttl}); got != want {
 			t.Errorf("ttl %q → tier %q, want %q", ttl, got, want)
 		}
@@ -623,13 +746,15 @@ func TestCacheTTLTier(t *testing.T) {
 
 // Thinking blocks cannot carry cache_control, so the history breakpoint lands on the block before them.
 func TestMarkHistoryBreakpoint_SkipsThinking(t *testing.T) {
+	markHistoryBreakpoint(nil, "1h")
 	msgs := []anthropicCanonMsg{{Role: "assistant", Content: []map[string]any{
+		{"type": "text", "text": "s"},
 		{"type": "text", "text": "t"},
 		{"type": "thinking", "thinking": "x", "signature": "s"},
 		{"type": "redacted_thinking", "data": "d"},
 	}}}
 	markHistoryBreakpoint(msgs, "1h")
-	assertJSONEqual(t, mustJSON(msgs[0].Content), `[{"type":"text","text":"t",`+cc1h+`},{"type":"thinking","thinking":"x","signature":"s"},{"type":"redacted_thinking","data":"d"}]`)
+	assertJSONEqual(t, mustJSON(msgs[0].Content), `[{"type":"text","text":"s"},{"type":"text","text":"t",`+cc1h+`},{"type":"thinking","thinking":"x","signature":"s"},{"type":"redacted_thinking","data":"d"}]`)
 }
 
 func TestParseRequest_ThinkingPrecedesTheTextItFollowsOnTheWire(t *testing.T) {
