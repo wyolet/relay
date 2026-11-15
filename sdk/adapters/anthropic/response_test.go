@@ -82,6 +82,19 @@ var responseCases = []struct {
 		}),
 	},
 	{
+		name: "redacted thinking keeps its data",
+		wire: respBody(`"content":[{"type":"thinking","thinking":"plan","signature":"SIG"},{"type":"redacted_thinking","data":"ENC"},{"type":"text","text":"done"}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			plan := signedThinking("plan", "SIG")
+			plan.ID, plan.Status = "rs_0", v1.StatusCompleted
+			r.Output = []v1.Item{
+				plan,
+				&v1.Reasoning{ID: "rs_1", Status: v1.StatusCompleted, ProviderData: json.RawMessage(`{"data":"ENC","type":"redacted_thinking"}`)},
+				outputText("msg_2", "done"),
+			}
+		}),
+	},
+	{
 		name: "unsigned thinking",
 		wire: respBody(`"content":[{"type":"thinking","thinking":"plan"}],"stop_reason":"end_turn"`),
 		resp: response(func(r *v1.Response) {
@@ -91,7 +104,7 @@ var responseCases = []struct {
 	{
 		name: "blocks with no canonical item take no output index",
 		dir:  parseOnly,
-		wire: respBody(`"content":[{"type":"thinking","thinking":""},{"type":"redacted_thinking","data":"x"},{"type":"server_tool_use","id":"s1","name":"web_search"},{"type":"future"},{"type":"text","text":"x"}],"stop_reason":"end_turn"`),
+		wire: respBody(`"content":[{"type":"thinking","thinking":""},{"type":"server_tool_use","id":"s1","name":"web_search"},{"type":"future"},{"type":"text","text":"x"}],"stop_reason":"end_turn"`),
 		resp: response(func(r *v1.Response) { r.Output = []v1.Item{outputText("msg_0", "x")} }),
 	},
 	{

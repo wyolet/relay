@@ -107,7 +107,10 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			outputIndex++
 
 		case "redacted_thinking":
-			// Cannot faithfully represent; silently drop.
+			r := redactedThinkingToReasoning(block.Data)
+			r.ID, r.Status = fmt.Sprintf("rs_%d", outputIndex), v1.StatusCompleted
+			resp.Output = append(resp.Output, r)
+			outputIndex++
 
 		case "server_tool_use":
 			// server_tool_use blocks (web_search, code_execution) not modeled in v1 output.

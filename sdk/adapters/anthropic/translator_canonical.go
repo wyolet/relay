@@ -155,6 +155,8 @@ type anthropicRespBlock struct {
 	// thinking block
 	Thinking  string `json:"thinking,omitempty"`
 	Signature string `json:"signature,omitempty"`
+	// redacted_thinking block
+	Data string `json:"data,omitempty"`
 	// citations
 	Citations []anthropicCitation `json:"citations,omitempty"`
 }

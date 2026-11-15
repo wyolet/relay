@@ -73,8 +73,14 @@ func (AnthropicTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) (
 					Type      string `json:"type"`
 					Thinking  string `json:"thinking"`
 					Signature string `json:"signature"`
+					Data      string `json:"data"`
 				}
-				if err := json.Unmarshal(v.ProviderData, &pd); err == nil && pd.Type == "thinking" {
+				err := json.Unmarshal(v.ProviderData, &pd)
+				if err == nil && pd.Type == "redacted_thinking" && pd.Data != "" {
+					content = append(content, map[string]any{"type": "redacted_thinking", "data": pd.Data})
+					continue
+				}
+				if err == nil && pd.Type == "thinking" {
 					block := map[string]any{
 						"type":     "thinking",
 						"thinking": pd.Thinking,

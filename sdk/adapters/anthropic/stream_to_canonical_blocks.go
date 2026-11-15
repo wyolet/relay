@@ -41,8 +41,9 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	}
 
 	// canonical: server_tool_use and redacted_thinking blocks dropped on the
-	// stream — no canonical item for a hosted tool call, and redacted thinking
-	// has no plaintext; the buffered path (ParseResponse) drops both as well.
+	// stream — no canonical item for a hosted tool call, and item.started has
+	// no provider_data, so a canonical→Anthropic stream could not open the
+	// redacted block it would need to replay.
 	if blockType == "server_tool_use" || blockType == "redacted_thinking" {
 		return nil, nil
 	}
