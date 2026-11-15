@@ -242,6 +242,7 @@ func anthropicAssistantContentToItems(raw json.RawMessage, breakpoints *cacheBre
 			Input     json.RawMessage `json:"input,omitempty"`
 			Thinking  string          `json:"thinking,omitempty"`
 			Signature string          `json:"signature,omitempty"`
+			Data      string          `json:"data,omitempty"`
 		}
 		if err := json.Unmarshal(b, &probe); err != nil {
 			continue
@@ -267,6 +268,8 @@ func anthropicAssistantContentToItems(raw json.RawMessage, breakpoints *cacheBre
 			})
 		case "thinking":
 			items = append(items, thinkingToReasoning(probe.Thinking, probe.Signature))
+		case "redacted_thinking":
+			items = append(items, redactedThinkingToReasoning(probe.Data))
 		}
 	}
 

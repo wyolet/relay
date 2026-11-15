@@ -220,6 +220,8 @@ func (c *messageContent) assistantItems(breakpoints *cacheBreakpoints) (*v1.Mess
 			})
 		case "thinking":
 			items = append(items, thinkingToReasoning(b.thinking, b.signature))
+		case "redacted_thinking":
+			items = append(items, redactedThinkingToReasoning(b.data))
 		}
 	}
 	if len(items) == 0 {
