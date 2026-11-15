@@ -35,7 +35,7 @@ func TestServe_RebuildMatchingPublishedIsServed(t *testing.T) {
 			t.Fatalf("%s fetched from the release %d times; the rebuild matched", name, n)
 		}
 	}
-	for _, a := range assets {
+	for _, a := range relayFiles.assets {
 		wantCount(t, a.label()+" mismatches", s.metrics.mismatches.WithLabelValues(a.label()), 0)
 		wantCount(t, a.label()+" builds", s.metrics.builds.WithLabelValues(a.label()), 1)
 	}

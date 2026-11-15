@@ -9,6 +9,11 @@
 // aren't published and verified. The same Build steps produce the files the
 // release publishes, so CI and the server share one builder.
 //
+// A tag whose tree has an mcp/ directory also has an MCP template tarball,
+// verified the same way and indexed in a separate /mcp/index.yaml under the
+// channel of the mcp/ documents. Its documents are never parsed beyond
+// apiVersion, and it never affects /index.yaml or the relay files.
+//
 // Relays may register a receiver URL per channel; when a channel's latest
 // tag moves, each receiver gets a nudge to re-read the index. Receivers are
 // held in memory per replica and expire unless renewed. A repository push

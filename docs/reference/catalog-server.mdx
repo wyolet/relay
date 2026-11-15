@@ -14,8 +14,10 @@ Relay defaults to the public server at `https://catalog.wyolet.com`. The example
 | `/index.yaml` | The channel index (below). | `public, max-age=60`; `ETag` is the quoted sha256 of the body, `If-None-Match` gets `304`. |
 | `/releases/<tag>/catalog.json.gz` | The SDK catalog of release `<tag>`. | `public, max-age=31536000, immutable`; `ETag: "<sha256>"`, `If-None-Match` gets `304`. |
 | `/releases/<tag>/relay-catalog-data-<tag>.tar.gz` | The release's `data/` tree, which Relay seeds from. | As above. |
+| `/releases/<tag>/mcp-catalog-data-<tag>.tar.gz` | The release's `mcp/` tree of MCP server templates; see [MCP templates](#mcp-templates). | As above. |
 | `/releases/<tag>/<file>.sha256` | The sum file published with the release on GitHub, byte for byte. | As above. |
-| `/channels/<channel>/latest/<file>` | `302` to `/releases/<tag>/<file>` for the channel's latest tag. `<file>` is `catalog.json.gz` or `relay-catalog-data.tar.gz`, optionally with `.sha256`. For curl and people; clients read the index. | `public, max-age=60` |
+| `/mcp/index.yaml` | The channel index of the MCP template tarballs. | As `/index.yaml`. |
+| `/channels/<channel>/latest/<file>` | `302` to `/releases/<tag>/<file>` for the channel's latest tag. `<file>` is `catalog.json.gz`, `relay-catalog-data.tar.gz` or `mcp-catalog-data.tar.gz`, optionally with `.sha256`; the last resolves through `/mcp/index.yaml`. For curl and people; clients read the index. | `public, max-age=60` |
 | `/livez`, `/readyz`, `/metrics` | Health and Prometheus metrics; see [Running catalog-server](#running-catalog-server). | none |
 | `POST /v1/webhooks`, `POST /hooks/github` | Release webhook registration and the repository push hook; see [Release webhooks](#release-webhooks). | none |
 
@@ -45,10 +47,24 @@ A tag's channel is the last segment of the `apiVersion` every document in its da
 
 `latest` is the highest release tag of the channel whose two sum files are published and whose two files verified. Release tags are `vX.Y.Z` with no pre-release or build suffix. The index never names a tag that can't be downloaded, whatever order the release's files were uploaded in. A tag whose documents disagree on `apiVersion` is never indexed.
 
+## MCP templates
+
+A release whose tree has an `mcp/` directory may also publish `mcp-catalog-data-<tag>.tar.gz`: `git archive` of `mcp/` without `mcp/drafts`, so its paths start with `mcp/`. It is checked against its published sum like the other two files, and indexed separately in `/mcp/index.yaml`, which has the same shape as `/index.yaml`:
+
+```yaml
+channels:
+    v1alpha1:
+        latest: v0.2.7
+```
+
+Its channel is the last segment of the `apiVersion` every document under `mcp/` shares, read the same way as the data tree's and independent of it. `latest` is the highest tag of that channel whose MCP tarball is published and verified. The two indexes never wait on each other: a tag with a missing or failing MCP tarball still appears in `/index.yaml`, and its relay files are unaffected. The server reads only `apiVersion` from these documents; their schema belongs to the gateway that consumes them. Release webhooks cover `/index.yaml` channels only.
+
+For a tag whose tree has no `mcp/`, every MCP path answers `404`, and the server never asks the release host for its sum.
+
 ## Status codes
 
-- **404**: an unknown tag, a tag that isn't a release tag, a file name other than the two above, or a file the release didn't publish. v0.1.0 to v0.1.9 publish no files, and v0.1.10 to v0.1.14 only `catalog.json.gz`. A 404 for a release tag's file is sent with `Cache-Control: no-store`, since the file may be published later.
-- **503**: `/index.yaml` before the first sync has finished; or a release file that is published but couldn't be verified, because the published file failed its own sum or couldn't be fetched. A release file's `503` is sent with `Retry-After: 60`.
+- **404**: an unknown tag, a tag that isn't a release tag, a file name other than the three above, or a file the release didn't publish. v0.1.0 to v0.1.9 publish no files, and v0.1.10 to v0.1.14 only `catalog.json.gz`. A 404 for a release tag's file is sent with `Cache-Control: no-store`, since the file may be published later.
+- **503**: `/index.yaml` or `/mcp/index.yaml` before the first sync has finished; or a release file that is published but couldn't be verified, because the published file failed its own sum or couldn't be fetched. A release file's `503` is sent with `Retry-After: 60`.
 
 Replicas sync on their own, so one may index a tag another hasn't fetched yet. A request for a tag the server doesn't hold, or whose sums it is still waiting for, waits for an early sync (at most one every 10 seconds, up to 20 seconds) before it is answered, so a file the index names never answers 404 from a replica that is behind.
 
@@ -145,7 +161,7 @@ It needs the `git` binary on `PATH`: the data tarball is `git archive` output, a
 
 The mirror defaults to the temp directory because it is a disposable cache: a few MB that clone again in about a second, and the temp directory is writable for any user. Point it at a volume to skip the clone after a container restart.
 
-At every sync the server fetches the mirror, reads each new release tag's channel, fetches the sums it doesn't have yet, and builds and verifies the latest tag of each channel. Missing sums are retried every sync while the tag is less than a day old, hourly after that. Other tags are built on first request. Each channel's latest files stay in memory; other files are kept in a least-recently-used cache within `RELAY_CATALOG_SERVER_CACHE_BYTES` and rebuilt when evicted. At most two builds run at once, and concurrent requests for the same file share one build. When the repository or the release host is unreachable, the server keeps serving what it holds and the index doesn't move.
+At every sync the server fetches the mirror, reads each new release tag's channels, fetches the sums it doesn't have yet, and builds and verifies the latest tag of each channel of both indexes. Missing sums are retried every sync while the tag is less than a day old, hourly after that. Other tags are built on first request. Each channel's latest files stay in memory; other files are kept in a least-recently-used cache within `RELAY_CATALOG_SERVER_CACHE_BYTES` and rebuilt when evicted. At most two builds run at once, and concurrent requests for the same file share one build. When the repository or the release host is unreachable, the server keeps serving what it holds and the index doesn't move.
 
 `/livez` answers `200` while the process runs. `/readyz` answers `200` once the first sync has finished and the index names at least one tag, which means every channel's latest files are verified.
 
@@ -157,7 +173,7 @@ At every sync the server fetches the mirror, reads each new release tag's channe
 | `catalog_server_fetch_failures_total` | counter | | Failed git fetches. |
 | `catalog_server_tags_known` | gauge | | Release tags in the mirror. |
 | `catalog_server_tags_ready` | gauge | | Release tags whose two files are verified so far. |
-| `catalog_server_builds_total` | counter | `asset` | Files rebuilt from the mirror. `asset` is `catalog` or `data`. |
+| `catalog_server_builds_total` | counter | `asset` | Files rebuilt from the mirror. `asset` is `catalog`, `data` or `mcp`. |
 | `catalog_server_build_failures_total` | counter | `asset` | Rebuilds that failed, such as a schema this server can't compose. |
 | `catalog_server_rebuild_mismatch_total` | counter | `asset` | Rebuilds whose sha256 differs from the published sum; the published file is served. |
 | `catalog_server_release_fetch_failures_total` | counter | `asset` | Published sums or files that couldn't be fetched or failed their sum. |
@@ -180,4 +196,4 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src ghcr.io/wyolet
   catalog-server build --repo . --ref "$(git rev-parse <tag>^{commit})" --version <tag> --out out
 ```
 
-This writes `relay-catalog-data-<tag>.tar.gz`, `catalog.json.gz` and their `.sha256` files. The data tarball is `git archive` of `data/` without `data/drafts` at the commit. The catalog is composed from that tarball, with the commit's committer time as its `generatedAt`. Both are reproducible from the tag, so comparing the output with a release's published sum files shows whether this build reproduces it. `--repo` defaults to the current directory and may be a bare clone or a checkout; `--ref`, `--version` and `--out` are required.
+This writes `relay-catalog-data-<tag>.tar.gz`, `catalog.json.gz` and their `.sha256` files, and `mcp-catalog-data-<tag>.tar.gz` with its `.sha256` when the commit has `mcp/` documents outside `mcp/drafts`. The data tarball is `git archive` of `data/` without `data/drafts` at the commit, and the MCP tarball the same of `mcp/`; documents under `mcp/` that disagree on `apiVersion` fail the build. The catalog is composed from that tarball, with the commit's committer time as its `generatedAt`. All three are reproducible from the tag, so comparing the output with a release's published sum files shows whether this build reproduces it. `--repo` defaults to the current directory and may be a bare clone or a checkout; `--ref`, `--version` and `--out` are required.

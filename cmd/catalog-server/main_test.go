@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -62,6 +63,76 @@ func TestBuild_WritesFilesWithSums(t *testing.T) {
 
 	if code := build([]string{"--repo", repo, "--ref", "HEAD", "--version", "../x", "--out", out}); code != 2 {
 		t.Fatalf("path-like version: exit %d, want 2", code)
+	}
+}
+
+func TestBuild_MCPTarballOnlyForLiveMCPTree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	repo := t.TempDir()
+	commit := func(files map[string]string) {
+		t.Helper()
+		for name, body := range files {
+			p := filepath.Join(repo, name)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, args := range [][]string{
+			{"add", "-A"},
+			{"-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "data"},
+		} {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = repo
+			cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+	}
+	if out, err := exec.Command("git", "init", "--quiet", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	build1 := func() (int, []string) {
+		t.Helper()
+		out := t.TempDir()
+		code := build([]string{"--repo", repo, "--ref", "HEAD", "--version", "v0.1.0", "--out", out})
+		entries, err := os.ReadDir(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return code, names
+	}
+	relayFiles := []string{"catalog.json.gz", "catalog.json.gz.sha256", "relay-catalog-data-v0.1.0.tar.gz", "relay-catalog-data-v0.1.0.tar.gz.sha256"}
+
+	commit(map[string]string{"data/providers/acme/provider.yaml": "apiVersion: relay.wyolet.dev/v1alpha2\nkind: Provider\nmetadata:\n  name: acme\n  displayName: Acme\nspec:\n  enabled: true\n"})
+	if code, names := build1(); code != 0 || !slices.Equal(names, relayFiles) {
+		t.Fatalf("no mcp/: exit %d, files %v", code, names)
+	}
+
+	commit(map[string]string{"mcp/drafts/wip.yaml": "apiVersion: gateway.example.com/v1alpha1\nkind: MCPTemplate\n"})
+	if code, names := build1(); code != 0 || !slices.Equal(names, relayFiles) {
+		t.Fatalf("mcp/ with drafts only: exit %d, files %v", code, names)
+	}
+
+	commit(map[string]string{"mcp/servers/wiki.yaml": "apiVersion: gateway.example.com/v1alpha1\nkind: MCPTemplate\nmetadata:\n  name: wiki\n"})
+	want := append(slices.Clone(relayFiles), "mcp-catalog-data-v0.1.0.tar.gz", "mcp-catalog-data-v0.1.0.tar.gz.sha256")
+	slices.Sort(want)
+	if code, names := build1(); code != 0 || !slices.Equal(names, want) {
+		t.Fatalf("live mcp/: exit %d, files %v", code, names)
+	}
+
+	commit(map[string]string{"mcp/servers/other.yaml": "apiVersion: gateway.example.com/v1beta1\nkind: MCPTemplate\n"})
+	if code, _ := build1(); code != 1 {
+		t.Fatalf("mcp/ documents on two apiVersions: exit %d, want 1", code)
 	}
 }
 
