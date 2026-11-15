@@ -32,6 +32,7 @@ import (
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -312,7 +313,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 		if u := route.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
 			var dropped []string
 			edits, dropped = req.stripParams(edits, u, inboundSpec.ParamPaths)
-			surfaceDroppedParams(w, route.Model.Meta.Name, dropped)
+			surfaceDroppedParams(w, route.Model.Meta.Name, dropped, metrics.DropUnsupportedByModel)
 		}
 		wireBody = req.upstreamBody(route.UpstreamModel, edits)
 	}
@@ -322,7 +323,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	if lc != nil {
 		lc.Translator = upstreamV1
 	}
-	result, err := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, lc))
+	result, err := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, in.Inbound, lc))
 	if err != nil {
 		mapRunErr(w, inboundSpec, err)
 		return
@@ -330,6 +331,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	defer result.Body.Close()
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
+	surfaceDroppedParams(w, route.Model.Meta.Name, result.BodyDropped, metrics.DropSupersededByRename)
 	w.WriteHeader(result.Status)
 	// Byte-pass is same-shape / vendor-native — relay_usage is canonical-only,
 	// so nothing is injected here; the upstream body streams through verbatim.
@@ -432,7 +434,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	canonReq.Model = v1.ModelRefs{route.UpstreamModel}
 	applyOutputDefaults(canonReq, route.Model.Spec.MaxOutputTokens)
 	if u := route.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
-		surfaceDroppedParams(w, route.Model.Meta.Name, stripCanonicalParams(canonReq, u))
+		surfaceDroppedParams(w, route.Model.Meta.Name, stripCanonicalParams(canonReq, u), metrics.DropUnsupportedByModel)
 	}
 
 	wireBody, err := upstreamV1.SerializeRequest(canonReq)
@@ -451,12 +453,13 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	if lc != nil {
 		lc.Translator = upstreamV1
 	}
-	result, pErr := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, lc))
+	result, pErr := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, hops[0].Binding.Spec.Adapter, lc))
 	if pErr != nil {
 		mapRunErr(w, d.Specs.Spec(in.Inbound), pErr)
 		return
 	}
 	defer result.Body.Close()
+	surfaceDroppedParams(w, route.Model.Meta.Name, result.BodyDropped, metrics.DropSupersededByRename)
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
 

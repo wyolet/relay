@@ -7,6 +7,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -49,6 +50,30 @@ func TestValidate(t *testing.T) {
 		{"user owner without an id", func(h *Host) { h.Meta.Owner = meta.Owner{Kind: meta.OwnerUser} }, []string{sharedData + `"user"`}},
 		{"team owner", func(h *Host) { h.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"} }, []string{sharedData + `"team"`}},
 		{"project owner", func(h *Host) { h.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: "p-1"} }, []string{sharedData + `"project"`}},
+		{"param renames", func(h *Host) {
+			h.Spec.RequestParamRenames = map[adapters.Name]map[string]string{"openai": {"max_tokens": "max_completion_tokens"}, "anthropic": {}}
+		}, nil},
+		{"rename without an adapter", func(h *Host) {
+			h.Spec.RequestParamRenames = map[adapters.Name]map[string]string{"": {"max_tokens": "max_completion_tokens"}}
+		}, []string{`host "h": requestParamRenames: adapter name must not be empty`}},
+		{"rename from an empty key", func(h *Host) {
+			h.Spec.RequestParamRenames = map[adapters.Name]map[string]string{"openai": {"": "max_completion_tokens"}}
+		}, []string{`host "h": requestParamRenames[openai]: key names must not be empty`}},
+		{"rename to an empty key", func(h *Host) {
+			h.Spec.RequestParamRenames = map[adapters.Name]map[string]string{"openai": {"max_tokens": ""}}
+		}, []string{`host "h": requestParamRenames[openai]: key names must not be empty`}},
+		{"rename to itself", func(h *Host) {
+			h.Spec.RequestParamRenames = map[adapters.Name]map[string]string{"openai": {"max_tokens": "max_tokens"}}
+		}, []string{`host "h": requestParamRenames[openai][max_tokens]: renamed to itself`}},
+		{"target is also a source", func(h *Host) {
+			h.Spec.RequestParamRenames = map[adapters.Name]map[string]string{"openai": {"a": "b", "b": "c"}}
+		}, []string{`host "h": requestParamRenames[openai][a]: target "b" is also renamed`}},
+		{"two sources share a target", func(h *Host) {
+			h.Spec.RequestParamRenames = map[adapters.Name]map[string]string{"openai": {"a": "c", "b": "c"}}
+		}, []string{`host "h": requestParamRenames[openai][b]: target "c" is also the target of "a"`}},
+		{"the same key renamed under two adapters", func(h *Host) {
+			h.Spec.RequestParamRenames = map[adapters.Name]map[string]string{"openai": {"a": "b"}, "gemini": {"b": "a"}}
+		}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &Host{
@@ -60,6 +85,28 @@ func TestValidate(t *testing.T) {
 				t.Errorf("Validate (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestParamRenames(t *testing.T) {
+	s := Spec{RequestParamRenames: map[adapters.Name]map[string]string{
+		"openai":    {"max_tokens": "max_completion_tokens", "a": "b"},
+		"anthropic": {},
+	}}
+	for _, tc := range []struct {
+		shape adapters.Name
+		want  []ParamRename
+	}{
+		{"openai", []ParamRename{{"a", "b"}, {"max_tokens", "max_completion_tokens"}}},
+		{"anthropic", nil},
+		{"gemini", nil},
+	} {
+		if diff := cmp.Diff(tc.want, s.ParamRenames(tc.shape)); diff != "" {
+			t.Errorf("ParamRenames(%s) (-want +got):\n%s", tc.shape, diff)
+		}
+	}
+	if got := (Spec{}).ParamRenames("openai"); got != nil {
+		t.Errorf("no table: ParamRenames = %v, want nil", got)
 	}
 }
 

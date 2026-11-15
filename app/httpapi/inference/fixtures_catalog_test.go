@@ -117,9 +117,15 @@ func (f *dispatchFixture) resolve(t *testing.T) *Principal {
 // pointHostAt re-points the fixture's host at upstreamURL in the plans and the catalog, and refreshes the principal the test holds in place, so a request reaches a test server.
 func pointHostAt(t *testing.T, cat *catalog.Catalog, upstreamURL string) {
 	t.Helper()
+	setHostSpec(t, cat, host.Spec{BaseURL: upstreamURL})
+}
+
+// setHostSpec is pointHostAt with the whole host spec.
+func setHostSpec(t *testing.T, cat *catalog.Catalog, spec host.Spec) {
+	t.Helper()
 	f := fixtureOf(t, cat)
 	h := *f.host
-	h.Spec = host.Spec{BaseURL: upstreamURL}
+	h.Spec = spec
 	plantest.Apply(t, f.plans, &h)
 	if err := cat.ApplyHostUpsert(&h); err != nil {
 		t.Fatalf("host upsert: %v", err)

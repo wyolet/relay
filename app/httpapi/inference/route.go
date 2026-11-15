@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
@@ -38,10 +39,12 @@ func keepHops(hops []plan.RouteHop, keep func(*plan.RouteHop) bool) []plan.Route
 	return hops
 }
 
-// pipelineRequest is the pipeline input for one dispatched request over hops.
-func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, a pipeline.Adapter, body []byte, lc *lifecycle.Context) *pipeline.Request {
+// pipelineRequest is the pipeline input for one dispatched request over hops, its body in shape.
+func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, a pipeline.Adapter, body []byte, shape adapters.Name, lc *lifecycle.Context) *pipeline.Request {
 	return &pipeline.Request{
 		Body:          body,
+		HopBody:       HopBody,
+		BodyShape:     shape,
 		Headers:       forwardHeaders(r.Header),
 		Adapter:       a,
 		Model:         route.Model,

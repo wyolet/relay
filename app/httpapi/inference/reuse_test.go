@@ -37,7 +37,12 @@ func TestParseRequestAndUpstreamBody(t *testing.T) {
 	if string(out) != `{"model":"up","top_p":1,"top_k":5,"stream":true,"Stream":false}` || !slices.Equal(dropped, []string{"temperature"}) {
 		t.Fatalf("sent %s, dropped %v; want temperature alone removed: top_k has no path in this shape", out, dropped)
 	}
-	if got := testutil.ToFloat64(metrics.DroppedParams.WithLabelValues("temperature", "reuse-test-model")); got != 1 {
+	if got := testutil.ToFloat64(metrics.DroppedParams.WithLabelValues("temperature", "reuse-test-model", metrics.DropUnsupportedByModel)); got != 1 {
 		t.Fatalf("dropped-param counter = %v, want 1", got)
+	}
+
+	CountRenameDrops("reuse-test-model", []string{"max_tokens"})
+	if got := testutil.ToFloat64(metrics.DroppedParams.WithLabelValues("max_tokens", "reuse-test-model", metrics.DropSupersededByRename)); got != 1 {
+		t.Fatalf("superseded counter = %v, want 1", got)
 	}
 }

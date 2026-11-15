@@ -251,6 +251,24 @@ X-WR-Warnings: dropped_params=temperature,top_p; reason=unsupported_by_model
 
 The request still succeeds. Each drop is also counted in the `relay_dropped_params_total` metric.
 
+## Renamed parameters
+
+A host can declare request-body keys it expects under another name, per wire shape, in `spec.requestParamRenames`:
+
+```yaml
+spec:
+  requestParamRenames:
+    openai: {max_tokens: max_completion_tokens}
+```
+
+Relay renames the top-level key on the body it sends to that host in that shape, whether the caller sent it or Relay wrote it while translating. Nested keys are not touched. When the caller already sent the new name, its value wins and the old key is dropped:
+
+```
+X-WR-Warnings: dropped_params=max_tokens; reason=superseded_by_rename
+```
+
+When params are dropped for both reasons, each reason gets its own `X-WR-Warnings` header.
+
 ## System messages
 
 Start-of-conversation system instructions map to the upstream's native form: the top-level `system` field (Anthropic), `systemInstruction` (Gemini), or a leading `system` message (OpenAI-compatible).

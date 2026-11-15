@@ -42,6 +42,15 @@
             "null"
           ]
         },
+        "requestParamRenames": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "type": "object"
+        },
         "statusPageURL": {
           "type": "string"
         }

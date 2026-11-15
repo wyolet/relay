@@ -24,15 +24,22 @@ func ParseRequest(body []byte) (*ParsedRequest, error) {
 // UpstreamBody returns req's body with its model set to upstreamModel and
 // the params m declares unsupported removed at their paramPaths locations,
 // recording the per-param drop metric, so capability gating holds on every
-// path to Pipeline.Run.
+// path to Pipeline.Run. Host renames are per hop: set HopBody on the request.
 func UpstreamBody(req *ParsedRequest, upstreamModel string, m *model.Model, paramPaths map[string]string) ([]byte, []string) {
 	var edits []memberEdit
 	var dropped []string
 	if m != nil && len(m.Spec.Capabilities.UnsupportedParams) > 0 {
 		edits, dropped = req.stripParams(nil, m.Spec.Capabilities.UnsupportedParams, paramPaths)
 		for _, p := range dropped {
-			metrics.DroppedParam(p, m.Meta.Name)
+			metrics.DroppedParam(p, m.Meta.Name, metrics.DropUnsupportedByModel)
 		}
 	}
 	return req.upstreamBody(upstreamModel, edits), dropped
+}
+
+// CountRenameDrops records the drop metric for the keys a hop's renames dropped from the body it was sent (pipeline.Result.BodyDropped).
+func CountRenameDrops(modelName string, dropped []string) {
+	for _, p := range dropped {
+		metrics.DroppedParam(p, modelName, metrics.DropSupersededByRename)
+	}
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 )
 
 const upstreamYAML = `
@@ -88,6 +90,33 @@ func TestUpstreamKinds_RoundTrip(t *testing.T) {
 }
 
 func second[R any](_ R, err error) error { return err }
+
+// A host's param renames, keyed by adapter, survive parse, translation, export, render and parse again.
+func TestHostParamRenames_RoundTrip(t *testing.T) {
+	doc := parseOne(t, `
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Host
+metadata: {name: openai, owner: {kind: system}}
+spec:
+  baseURL: https://api.openai.com
+  requestParamRenames:
+    openai: {max_tokens: max_completion_tokens}
+`)
+	renames := map[adapters.Name]map[string]string{"openai": {"max_tokens": "max_completion_tokens"}}
+	h := translated(t, "ToHost", &host.Host{
+		Meta: meta.Metadata{Name: "openai", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: host.Spec{BaseURL: "https://api.openai.com", RequestParamRenames: renames},
+	})(manifest.ToHost(*doc.Host, testResolver))
+	out := manifest.FromHost(h, testRev)
+	exported(t, "FromHost", *doc.Host, out)
+
+	rendered, err := manifest.Render([]manifest.Document{{Host: &out}}, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	back := parseOne(t, string(rendered))
+	exported(t, "rendered Host", *doc.Host, *back.Host)
+}
 
 // A provider account written without an owner is the system's, like a host key written without one, so the pair needs no owner to match.
 func TestProviderAccountWithoutOwnerIsTheSystems(t *testing.T) {
