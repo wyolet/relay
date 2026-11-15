@@ -259,7 +259,7 @@ func canonicalUsageToResponses(t usage.Tokens) *ResponsesUsage {
 		return nil
 	}
 	cached := int(t["cache_read"])
-	input := int(t["input"]) + cached
+	input := int(t.PromptTokens())
 	output := int(t["output"])
 	r := &ResponsesUsage{
 		InputTokens:  input,

@@ -57,8 +57,8 @@ func ccUsageToCanonical(u *Usage) usage.Tokens {
 }
 
 // canonicalUsageToCC maps a canonical orthogonal-meter map back to
-// CC's Usage block. prompt_tokens is reconstructed as input +
-// cache_read (CC's convention). total_tokens is prompt + completion —
+// CC's Usage block. prompt_tokens counts every input token (input +
+// cache_read + cache_creation), as OpenAI's does. total_tokens is prompt + completion —
 // NOT Tokens.Sum(): reasoning/audio are sub-breakdowns already inside
 // completion, so summing the whole map double-counts them (OpenAI's own
 // total_tokens is just input_tokens + output_tokens).
@@ -67,7 +67,7 @@ func canonicalUsageToCC(t usage.Tokens) *Usage {
 		return nil
 	}
 	cached := int(t["cache_read"])
-	prompt := int(t["input"]) + cached
+	prompt := int(t.PromptTokens())
 	completion := int(t["output"])
 	cu := &Usage{
 		PromptTokens:     prompt,

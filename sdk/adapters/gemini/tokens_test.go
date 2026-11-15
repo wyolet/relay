@@ -4,8 +4,19 @@ import (
 	"maps"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/sdk/usage"
 )
+
+// Cache writes are prompt tokens, so promptTokenCount must include them.
+func TestCanonicalUsageToGemini_CacheCreationInPromptTokens(t *testing.T) {
+	got := canonicalUsageToGemini(usage.Tokens{"input": 300, "cache_read": 100, "cache_creation": 200, "output": 50, "reasoning": 10})
+	want := map[string]int64{"promptTokenCount": 600, "candidatesTokenCount": 40, "cachedContentTokenCount": 100, "thoughtsTokenCount": 10}
+	if d := cmp.Diff(want, got); d != "" {
+		t.Errorf("usageMetadata (-want +got):\n%s", d)
+	}
+}
 
 func TestExtractTokens(t *testing.T) {
 	cases := []struct {
