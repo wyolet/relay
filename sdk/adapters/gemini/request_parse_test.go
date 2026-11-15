@@ -159,6 +159,27 @@ func TestParseRequest_Config(t *testing.T) {
 			  "tools":{"definitions":[{"type":"function","name":"f","parameters":{}}],"choice":{"type":"function","name":"f"}}}`,
 		},
 		{
+			"OpenAPI-subset schemas read as json_schema and parameters",
+			`{"generationConfig":{"responseMimeType":"application/json","responseSchema":{"type":"OBJECT","nullable":true}},
+			  "tools":[{"functionDeclarations":[{"name":"f","parameters":{"type":"OBJECT"}}]}]}`,
+			`{"model":null,"input":null,"model_config":{"*":{"output":{"format":{"type":"json_schema","schema":{"type":"OBJECT","nullable":true}}}}},
+			  "tools":{"definitions":[{"type":"function","name":"f","parameters":{"type":"OBJECT"}}]}}`,
+		},
+		{
+			"JSON Schema fields read as json_schema and parameters",
+			`{"generationConfig":{"responseMimeType":"application/json","responseJsonSchema":{"type":"object","additionalProperties":false}},
+			  "tools":[{"functionDeclarations":[{"name":"f","parametersJsonSchema":{"type":"object","additionalProperties":false}}]}]}`,
+			`{"model":null,"input":null,"model_config":{"*":{"output":{"format":{"type":"json_schema","schema":{"type":"object","additionalProperties":false}}}}},
+			  "tools":{"definitions":[{"type":"function","name":"f","parameters":{"type":"object","additionalProperties":false}}]}}`,
+		},
+		{
+			"proto names of the JSON Schema fields",
+			`{"generation_config":{"response_mime_type":"application/json","response_json_schema":{"type":"object"}},
+			  "tools":[{"function_declarations":[{"name":"f","parameters_json_schema":{"type":"object"}}]}]}`,
+			`{"model":null,"input":null,"model_config":{"*":{"output":{"format":{"type":"json_schema","schema":{"type":"object"}}}}},
+			  "tools":{"definitions":[{"type":"function","name":"f","parameters":{"type":"object"}}]}}`,
+		},
+		{
 			"null schema is json_object, negative budget sets no reasoning",
 			`{"generationConfig":{"responseMimeType":"application/json","responseSchema":null,"thinkingConfig":{"thinkingBudget":-1}}}`,
 			`{"model":null,"input":null,"model_config":{"*":{"output":{"format":{"type":"json_object"}}}}}`,

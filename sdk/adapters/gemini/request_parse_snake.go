@@ -56,6 +56,9 @@ func (gc *generationConfig) fillFromSnakeCase() {
 	if gc.ResponseSchema == nil {
 		gc.ResponseSchema = gc.ResponseSchemaSnake
 	}
+	if gc.ResponseJSONSchema == nil {
+		gc.ResponseJSONSchema = gc.ResponseJSONSchemaSnake
+	}
 	if gc.ThinkingConfig == nil {
 		gc.ThinkingConfig = gc.ThinkingConfigSnake
 	}
@@ -67,6 +70,11 @@ func (gc *generationConfig) fillFromSnakeCase() {
 func (t *geminiTool) fillFromSnakeCase() {
 	if t.FunctionDeclarations == nil {
 		t.FunctionDeclarations = t.FunctionDeclarationsSnake
+	}
+	for i := range t.FunctionDeclarations {
+		if fd := &t.FunctionDeclarations[i]; fd.ParametersJSONSchema == nil {
+			fd.ParametersJSONSchema = fd.ParametersJSONSchemaSnake
+		}
 	}
 }
 

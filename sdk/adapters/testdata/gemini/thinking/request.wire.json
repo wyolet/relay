@@ -51,7 +51,7 @@
         {
           "name": "factor",
           "description": "Factor an integer.",
-          "parameters": {
+          "parametersJsonSchema": {
             "type": "object",
             "properties": {
               "n": {

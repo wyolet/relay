@@ -111,17 +111,20 @@ type generationConfig struct {
 	ResponseMIMEType string          `json:"responseMimeType,omitempty"`
 	ResponseSchema   json.RawMessage `json:"responseSchema,omitempty"`
 	ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
+	// ResponseJSONSchema is the only schema field written: ResponseSchema takes an OpenAPI subset that rejects JSON Schema keywords such as additionalProperties.
+	ResponseJSONSchema json.RawMessage `json:"responseJsonSchema,omitempty"`
 
 	// Proto field names, accepted on requests; never set on output (see fillFromSnakeCase).
-	TopPSnake             *float64        `json:"top_p,omitempty"`
-	TopKSnake             *int            `json:"top_k,omitempty"`
-	MaxOutputTokensSnake  *int            `json:"max_output_tokens,omitempty"`
-	StopSequencesSnake    []string        `json:"stop_sequences,omitempty"`
-	FrequencyPenaltySnake *float64        `json:"frequency_penalty,omitempty"`
-	PresencePenaltySnake  *float64        `json:"presence_penalty,omitempty"`
-	ResponseMIMETypeSnake string          `json:"response_mime_type,omitempty"`
-	ResponseSchemaSnake   json.RawMessage `json:"response_schema,omitempty"`
-	ThinkingConfigSnake   *thinkingConfig `json:"thinking_config,omitempty"`
+	TopPSnake               *float64        `json:"top_p,omitempty"`
+	TopKSnake               *int            `json:"top_k,omitempty"`
+	MaxOutputTokensSnake    *int            `json:"max_output_tokens,omitempty"`
+	StopSequencesSnake      []string        `json:"stop_sequences,omitempty"`
+	FrequencyPenaltySnake   *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenaltySnake    *float64        `json:"presence_penalty,omitempty"`
+	ResponseMIMETypeSnake   string          `json:"response_mime_type,omitempty"`
+	ResponseSchemaSnake     json.RawMessage `json:"response_schema,omitempty"`
+	ResponseJSONSchemaSnake json.RawMessage `json:"response_json_schema,omitempty"`
+	ThinkingConfigSnake     *thinkingConfig `json:"thinking_config,omitempty"`
 }
 
 type thinkingConfig struct {
@@ -141,6 +144,10 @@ type functionDeclaration struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	// ParametersJSONSchema is the only parameters field written, as for generationConfig.ResponseJSONSchema.
+	ParametersJSONSchema json.RawMessage `json:"parametersJsonSchema,omitempty"`
+
+	ParametersJSONSchemaSnake json.RawMessage `json:"parameters_json_schema,omitempty"`
 }
 
 type toolConfig struct {

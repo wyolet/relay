@@ -95,14 +95,14 @@ func TestCrossShapeRequest(t *testing.T) {
 			name: "chat required allowed_tools reaches Gemini as allowedFunctionNames",
 			from: "openai-chat", to: "gemini",
 			body: chatTwoTools + `,"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"b"}},{"type":"function","function":{"name":"a"}}]}}}`,
-			want: `{` + geminiHiTurn + `,"tools":[{"functionDeclarations":[{"name":"a","parameters":{"type":"object"}},{"name":"b","parameters":{"type":"object"}}]}],
+			want: `{` + geminiHiTurn + `,"tools":[{"functionDeclarations":[{"name":"a","parametersJsonSchema":{"type":"object"}},{"name":"b","parametersJsonSchema":{"type":"object"}}]}],
 				"toolConfig":{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["b","a"]}}}`,
 		},
 		{
 			name: "chat auto allowed_tools reaches Gemini as only the allowed declarations",
 			from: "openai-chat", to: "gemini",
 			body: chatTwoTools + `,"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"b"}}]}}}`,
-			want: `{` + geminiHiTurn + `,"tools":[{"functionDeclarations":[{"name":"b","parameters":{"type":"object"}}]}],"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}`,
+			want: `{` + geminiHiTurn + `,"tools":[{"functionDeclarations":[{"name":"b","parametersJsonSchema":{"type":"object"}}]}],"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}`,
 		},
 		{
 			name: "responses json_schema and effort reach chat",
@@ -111,10 +111,19 @@ func TestCrossShapeRequest(t *testing.T) {
 			want: chatSchemaReq + `,"reasoning_effort":"high"}`,
 		},
 		{
-			name: "Messages format reaches Gemini as responseSchema",
+			name: "Messages format reaches Gemini as responseJsonSchema",
 			from: "anthropic", to: "gemini",
 			body: `{"model":"m","max_tokens":1024,` + messagesHiTurns + `,` + messagesFormat + `}`,
-			want: `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":1024,"responseMimeType":"application/json","responseSchema":` + answerSchema + `}}`,
+			want: `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":1024,"responseMimeType":"application/json","responseJsonSchema":` + answerSchema + `}}`,
+		},
+		{
+			name: "chat strict json_schema and strict tool keep additionalProperties on Gemini",
+			from: "openai-chat", to: "gemini",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],` +
+				`"response_format":{"type":"json_schema","json_schema":{"name":"answer","strict":true,"schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}}},` +
+				`"tools":[{"type":"function","function":{"name":"lookup","strict":true,"parameters":{"type":"object","properties":{"word":{"type":"string"}},"required":["word"],"additionalProperties":false}}}]}`,
+			want: `{` + geminiHiTurn + `,"generationConfig":{"responseMimeType":"application/json","responseJsonSchema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}},` +
+				`"tools":[{"functionDeclarations":[{"name":"lookup","parametersJsonSchema":{"type":"object","properties":{"word":{"type":"string"}},"required":["word"],"additionalProperties":false}}]}]}`,
 		},
 		{
 			name: "Messages redacted thinking does not reach chat",

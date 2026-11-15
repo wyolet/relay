@@ -103,7 +103,7 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			opts.Reasoning = rc
 			hasOpts = true
 		}
-		if f := geminiResponseFormat(gc.ResponseMIMEType, gc.ResponseSchema); f != nil {
+		if f := geminiResponseFormat(gc.ResponseMIMEType, geminiSchema(gc.ResponseJSONSchema, gc.ResponseSchema)); f != nil {
 			opts.Output = &v1.OutputConfig{Format: f}
 			hasOpts = true
 		}
@@ -118,7 +118,7 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			}
 			gt.fillFromSnakeCase()
 			for _, fd := range gt.FunctionDeclarations {
-				schema := fd.Parameters
+				schema := geminiSchema(fd.ParametersJSONSchema, fd.Parameters)
 				if schema == nil {
 					schema = json.RawMessage(`{}`)
 				}
@@ -155,6 +155,14 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	req.Input = items
 
 	return req, nil
+}
+
+// geminiSchema picks the JSON Schema form when set, else the OpenAPI-subset form; the API takes only one of the pair. Canonical keeps no record of which form arrived, so SerializeRequest writes either back as JSON Schema, which also accepts the OpenAPI form's type names and nullable.
+func geminiSchema(jsonSchema, openAPI json.RawMessage) json.RawMessage {
+	if len(jsonSchema) > 0 && string(jsonSchema) != "null" {
+		return jsonSchema
+	}
+	return openAPI
 }
 
 // geminiResponseFormat inverts the serializer's json_object / json_schema mapping.

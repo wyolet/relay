@@ -188,6 +188,16 @@ func TestSerializeRequest_Config(t *testing.T) {
 		{"reasoning without a budget", v1.Request{ModelConfig: only(v1.ModelOpts{Reasoning: &v1.ReasoningConfig{}})}, `{"generationConfig":{"thinkingConfig":{"includeThoughts":true}}}`},
 		{"json_object alone", v1.Request{ModelConfig: only(v1.ModelOpts{Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_object"}}})}, `{"generationConfig":{"responseMimeType":"application/json"}}`},
 		{"text format alone", v1.Request{ModelConfig: only(v1.ModelOpts{Output: &v1.OutputConfig{Format: &v1.Format{Type: "text"}}})}, `{}`},
+		// The OpenAPI-subset fields (responseSchema, parameters) reject JSON Schema keywords such as additionalProperties.
+		{
+			"json_schema and tool parameters go out as JSON Schema",
+			v1.Request{
+				ModelConfig: only(v1.ModelOpts{Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_schema", Schema: json.RawMessage(`{"type":"object","additionalProperties":false}`)}}}),
+				Tools:       &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f", Parameters: json.RawMessage(`{"type":"object","additionalProperties":false}`)}}},
+			},
+			`{"generationConfig":{"responseMimeType":"application/json","responseJsonSchema":{"type":"object","additionalProperties":false}},
+			  "tools":[{"functionDeclarations":[{"name":"f","parametersJsonSchema":{"type":"object","additionalProperties":false}}]}]}`,
+		},
 		{"choice without definitions", v1.Request{Tools: &v1.ToolsConfig{Choice: &v1.ToolChoice{Mode: "auto"}}}, `{"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}`},
 	}
 	for _, c := range cases {
@@ -218,7 +228,7 @@ func TestSerializeRequest_UnsendableImageOrFilePart(t *testing.T) {
 }
 
 func TestToolChoice_RoundTrip(t *testing.T) {
-	const fAndG = `[{"functionDeclarations":[{"name":"f","parameters":{}},{"name":"g","parameters":{}}]}]`
+	const fAndG = `[{"functionDeclarations":[{"name":"f","parametersJsonSchema":{}},{"name":"g","parametersJsonSchema":{}}]}]`
 	cases := []struct {
 		choice v1.ToolChoice
 		wire   string
@@ -233,7 +243,7 @@ func TestToolChoice_RoundTrip(t *testing.T) {
 		{v1.ToolChoice{Mode: "unknown"}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}, ""},
 		{v1.ToolChoice{Mode: "required", Allowed: []string{"g", "f"}}, `{"mode":"ANY","allowedFunctionNames":["g","f"]}`, v1.ToolChoice{Mode: "required", Allowed: []string{"g", "f"}}, ""},
 		// AUTO takes no allowedFunctionNames, so only the allowed declaration is sent.
-		{v1.ToolChoice{Mode: "auto", Allowed: []string{"g"}}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}, `[{"functionDeclarations":[{"name":"g","parameters":{}}]}]`},
+		{v1.ToolChoice{Mode: "auto", Allowed: []string{"g"}}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}, `[{"functionDeclarations":[{"name":"g","parametersJsonSchema":{}}]}]`},
 		{v1.ToolChoice{Mode: "function"}, `{"mode":"ANY"}`, v1.ToolChoice{Mode: "required"}, ""},
 	}
 	for _, c := range cases {
