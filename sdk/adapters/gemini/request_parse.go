@@ -273,12 +273,14 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 			}
 
 		case "model":
+			turnStart := len(items)
 			var textParts []v1.Part
-			// Text is flushed before each call or thought so items keep wire order.
+			var textSig json.RawMessage
+			// Text is flushed before each call or thought so items keep wire order, and after a signed part so the signature stays on it.
 			flushText := func() {
 				if len(textParts) > 0 {
-					items = append(items, &v1.Message{Role: v1.RoleAssistant, Content: textParts})
-					textParts = nil
+					items = append(items, &v1.Message{Role: v1.RoleAssistant, Content: textParts, ProviderData: textSig})
+					textParts, textSig = nil, nil
 				}
 			}
 			for _, p := range c.Parts {
@@ -301,15 +303,29 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 						fc.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
 					}
 					items = append(items, fc)
-				} else if p.Text != "" && p.Thought {
+				} else if p.Thought && (p.Text != "" || p.ThoughtSignature != "") {
 					flushText()
-					r := &v1.Reasoning{Content: p.Text, Summary: []v1.SummaryText{{Text: p.Text}}}
+					r := &v1.Reasoning{Content: p.Text}
+					if p.Text != "" {
+						r.Summary = []v1.SummaryText{{Text: p.Text}}
+					}
 					if p.ThoughtSignature != "" {
 						r.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
 					}
 					items = append(items, r)
-				} else if p.Text != "" {
+				} else if !p.Thought && p.Text != "" {
 					textParts = append(textParts, &v1.OutputTextPart{Text: p.Text})
+					if p.ThoughtSignature != "" {
+						textSig = thoughtSignatureJSON(p.ThoughtSignature)
+						flushText()
+					}
+				} else if !p.Thought && p.ThoughtSignature != "" && p.InlineData == nil && p.FileData == nil {
+					if len(textParts) > 0 {
+						textSig = emptyPartSignatureJSON(p.ThoughtSignature)
+						flushText()
+					} else if !signLastItem(items[turnStart:], p.ThoughtSignature) {
+						items = append(items, &v1.Reasoning{ProviderData: emptyPartSignatureJSON(p.ThoughtSignature)})
+					}
 				}
 			}
 			flushText()

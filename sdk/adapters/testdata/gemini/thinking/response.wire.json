@@ -8,7 +8,8 @@
             "thought": true
           },
           {
-            "text": "No. 221 = 13 × 17."
+            "text": "No. 221 = 13 × 17.",
+            "thoughtSignature": "CtwBAdHtim9AnswerSignature"
           }
         ],
         "role": "model"

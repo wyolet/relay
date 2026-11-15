@@ -10,8 +10,9 @@ import (
 // parse, so the full request exercises the same-vendor path rule 8 promises
 // to keep. A nil slot gets a foreign blob instead.
 type ownProviderData struct {
-	reasoning    json.RawMessage
-	functionCall json.RawMessage
+	reasoning        json.RawMessage
+	functionCall     json.RawMessage
+	assistantMessage json.RawMessage
 }
 
 var providerDataByShape = map[string]ownProviderData{
@@ -19,8 +20,9 @@ var providerDataByShape = map[string]ownProviderData{
 	"openai-responses": {reasoning: raw(`{"encrypted_content":"enc-1","id":"rs_1"}`)},
 	"anthropic":        {reasoning: raw(`{"type":"thinking","thinking":"raw thought","signature":"sig-1"}`)},
 	"gemini": {
-		reasoning:    raw(`{"thoughtSignature":"sig-1"}`),
-		functionCall: raw(`{"thoughtSignature":"sig-2"}`),
+		reasoning:        raw(`{"thoughtSignature":"sig-1"}`),
+		functionCall:     raw(`{"thoughtSignature":"sig-2"}`),
+		assistantMessage: raw(`{"thoughtSignature":"sig-3"}`),
 	},
 }
 
@@ -112,9 +114,10 @@ func fullRequest(shapeName string) *v1.Request {
 				ProviderData: or(pd.reasoning),
 			},
 			&v1.Message{
-				ID:     "msg_a1",
-				Status: v1.StatusCompleted,
-				Role:   v1.RoleAssistant,
+				ID:           "msg_a1",
+				Status:       v1.StatusCompleted,
+				Role:         v1.RoleAssistant,
+				ProviderData: or(pd.assistantMessage),
 				Content: []v1.Part{&v1.OutputTextPart{
 					Text: "Checking.",
 					Annotations: []v1.Annotation{

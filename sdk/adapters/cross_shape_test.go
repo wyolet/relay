@@ -19,6 +19,8 @@ const (
 	chatTwoTools    = `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"a","parameters":{"type":"object"}}},{"type":"function","function":{"name":"b","parameters":{"type":"object"}}}]`
 	geminiHiTurn    = `"contents":[{"role":"user","parts":[{"text":"hi"}]}]`
 	redactedTurns   = `"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"redacted_thinking","data":"ENC"},{"type":"text","text":"ok"}]}]`
+	// The model turn signs its text, then ends in a signature-only part.
+	signedGeminiTurns = `{"model":"m","contents":[{"role":"user","parts":[{"text":"hi"}]},{"role":"model","parts":[{"text":"ok","thoughtSignature":"s1"},{"text":"","thoughtSignature":"s2"}]},{"role":"user","parts":[{"text":"next"}]}]}`
 )
 
 // A request parsed from one shape serializes to another shape's exact wire body, or is refused.
@@ -106,6 +108,24 @@ func TestCrossShapeRequest(t *testing.T) {
 			from: "anthropic", to: "gemini",
 			body: `{"model":"m","max_tokens":1024,` + redactedTurns + `}`,
 			want: `{"contents":[{"role":"user","parts":[{"text":"hi"}]},{"role":"model","parts":[{"text":"ok"}]}],"generationConfig":{"maxOutputTokens":1024}}`,
+		},
+		{
+			name: "Gemini text-part signatures do not reach Messages",
+			from: "gemini", to: "anthropic",
+			body: signedGeminiTurns,
+			want: `{"model":"m","max_tokens":4096,"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"ok"},{"role":"user","content":"next"}]}`,
+		},
+		{
+			name: "Gemini text-part signatures do not reach chat",
+			from: "gemini", to: "openai-chat",
+			body: signedGeminiTurns,
+			want: `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"ok"},{"role":"user","content":"next"}]}`,
+		},
+		{
+			name: "Gemini text-part signatures do not reach Responses",
+			from: "gemini", to: "openai-responses",
+			body: signedGeminiTurns,
+			want: `{"model":"m","store":false,"include":["reasoning.encrypted_content"],"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[],"logprobs":[]}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}]}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -212,14 +212,41 @@ func TestToCanonicalStream_ThoughtSignatureOnEmptyTextPart(t *testing.T) {
 			want:   signedA,
 		},
 		{
-			name:   "empty non-thought part while the thought is open",
+			name:   "empty non-thought part signs the open thought",
 			frames: []string{thoughtA, `{"candidates":[{"content":{"role":"model","parts":[{"text":"","thoughtSignature":"sig"}]},"index":0}]}`, stop},
-			want:   signedA,
+			want:   `[{"type":"reasoning","id":"rs_0","summary":[{"text":"a"}],"content":"a","status":"completed","provider_data":{"emptyTextPart":true,"thoughtSignature":"sig"}}]`,
+		},
+		{
+			// Other vendors drop a reasoning item with no text; a message with none would reach them empty.
+			name: "empty non-thought part after a signed item stands alone",
+			frames: []string{
+				`{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"f","args":{}},"thoughtSignature":"s1"},{"text":"","thoughtSignature":"s2"}]},"finishReason":"STOP","index":0}]}`,
+			},
+			want: `[{"type":"function_call","id":"fc_0","call_id":"f__relay_call_0","name":"f","arguments":"{}","status":"completed","provider_data":{"thoughtSignature":"s1"}},
+				{"type":"reasoning","id":"rs_1","status":"completed","provider_data":{"emptyTextPart":true,"thoughtSignature":"s2"}}]`,
 		},
 		{
 			name:   "empty thought part with no thought text",
 			frames: []string{`{"candidates":[{"content":{"role":"model","parts":[{"text":"","thought":true,"thoughtSignature":"sig"}]},"finishReason":"STOP","index":0}]}`},
-			want:   `[{"type":"reasoning","id":"rs_0","summary":[{"text":""}],"status":"completed","provider_data":{"thoughtSignature":"sig"}}]`,
+			want:   `[{"type":"reasoning","id":"rs_0","status":"completed","provider_data":{"thoughtSignature":"sig"}}]`,
+		},
+		{
+			name: "empty part after the answer text signs the message",
+			frames: []string{
+				`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hel"}]},"index":0}]}`,
+				`{"candidates":[{"content":{"role":"model","parts":[{"text":"lo"}]},"index":0}]}`,
+				`{"candidates":[{"content":{"role":"model","parts":[{"text":"","thoughtSignature":"sig"}]},"finishReason":"STOP","index":0}]}`,
+			},
+			want: `[{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello"}],"provider_data":{"thoughtSignature":"sig"}}]`,
+		},
+		{
+			// The signature stays on the part it came on, so later text opens a new message.
+			name: "signed text part ends its message",
+			frames: []string{
+				`{"candidates":[{"content":{"role":"model","parts":[{"text":"a","thoughtSignature":"sig"},{"text":"b"}]},"finishReason":"STOP","index":0}]}`,
+			},
+			want: `[{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"a"}],"provider_data":{"thoughtSignature":"sig"}},
+				{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"b"}]}]`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

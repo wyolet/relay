@@ -59,6 +59,18 @@ type geminiPart struct {
 	FunctionResponseSnake *geminiFR   `json:"function_response,omitempty"`
 }
 
+// MarshalJSON keeps the empty text of a signature-only part: Gemini rejects a part with no data field.
+func (p geminiPart) MarshalJSON() ([]byte, error) {
+	type plain geminiPart
+	if p.ThoughtSignature == "" || p.Text != "" || p.InlineData != nil || p.FileData != nil || p.FunctionCall != nil || p.FunctionResponse != nil {
+		return json.Marshal(plain(p))
+	}
+	return json.Marshal(struct {
+		Text string `json:"text"`
+		plain
+	}{"", plain(p)})
+}
+
 type inlineData struct {
 	MIMEType string `json:"mimeType"`
 	Data     string `json:"data"` // base64-encoded

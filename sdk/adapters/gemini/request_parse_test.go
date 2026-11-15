@@ -84,6 +84,16 @@ func TestParseRequest_Contents(t *testing.T) {
 			  {"type":"function_call_output","call_id":"c1","output":"{\"ok\":true}"},
 			  {"type":"message","role":"user","content":[{"type":"input_file","file_url":"https://example.com/x","media_type":"application/pdf"}]}]`,
 		},
+		{
+			// A signed part ends its message, so the signature stays on that part.
+			"signatures on thought, text and empty-text parts",
+			`[{"role":"model","parts":[{"text":"plan","thought":true,"thoughtSignature":"s1"},{"text":"","thought":true,"thoughtSignature":"s2"},{"text":"a"},{"text":"b","thoughtSignature":"s3"},{"text":"c"},{"text":"","thoughtSignature":"s4"},{"text":"","thoughtSignature":"s5"}]}]`,
+			`[{"type":"reasoning","summary":[{"text":"plan"}],"content":"plan","provider_data":{"thoughtSignature":"s1"}},
+			  {"type":"reasoning","provider_data":{"thoughtSignature":"s2"}},
+			  {"type":"message","role":"assistant","content":[{"type":"output_text","text":"a"},{"type":"output_text","text":"b"}],"provider_data":{"thoughtSignature":"s3"}},
+			  {"type":"message","role":"assistant","content":[{"type":"output_text","text":"c"}],"provider_data":{"emptyTextPart":true,"thoughtSignature":"s4"}},
+			  {"type":"reasoning","provider_data":{"emptyTextPart":true,"thoughtSignature":"s5"}}]`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

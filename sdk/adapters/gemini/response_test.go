@@ -147,16 +147,32 @@ func TestFinishReason_MalformedFunctionCallRoundTrips(t *testing.T) {
 }
 
 func TestSerializeResponse_KeepsThoughtSignatures(t *testing.T) {
-	parts := `[{"text":"plan","thought":true,"thoughtSignature":"sig-rs"},{"functionCall":{"name":"f","args":{}},"thoughtSignature":"sig-fc"}]`
-	out, err := tr.SerializeResponse(parseResponse(t, `{"candidates":[{"content":{"role":"model","parts":`+parts+`},"finishReason":"STOP","index":0}]}`), nil)
+	parts := `[{"text":"plan","thought":true,"thoughtSignature":"sig-rs"},{"text":"","thought":true,"thoughtSignature":"sig-empty-rs"},` +
+		`{"text":"a","thoughtSignature":"sig-a"},{"text":"b"},{"text":"","thoughtSignature":"sig-tail"},{"text":"","thoughtSignature":"sig-alone"},` +
+		`{"functionCall":{"name":"f","args":{}},"thoughtSignature":"sig-fc"}]`
+	resp := parseResponse(t, `{"candidates":[{"content":{"role":"model","parts":`+parts+`},"finishReason":"STOP","index":0}]}`)
+	assertJSON(t, resp.Output, `[
+		{"type":"reasoning","id":"rs_0","summary":[{"text":"plan"}],"content":"plan","status":"completed","provider_data":{"thoughtSignature":"sig-rs"}},
+		{"type":"reasoning","id":"rs_1","status":"completed","provider_data":{"thoughtSignature":"sig-empty-rs"}},
+		{"type":"message","id":"msg_2","status":"completed","role":"assistant","content":[{"type":"output_text","text":"a"}],"provider_data":{"thoughtSignature":"sig-a"}},
+		{"type":"message","id":"msg_3","status":"completed","role":"assistant","content":[{"type":"output_text","text":"b"}],"provider_data":{"emptyTextPart":true,"thoughtSignature":"sig-tail"}},
+		{"type":"reasoning","id":"rs_4","status":"completed","provider_data":{"emptyTextPart":true,"thoughtSignature":"sig-alone"}},
+		{"type":"function_call","id":"fc_5","call_id":"f__relay_call_5","name":"f","arguments":"{}","status":"completed","provider_data":{"thoughtSignature":"sig-fc"}}]`)
+	out, err := tr.SerializeResponse(resp, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gr geminiResponse
+	var gr struct {
+		Candidates []struct {
+			Content struct {
+				Parts json.RawMessage `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
 	if err := json.Unmarshal(out, &gr); err != nil {
 		t.Fatal(err)
 	}
-	assertJSON(t, gr.Candidates[0].Content.Parts, parts)
+	assertJSON(t, []byte(gr.Candidates[0].Content.Parts), parts)
 }
 
 // The streamed thought text precedes its signature, which rides a trailing empty-text part.
@@ -175,17 +191,31 @@ func TestFromCanonicalStream_KeepsThoughtSignatures(t *testing.T) {
 		frame(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "fc_1", Index: 1, ItemType: v1.ItemTypeFunctionCall, Name: "f", CallID: "f"}),
 		frame(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "fc_1", Index: 1, Kind: v1.DeltaKindArguments, Delta: "{}"}),
 		frame(v1.EventItemCompleted, v1.ItemCompletedEvent{ItemID: "fc_1", Index: 1, Item: &v1.FunctionCall{CallID: "f", Name: "f", Arguments: "{}", ProviderData: thoughtSignatureJSON("sig-fc")}}),
+		frame(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "msg_2", Index: 2, ItemType: v1.ItemTypeMessage}),
+		frame(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "msg_2", Index: 2, Kind: v1.DeltaKindText, Delta: "hi"}),
+		frame(v1.EventItemCompleted, v1.ItemCompletedEvent{ItemID: "msg_2", Index: 2, Item: &v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "hi"}}, ProviderData: thoughtSignatureJSON("sig-msg")}}),
+		frame(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "msg_3", Index: 3, ItemType: v1.ItemTypeMessage}),
+		frame(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "msg_3", Index: 3, Kind: v1.DeltaKindText, Delta: "bye"}),
+		frame(v1.EventItemCompleted, v1.ItemCompletedEvent{ItemID: "msg_3", Index: 3, Item: &v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "bye"}}}}),
 	)
-	var parts []geminiPart
+	// Raw wire parts: re-encoding a decoded part would hide a missing empty text.
+	var parts []json.RawMessage
 	for _, f := range frames {
 		if f == "" {
 			continue
 		}
-		var gr geminiResponse
+		var gr struct {
+			Candidates []struct {
+				Content struct {
+					Parts []json.RawMessage `json:"parts"`
+				} `json:"content"`
+			} `json:"candidates"`
+		}
 		if err := json.Unmarshal(geminiData(t, f), &gr); err != nil {
 			t.Fatal(err)
 		}
 		parts = append(parts, gr.Candidates[0].Content.Parts...)
 	}
-	assertJSON(t, parts, `[{"text":"plan","thought":true},{"thought":true,"thoughtSignature":"sig-rs"},{"functionCall":{"name":"f","args":{}},"thoughtSignature":"sig-fc"}]`)
+	assertJSON(t, parts, `[{"text":"plan","thought":true},{"text":"","thought":true,"thoughtSignature":"sig-rs"},{"functionCall":{"name":"f","args":{}},"thoughtSignature":"sig-fc"},`+
+		`{"text":"hi"},{"text":"","thoughtSignature":"sig-msg"},{"text":"bye"}]`)
 }
