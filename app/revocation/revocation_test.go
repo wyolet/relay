@@ -3,6 +3,7 @@ package revocation
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -43,14 +44,29 @@ func TestRevokeReachesEveryPodOnRefresh(t *testing.T) {
 	}
 }
 
-// flakyStore is a single-key Store that fails every call while down and records the TTL of its last write.
+// flakyStore is a single-key Store that fails every call while down and records the TTL of its last write. The List's Run goroutine reads it concurrently with the test, hence the mutex.
 type flakyStore struct {
+	mu   sync.Mutex
 	raw  []byte
 	ttl  time.Duration
 	down bool
 }
 
+func (s *flakyStore) update(f func(*flakyStore)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f(s)
+}
+
+func (s *flakyStore) lastTTL() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ttl
+}
+
 func (s *flakyStore) Get(context.Context, string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.down {
 		return nil, errors.New("store down")
 	}
@@ -61,6 +77,8 @@ func (s *flakyStore) Get(context.Context, string) ([]byte, error) {
 }
 
 func (s *flakyStore) Set(_ context.Context, _ string, v []byte, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.down {
 		return errors.New("store down")
 	}
@@ -72,6 +90,12 @@ func (s *flakyStore) WithLock(ctx context.Context, _ []string, fn func(context.C
 	return fn(ctx)
 }
 
+func pendingLen(l *List) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.pending)
+}
+
 // A revocation the shared list did not take is not served from this pod alone, a failed poll keeps the previous copy, and the stored key lives as long as its latest entry.
 func TestStoreFailuresKeepThePreviousCopy(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -81,19 +105,19 @@ func TestStoreFailuresKeepThePreviousCopy(t *testing.T) {
 		go l.Run(ctx, time.Minute)
 		revoked := func(id string) bool { return l.Set().Revoked(id, time.Now()) }
 
-		if err := other.Revoke(ctx, "short", time.Now().Add(10*time.Minute)); err != nil || store.ttl != 10*time.Minute {
-			t.Fatalf("Revoke: err %v, key TTL %v; want 10m", err, store.ttl)
+		if err := other.Revoke(ctx, "short", time.Now().Add(10*time.Minute)); err != nil || store.lastTTL() != 10*time.Minute {
+			t.Fatalf("Revoke: err %v, key TTL %v; want 10m", err, store.lastTTL())
 		}
-		if err := other.Revoke(ctx, "long", time.Now().Add(time.Hour)); err != nil || store.ttl != time.Hour {
-			t.Fatalf("Revoke: err %v, key TTL %v; want the latest expiry, 1h", err, store.ttl)
+		if err := other.Revoke(ctx, "long", time.Now().Add(time.Hour)); err != nil || store.lastTTL() != time.Hour {
+			t.Fatalf("Revoke: err %v, key TTL %v; want the latest expiry, 1h", err, store.lastTTL())
 		}
 		synctest.Sleep(time.Minute)
 		if !revoked("short") || !revoked("long") {
 			t.Fatal("the poll did not pick up another pod's revocations")
 		}
 
-		store.down = true
-		if err := l.Revoke(ctx, "unsaved", time.Now().Add(time.Hour)); err == nil || revoked("unsaved") || len(l.pending) != 0 {
+		store.update(func(s *flakyStore) { s.down = true })
+		if err := l.Revoke(ctx, "unsaved", time.Now().Add(time.Hour)); err == nil || revoked("unsaved") || pendingLen(l) != 0 {
 			t.Fatalf("Revoke with the store down: err %v, served locally %v", err, revoked("unsaved"))
 		}
 		if err := l.Refresh(ctx); err == nil {
@@ -104,12 +128,12 @@ func TestStoreFailuresKeepThePreviousCopy(t *testing.T) {
 			t.Fatal("a failed poll dropped the previous copy")
 		}
 
-		store.down, store.raw = false, []byte(`{"fresh":99999999999}`)
+		store.update(func(s *flakyStore) { s.down, s.raw = false, []byte(`{"fresh":99999999999}`) })
 		synctest.Sleep(time.Minute)
 		if !revoked("fresh") || revoked("long") {
 			t.Fatal("the poll after the store came back did not replace the copy")
 		}
-		store.raw = []byte(`not json`)
+		store.update(func(s *flakyStore) { s.raw = []byte(`not json`) })
 		if err := l.Refresh(ctx); err == nil || !revoked("fresh") {
 			t.Fatalf("Refresh over a corrupt list: err %v, previous copy kept %v", err, revoked("fresh"))
 		}
