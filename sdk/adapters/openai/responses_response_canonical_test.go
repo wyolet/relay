@@ -279,7 +279,7 @@ func TestResponsesReportedTypeMatchesWire(t *testing.T) {
 
 // Unmodeled items, parts, annotations and tool-choice objects re-encode byte for byte.
 func TestResponsesWireVerbatimRoundTrip(t *testing.T) {
-	decodeItem := func(b []byte) (any, error) { return responsesUnmarshalItem(b) }
+	decodeItem := func(b []byte) (any, error) { return responsesUnmarshalItem(b, false) }
 	decodeTool := func(b []byte) (any, error) { return responsesUnmarshalTool(b) }
 	decodeChoice := func(b []byte) (any, error) {
 		var c ResponsesToolChoice

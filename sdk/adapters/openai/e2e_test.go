@@ -51,6 +51,34 @@ func TestE2E_ResponsesViaCC(t *testing.T) {
 	}
 }
 
+// A Responses request body as a Chat Completions upstream receives it.
+func TestE2E_ResponsesRequestToCC(t *testing.T) {
+	cases := []struct {
+		name, body, wire string
+	}{
+		{
+			name: "type-less message items",
+			body: `{"model":"gpt-4o","input":[{"role":"developer","content":"be brief"},{"role":"user","content":"hi"},
+				{"role":"assistant","content":[{"type":"output_text","text":"hello"}]},{"role":"user","content":[{"type":"input_text","text":"again"}]}]}`,
+			wire: `{"model":"gpt-4o","messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},
+				{"role":"assistant","content":"hello"},{"role":"user","content":"again"}]}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := ResponsesTranslator{}.ParseRequest([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := CCTranslator{}.SerializeRequest(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSON(t, wire, tc.wire)
+		})
+	}
+}
+
 func TestE2E_StreamingCCToResponses(t *testing.T) {
 	cs := NewComposedStream(CCTranslator{}.NewToCanonicalStream(), ResponsesTranslator{}.NewFromCanonicalStream())
 	var events []string

@@ -25,7 +25,7 @@ func (s *responsesToCanonicalStream) itemCompletedFrame(data []byte) (v1.SSEFram
 	if len(evHeader.Item) == 0 || string(evHeader.Item) == "null" {
 		return v1.SSEFrame{}, false, nil
 	}
-	wireItem, err := responsesUnmarshalItem(evHeader.Item)
+	wireItem, err := responsesUnmarshalItem(evHeader.Item, false)
 	if err != nil {
 		return v1.SSEFrame{}, false, fmt.Errorf("responses stream: output_item.done: %w", err)
 	}

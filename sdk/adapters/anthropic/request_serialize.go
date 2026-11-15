@@ -183,6 +183,9 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("anthropic serialize_request: %w", err)
 	}
+	if len(msgs) == 0 {
+		return nil, fmt.Errorf("anthropic serialize_request: %w: no messages to send", v1.ErrUnsupportedRequest)
+	}
 	out.Messages = msgs
 	for _, extra := range []string{sysFromItems, hoistedSys} {
 		if extra == "" {

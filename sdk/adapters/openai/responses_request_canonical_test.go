@@ -113,6 +113,22 @@ func TestResponsesParseRequest(t *testing.T) {
 				{"type":"function_call_output","call_id":"c3","output":"o"},
 				{"type":"message","role":"user","content":[]}],"output_mode":"sync"}`,
 		},
+		{
+			// type is optional on an input message: an item with a role and no type is a message.
+			name: "type-less message items",
+			body: `{"model":"gpt-5","input":[
+				{"role":"user","content":"hi"},
+				{"role":"system","content":"sys"},
+				{"role":"developer","content":[{"type":"input_text","text":"dev"}]},
+				{"role":"assistant","content":[{"type":"output_text","text":"yo"}]},
+				{"role":"user","content":[{"type":"input_text","text":"see"},{"type":"input_image","image_url":"https://x/cat.png"}]}]}`,
+			want: `{"model":"gpt-5","input":[
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+				{"type":"message","role":"system","content":[{"type":"input_text","text":"sys"}]},
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"dev"}]},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"yo"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"see"},{"type":"input_image","image_url":"https://x/cat.png"}]}],"output_mode":"sync"}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

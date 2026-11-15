@@ -31,7 +31,7 @@ func UnmarshalResponsesResponse(data []byte) (*ResponsesResponse, error) {
 
 	output := make([]ResponsesItem, 0, len(wire.Output))
 	for i, raw := range wire.Output {
-		item, err := responsesUnmarshalItem(raw)
+		item, err := responsesUnmarshalItem(raw, false)
 		if err != nil {
 			return nil, fmt.Errorf("output[%d]: %w", i, err)
 		}

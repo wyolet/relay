@@ -739,6 +739,7 @@ func TestSerializeRequest_Rejects(t *testing.T) {
 		{"json_schema format without a schema", format(v1.Format{Type: "json_schema"}), true},
 		{"image data URL with a bad percent escape", request(input(&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.ImagePart{ImageURL: "data:image/png,%zz"}}})), true},
 		{"image data URL without a comma in a tool result", request(input(&v1.FunctionCallOutput{CallID: "t1", Content: []v1.Part{&v1.ImagePart{ImageURL: "data:image/png;base64"}}})), true},
+		{"instructions without messages", request(func(r *v1.Request, _ *v1.ModelOpts) { r.Instructions = "be brief" }), true},
 	} {
 		out, err := AnthropicTranslator{}.SerializeRequest(tc.req)
 		if err == nil {

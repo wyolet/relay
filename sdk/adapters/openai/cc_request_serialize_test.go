@@ -55,13 +55,13 @@ func TestCCSerializeRequest(t *testing.T) {
 		},
 		{
 			name: "a TTL up to 10m takes the in_memory tier",
-			req:  &v1.Request{Model: v1.ModelRefs{"m"}, CacheConfig: &v1.CacheConfig{TTL: "10m"}},
-			wire: `{"model":"m","messages":null,"prompt_cache_retention":"in_memory"}`,
+			req:  &v1.Request{Model: v1.ModelRefs{"m"}, CacheConfig: &v1.CacheConfig{TTL: "10m"}, Input: []v1.Item{ccUser("hi")}},
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_retention":"in_memory"}`,
 		},
 		{
 			name: "an unparseable TTL is left to the vendor default",
-			req:  &v1.Request{Model: v1.ModelRefs{"m"}, CacheConfig: &v1.CacheConfig{TTL: "soon"}},
-			wire: `{"model":"m","messages":null}`,
+			req:  &v1.Request{Model: v1.ModelRefs{"m"}, CacheConfig: &v1.CacheConfig{TTL: "soon"}, Input: []v1.Item{ccUser("hi")}},
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
 		},
 		{
 			name: "tool calls join the preceding assistant message; reasoning and non-text tool output are dropped",
@@ -101,8 +101,8 @@ func TestCCSerializeRequest(t *testing.T) {
 		{
 			name: "a tool without parameters or a choice; a nil model config entry is skipped",
 			req: &v1.Request{Model: v1.ModelRefs{"m"}, ModelConfig: map[string]*v1.ModelOpts{"m": nil},
-				Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}}}},
-			wire: `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","parameters":{}}}]}`,
+				Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}}}, Input: []v1.Item{ccUser("hi")}},
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{}}}]}`,
 		},
 		{
 			name: "only the first model's options apply; an unrecognised format type passes through",
@@ -113,8 +113,9 @@ func TestCCSerializeRequest(t *testing.T) {
 					"b": {Sampling: &v1.SamplingParams{Temperature: floatPtr(0.9)}},
 				},
 				OutputMode: v1.OutputModeSync,
+				Input:      []v1.Item{ccUser("hi")},
 			},
-			wire: `{"model":"a","messages":null,"temperature":0.1,"response_format":{"type":"grammar"}}`,
+			wire: `{"model":"a","messages":[{"role":"user","content":"hi"}],"temperature":0.1,"response_format":{"type":"grammar"}}`,
 		},
 	}
 	for _, tc := range cases {
@@ -129,16 +130,21 @@ func TestCCSerializeRequest(t *testing.T) {
 }
 
 func TestCCSerializeRequest_Errors(t *testing.T) {
+	input := []v1.Item{ccUser("x")}
 	cases := map[string]*v1.Request{
-		"no model":                  {Input: []v1.Item{ccUser("x")}},
-		"non-function tool":         {Model: v1.ModelRefs{"m"}, Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.ServerTool{Name: "web_search"}}}},
-		"malformed owned extension": {Model: v1.ModelRefs{"m"}, Extensions: map[string]json.RawMessage{extLogprobs: json.RawMessage(`"yes"`)}},
-		"malformed format schema":   {Model: v1.ModelRefs{"m"}, ModelConfig: map[string]*v1.ModelOpts{"m": {Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_schema", Schema: json.RawMessage(`{`)}}}}},
+		"no model":                  {Input: input},
+		"non-function tool":         {Model: v1.ModelRefs{"m"}, Input: input, Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.ServerTool{Name: "web_search"}}}},
+		"malformed owned extension": {Model: v1.ModelRefs{"m"}, Input: input, Extensions: map[string]json.RawMessage{extLogprobs: json.RawMessage(`"yes"`)}},
+		"malformed format schema":   {Model: v1.ModelRefs{"m"}, Input: input, ModelConfig: map[string]*v1.ModelOpts{"m": {Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_schema", Schema: json.RawMessage(`{`)}}}}},
+		"no messages":               {Model: v1.ModelRefs{"m"}, Input: []v1.Item{&v1.Reasoning{Content: "think"}}},
 	}
 	for name, req := range cases {
 		if wire, err := (CCTranslator{}).SerializeRequest(req); err == nil {
 			t.Errorf("%s: want an error, got %s", name, wire)
 		}
+	}
+	if _, err := (CCTranslator{}).SerializeRequest(cases["no messages"]); err == nil || err.Error() != "cc serialize_request: not supported by the upstream API: no messages to send" || !errors.Is(err, v1.ErrUnsupportedRequest) {
+		t.Errorf("no messages: %v, want an unsupported-request error", err)
 	}
 	var typeErr *json.UnmarshalTypeError
 	if _, err := (CCTranslator{}).SerializeRequest(cases["malformed owned extension"]); !errors.As(err, &typeErr) {
