@@ -72,7 +72,7 @@
   ],
   "generationConfig": {
     "responseMimeType": "application/json",
-    "responseSchema": {
+    "responseJsonSchema": {
       "type": "object",
       "properties": {
         "summary": {
@@ -90,7 +90,7 @@
         {
           "name": "get_forecast",
           "description": "Forecast for a city.",
-          "parameters": {
+          "parametersJsonSchema": {
             "type": "object",
             "properties": {
               "city": {

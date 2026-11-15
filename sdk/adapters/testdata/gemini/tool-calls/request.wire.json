@@ -49,7 +49,7 @@
         {
           "name": "get_weather",
           "description": "Current weather for a city.",
-          "parameters": {
+          "parametersJsonSchema": {
             "type": "object",
             "properties": {
               "city": {

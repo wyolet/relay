@@ -123,7 +123,7 @@ var allowedDrops = map[string][]allowedDrop{
 			userMsg+".content[*"),
 		annotated("canonical: Reasoning.ID/Status dropped — a thought part", reasoning+".id", reasoning+".status"),
 		annotated("canonical: Reasoning.Summary dropped when Content is set", reasoning+".summary*"),
-		annotated("canonical: Format.Name/Description/Strict dropped — responseSchema", opts+".output.format.name", opts+".output.format.description", opts+".output.format.strict"),
+		annotated("canonical: Format.Name/Description/Strict dropped — responseJsonSchema", opts+".output.format.name", opts+".output.format.description", opts+".output.format.strict"),
 		annotated("canonical: Output.Verbosity dropped — generateContent", opts+".output.verbosity"),
 		annotated("canonical: Reasoning.Effort dropped — thinkingLevel", opts+".reasoning.effort"),
 		annotated("canonical: Reasoning.Summary dropped — Gemini only toggles", opts+".reasoning.summary"),

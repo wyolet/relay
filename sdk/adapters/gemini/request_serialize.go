@@ -65,7 +65,7 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 		// canonical: Output.Verbosity dropped — generateContent has no
 		// verbosity control.
-		// canonical: Format.Name/Description/Strict dropped — responseSchema
+		// canonical: Format.Name/Description/Strict dropped — responseJsonSchema
 		// takes the bare schema only.
 		if o := opts.Output; o != nil && o.Format != nil {
 			switch o.Format.Type {
@@ -76,7 +76,7 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			case "json_schema":
 				gc.ResponseMIMEType = "application/json"
 				if len(o.Format.Schema) > 0 {
-					gc.ResponseSchema = o.Format.Schema
+					gc.ResponseJSONSchema = o.Format.Schema
 				}
 				hasGC = true
 			default:
@@ -109,9 +109,9 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			// canonical: FunctionTool.ProviderData dropped — it holds another
 			// vendor's original tool definition; Gemini gets the lowered schema.
 			decls = append(decls, functionDeclaration{
-				Name:        ft.Name,
-				Description: ft.Description,
-				Parameters:  schema,
+				Name:                 ft.Name,
+				Description:          ft.Description,
+				ParametersJSONSchema: schema,
 			})
 		}
 		if len(decls) > 0 {
