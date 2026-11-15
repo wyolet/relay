@@ -40,7 +40,7 @@ func defaults() *Config {
 		ConnQueue: 1024, ConnQueueTimeout: time.Second,
 		Limiter: "hybrid", LimiterSync: time.Second, PlanCellIdle: 10 * time.Minute, PlanResync: 10 * time.Minute,
 		StreamKeepAlive: 15 * time.Second, ProxyBodyIdle: 30 * time.Second, StreamUsage: true, StreamIdleTimeout: 10 * time.Minute,
-		HealthzDeadlineMS: 500, ShutdownDeadlineS: 15,
+		LastUsed: true, HealthzDeadlineMS: 500, ShutdownDeadlineS: 15,
 		Port: "8080", ControlPort: "8081",
 		Runtime: RuntimeConfig{Mode: "oss"},
 	}
@@ -157,6 +157,7 @@ func TestLoad_Values(t *testing.T) {
 			func(c *Config) {
 				c.StreamKeepAlive, c.ProxyBodyIdle, c.StreamIdleTimeout = 5*time.Second, 7*time.Second, 9*time.Second
 			}},
+		{"last used off", map[string]string{"RELAY_LAST_USED": " Off "}, "", func(c *Config) { c.LastUsed = false }},
 		{"account domain is lowercased and loses outer dots", map[string]string{"RELAY_ACCOUNT_DOMAIN": " .Accounts.Example.com. "}, "", func(c *Config) { c.AccountDomain = "accounts.example.com" }},
 		{"deadlines", map[string]string{"RELAY_HEALTHZ_DEADLINE_MS": "50", "RELAY_SHUTDOWN_DEADLINE_S": "30"}, "", func(c *Config) { c.HealthzDeadlineMS, c.ShutdownDeadlineS = 50, 30 }},
 		{"ui runtime URLs lose trailing slashes", map[string]string{"RELAY_CONTROL_API_URL": "https://c.example/api//", "RELAY_INFERENCE_API_URL": "https://i.example/", "RELAY_MODE": "cloud", "RELAY_UI_SENTRY_DSN": "https://k@sentry.example/1", "RELAY_UI_TELEMETRY_ENV": "prod", "RELAY_UI_DOCS_URL": "https://docs.example/", "RELAY_UI_SUPPORT_URL": "https://help.example"}, "",
@@ -221,6 +222,7 @@ func TestLoad_Rejects(t *testing.T) {
 		{"unknown authz", map[string]string{"RELAY_AUTHZ": "RBAC"}, `RELAY_AUTHZ must be "single" or "rbac", got "RBAC"`},
 		{"migrate on boot", map[string]string{"RELAY_MIGRATE_ON_BOOT": "Maybe"}, `RELAY_MIGRATE_ON_BOOT must be "on" or "off", got "maybe"`},
 		{"stream usage", map[string]string{"RELAY_STREAM_USAGE": "maybe"}, `RELAY_STREAM_USAGE must be "on" or "off", got "maybe"`},
+		{"last used", map[string]string{"RELAY_LAST_USED": "sometimes"}, `RELAY_LAST_USED must be "on" or "off", got "sometimes"`},
 		{"limiter", map[string]string{"RELAY_LIMITER": "local"}, `RELAY_LIMITER must be "lua" or "hybrid", got "local"`},
 		{"in-flight p99 negative", map[string]string{"RELAY_INFLIGHT_SCHED_P99": "-1ms"}, "RELAY_INFLIGHT_SCHED_P99 must be a non-negative Go duration (e.g. 20ms), or 0 to turn the adaptive in-flight limit off"},
 		{"in-flight p99 without a unit", map[string]string{"RELAY_INFLIGHT_SCHED_P99": "5"}, "RELAY_INFLIGHT_SCHED_P99 must be a non-negative Go duration (e.g. 20ms), or 0 to turn the adaptive in-flight limit off"},

@@ -40,6 +40,9 @@ type Principal struct {
 type Key struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
+
+	// Derived: filled on control API reads from the last-used table, never stored with the key.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty" yaml:"-" readOnly:"true" doc:"When the key last served a request, to the minute; updated about once a minute. Absent when it has not served one. Ignored on write."`
 }
 
 // Spec carries the auth material and gating flags. KeyHash is the sha256

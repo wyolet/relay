@@ -1971,6 +1971,30 @@ func (q *Queries) ListHostBindings(ctx context.Context) ([]HostBinding, error) {
 	return items, nil
 }
 
+const listHostKeysLastUsed = `-- name: ListHostKeysLastUsed :many
+SELECT host_key_id, last_used_at FROM host_key_last_used WHERE host_key_id = ANY($1::text[])
+`
+
+func (q *Queries) ListHostKeysLastUsed(ctx context.Context, ids []string) ([]HostKeyLastUsed, error) {
+	rows, err := q.db.Query(ctx, listHostKeysLastUsed, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []HostKeyLastUsed
+	for rows.Next() {
+		var i HostKeyLastUsed
+		if err := rows.Scan(&i.HostKeyID, &i.LastUsedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listHosts = `-- name: ListHosts :many
 
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM hosts ORDER BY name
@@ -2547,6 +2571,30 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 			&i.ResourceVersion,
 			&i.AccountID,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRelayKeysLastUsed = `-- name: ListRelayKeysLastUsed :many
+SELECT key_id, last_used_at FROM relay_key_last_used WHERE key_id = ANY($1::text[])
+`
+
+func (q *Queries) ListRelayKeysLastUsed(ctx context.Context, ids []string) ([]RelayKeyLastUsed, error) {
+	rows, err := q.db.Query(ctx, listRelayKeysLastUsed, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RelayKeyLastUsed
+	for rows.Next() {
+		var i RelayKeyLastUsed
+		if err := rows.Scan(&i.KeyID, &i.LastUsedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3228,6 +3276,46 @@ type SetUserPersonalAccountParams struct {
 
 func (q *Queries) SetUserPersonalAccount(ctx context.Context, arg SetUserPersonalAccountParams) error {
 	_, err := q.db.Exec(ctx, setUserPersonalAccount, arg.UserID, arg.Value)
+	return err
+}
+
+const touchHostKeysLastUsed = `-- name: TouchHostKeysLastUsed :exec
+INSERT INTO host_key_last_used AS t (host_key_id, last_used_at)
+SELECT s.id, u.used_at
+  FROM (SELECT unnest($1::text[]) AS id, unnest($2::timestamptz[]) AS used_at) u
+  JOIN secrets s ON s.id = u.id
+ON CONFLICT (host_key_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at
+WHERE t.last_used_at < EXCLUDED.last_used_at
+`
+
+type TouchHostKeysLastUsedParams struct {
+	Ids    []string             `db:"ids" json:"ids"`
+	UsedAt []pgtype.Timestamptz `db:"used_at" json:"used_at"`
+}
+
+func (q *Queries) TouchHostKeysLastUsed(ctx context.Context, arg TouchHostKeysLastUsedParams) error {
+	_, err := q.db.Exec(ctx, touchHostKeysLastUsed, arg.Ids, arg.UsedAt)
+	return err
+}
+
+const touchRelayKeysLastUsed = `-- name: TouchRelayKeysLastUsed :exec
+INSERT INTO relay_key_last_used AS t (key_id, last_used_at)
+SELECT k.id, u.used_at
+  FROM (SELECT unnest($1::text[]) AS id, unnest($2::timestamptz[]) AS used_at) u
+  JOIN relay_keys k ON k.id = u.id
+ON CONFLICT (key_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at
+WHERE t.last_used_at < EXCLUDED.last_used_at
+`
+
+type TouchRelayKeysLastUsedParams struct {
+	Ids    []string             `db:"ids" json:"ids"`
+	UsedAt []pgtype.Timestamptz `db:"used_at" json:"used_at"`
+}
+
+// The join skips ids deleted since they were used. Rows only move forward, so
+// pods flushing at once keep the later time.
+func (q *Queries) TouchRelayKeysLastUsed(ctx context.Context, arg TouchRelayKeysLastUsedParams) error {
+	_, err := q.db.Exec(ctx, touchRelayKeysLastUsed, arg.Ids, arg.UsedAt)
 	return err
 }
 

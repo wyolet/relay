@@ -48,6 +48,9 @@ type HostKey struct {
 	// stored and not loaded from YAML. Lists every Policy whose pools reach
 	// this HostKey, so the admin UI can show where a key is in use.
 	Policies []PolicyRef `json:"policies,omitempty" yaml:"-" readOnly:"true" doc:"Policies whose pools reach this key: listing it, or drawing on its account or a share of it. Derived on read; ignored on write."`
+
+	// Derived: filled on control API reads from the last-used table, never stored with the key.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty" yaml:"-" readOnly:"true" doc:"When relay last sent a request with this key, to the minute; updated about once a minute. Absent when it has not sent one. Ignored on write."`
 }
 
 // AnonIDPrefix prefixes the synthetic anonymous key's id, KeyHash, and name so

@@ -178,6 +178,9 @@ type Config struct {
 	// StreamUsage makes same-shape streamed requests ask the upstream for token usage when the wire shape reports it only on request (RELAY_STREAM_USAGE, default on). The extra usage frame is removed from the caller's stream unless the caller asked for it.
 	StreamUsage bool
 
+	// LastUsed records when each relay key and host key last served a request (RELAY_LAST_USED, default on).
+	LastUsed bool
+
 	// BatchMaxItems caps the items in one batch submission (RELAY_BATCH_MAX_ITEMS, default 50000).
 	BatchMaxItems int
 
@@ -567,6 +570,14 @@ func Load() (*Config, error) {
 		cfg.StreamUsage = false
 	default:
 		return nil, fmt.Errorf(`RELAY_STREAM_USAGE must be "on" or "off", got %q`, v)
+	}
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_LAST_USED"))); v {
+	case "", "on", "1", "true":
+		cfg.LastUsed = true
+	case "off", "0", "false":
+		cfg.LastUsed = false
+	default:
+		return nil, fmt.Errorf(`RELAY_LAST_USED must be "on" or "off", got %q`, v)
 	}
 	if v, err := envIntMin("RELAY_STREAM_IDLE_TIMEOUT_S", 600, 0); err != nil {
 		return nil, err
