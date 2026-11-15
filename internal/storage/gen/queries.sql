@@ -347,6 +347,30 @@ UPDATE relay_keys
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE id = $1;
 
+-- name: TouchRelayKeysLastUsed :exec
+-- The join skips ids deleted since they were used. Rows only move forward, so
+-- pods flushing at once keep the later time.
+INSERT INTO relay_key_last_used AS t (key_id, last_used_at)
+SELECT k.id, u.used_at
+  FROM (SELECT unnest(@ids::text[]) AS id, unnest(@used_at::timestamptz[]) AS used_at) u
+  JOIN relay_keys k ON k.id = u.id
+ON CONFLICT (key_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at
+WHERE t.last_used_at < EXCLUDED.last_used_at;
+
+-- name: ListRelayKeysLastUsed :many
+SELECT key_id, last_used_at FROM relay_key_last_used WHERE key_id = ANY(@ids::text[]);
+
+-- name: TouchHostKeysLastUsed :exec
+INSERT INTO host_key_last_used AS t (host_key_id, last_used_at)
+SELECT s.id, u.used_at
+  FROM (SELECT unnest(@ids::text[]) AS id, unnest(@used_at::timestamptz[]) AS used_at) u
+  JOIN secrets s ON s.id = u.id
+ON CONFLICT (host_key_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at
+WHERE t.last_used_at < EXCLUDED.last_used_at;
+
+-- name: ListHostKeysLastUsed :many
+SELECT host_key_id, last_used_at FROM host_key_last_used WHERE host_key_id = ANY(@ids::text[]);
+
 -- ── app/ arch (migration 0009) ───────────────────────────────────────────────
 
 -- name: ListHosts :many

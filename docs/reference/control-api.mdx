@@ -111,6 +111,8 @@ GET  /api/host-keys/by-id/{id}/health   the key's circuit-breaker state
 POST /api/host-keys/by-id/{id}/detect-account   ask the key's host which organization the key belongs to
 ```
 
+Reads carry `lastUsedAt`, when Relay last tried an upstream call with the key, to the minute; see [When a key was last used](/concepts/auth#when-a-key-was-last-used).
+
 A PUT cannot change a host key's value; rotation is explicit. An env-referenced key is rotated by changing the variable, and the rotate call answers `400`. See [Key pooling](/concepts/key-pooling) for breaker states and [Stored secrets](/concepts/secret-keys) for how stored values are sealed.
 
 `detect-account` needs the same permission as updating the key and answers `{"orgId", "orgName"?, "currentAccountId", "matchingAccountId"?}`. It does not move the key; see [Detect a key's account](/concepts/key-pooling#detect-a-keys-account). It answers `422` when the host's responses name no organization or the key's value cannot be resolved, and `502` when the host refuses the call (the host's status is in the error details).
@@ -144,7 +146,7 @@ curl -X POST http://localhost:8081/api/keys \
 
 `spec.principal` left out makes the key the signed-in user's; the admin token must name one, or the create answers `400`. Optional fields: `accountId`, `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. `accountId` is the key's default [lane](/concepts/accounts#a-keys-default-lane): left out, the service account's account or the user's personal account; an account the principal may not run keys in answers `403 account_not_held`, and a closed one `400`. A key holds no policy: bind one to its account instead. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal; it may move the key to another account under the same rules.
 
-Create and rotate answer once the pod that handled them authenticates the new value, waiting up to 5 seconds, so the plaintext can be used at once. `GET /api/keys?account_id=<id>` lists the keys whose default lane is an account.
+Create and rotate answer once the pod that handled them authenticates the new value, waiting up to 5 seconds, so the plaintext can be used at once. `GET /api/keys?account_id=<id>` lists the keys whose default lane is an account. Reads carry `lastUsedAt`, when the key last served a request, to the minute; see [When a key was last used](/concepts/auth#when-a-key-was-last-used).
 
 ### Policies and policy bindings
 

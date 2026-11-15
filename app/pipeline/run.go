@@ -573,6 +573,7 @@ func stampAttempt(lc *lifecycle.Context, a *attempt, attempts int) {
 	}
 	lc.Attempts = attempts
 	lc.HostKeyID = a.slot.Credential.KeyHash
+	lc.HostKeyRowID = a.slot.Credential.Meta.ID
 	lc.HostID, lc.HostName = a.hop.Host.Meta.ID, a.hop.Host.Meta.Name
 	lc.PoolID, lc.AccountID, lc.ViaAccountID = "", "", ""
 	if a.hop.Pool.Pool != nil {

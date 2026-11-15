@@ -11,6 +11,7 @@ func mergeHostKeyPreserveValue(existing, incoming *hostkey.HostKey) {
 	if existing == nil || incoming == nil {
 		return
 	}
+	incoming.LastUsedAt = nil // read-only: an echoed value is no edit
 	if incoming.Spec.Value != "" {
 		return // explicit new value → rotation
 	}

@@ -65,6 +65,8 @@ type Context struct {
 	// HostKeyID is the value hash of the upstream credential last tried,
 	// not the HostKey row id.
 	HostKeyID string
+	// HostKeyRowID is the HostKey row id of that credential; empty until an upstream call is attempted.
+	HostKeyRowID string
 	// PoolID and AccountID are the pool and provider account of the credential last tried; empty for a credential linked on its own or held in no account.
 	PoolID    string
 	AccountID string
