@@ -26,11 +26,13 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 
 	where, args := buildWhere(q.EventQuery, aggregateRows(q.EventQuery, groupBy))
 	grouped := usage.Grouped(groupBy)
-	selGroup, subGroup, groupClause := "", "", ungroupedHaving
+	selGroup, subGroup, groupClause, orderClause := "", "", ungroupedHaving, "ORDER BY requests DESC"
 	if grouped {
 		var grpExpr string
 		grpExpr, args = groupExpr(groupBy, args)
-		selGroup, subGroup, groupClause = grpExpr+" AS grp,", "sub.grp, ", "GROUP BY grp"
+		// The C collation orders the equal-count tiebreak bytewise, like the other backends.
+		selGroup, subGroup, groupClause = "("+grpExpr+`) COLLATE "C" AS grp,`, "sub.grp, ", "GROUP BY grp"
+		orderClause += ", grp"
 	}
 	// The label is an aggregate, so it joins the scalar query only, never the token subquery's row list.
 	selLabel := ""
@@ -56,8 +58,8 @@ SELECT
     max(ts)                                                  AS last_seen%s
 FROM %s%s
 %s
-ORDER BY requests DESC`,
-		selGroup, selLabel, selDistinct, s.cfg.Table, where, groupClause,
+%s`,
+		selGroup, selLabel, selDistinct, s.cfg.Table, where, groupClause, orderClause,
 	)
 
 	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
