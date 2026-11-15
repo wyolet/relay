@@ -142,7 +142,8 @@ func (c Checker) joinable(ctx context.Context, id string, m meta.Metadata, keyOw
 	if !Visible(ctx, c.Authz, "account", m.ID, m.Owner) {
 		return notVisible("account", id)
 	}
-	if m.Owner == keyOwner {
+	// A system key is one whose move to the organization has not completed; its account already moved.
+	if m.Owner == keyOwner || (m.Owner.DeploymentWide() && keyOwner.DeploymentWide()) {
 		return nil
 	}
 	return badRequest("a host key of %s cannot join %s: a host key joins only an account of its own owner. Create the host key in %s, or pick an account of %s.",

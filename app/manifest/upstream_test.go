@@ -20,7 +20,7 @@ import (
 const upstreamYAML = `
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Account
-metadata: {name: acme-anthropic, owner: {kind: system}}
+metadata: {name: acme-anthropic, owner: {kind: organization}}
 spec: {host: anthropic-direct, orgId: org-1}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -35,7 +35,7 @@ spec: {amountUsd: 2000}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: HostKey
-metadata: {name: openai-key-1, owner: {kind: system}}
+metadata: {name: openai-key-1, owner: {kind: organization}}
 spec: {hostId: anthropic-direct, account: acme-anthropic, valueFrom: {kind: env, env: KEY}}
 `
 
@@ -45,7 +45,7 @@ func TestUpstreamKinds_RoundTrip(t *testing.T) {
 	system := meta.Owner{Kind: meta.OwnerSystem}
 
 	a := translated(t, "ToAccount", &account.Account{
-		Meta: meta.Metadata{Name: "acme-anthropic", Owner: system},
+		Meta: meta.Metadata{Name: "acme-anthropic", Owner: meta.Global},
 		Spec: account.Spec{HostID: "host-bbb", OrgID: "org-1"},
 	})(manifest.ToAccount(*docs[0].Account, testResolver))
 	exported(t, "FromAccount", *docs[0].Account, manifest.FromAccount(a, testRev))
@@ -67,7 +67,7 @@ func TestUpstreamKinds_RoundTrip(t *testing.T) {
 	exported(t, "FromBudget", wantBudget, manifest.FromBudget(b, testRev))
 
 	k := translated(t, "ToHostKey", &hostkey.HostKey{
-		Meta: meta.Metadata{Name: "openai-key-1", Owner: system},
+		Meta: meta.Metadata{Name: "openai-key-1", Owner: meta.Global},
 		Spec: hostkey.Spec{HostID: "host-bbb", AccountID: "acc-mmm", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "KEY"}},
 	})(manifest.ToHostKey(*docs[3].HostKey, testResolver))
 	exported(t, "FromHostKey", *docs[3].HostKey, manifest.FromHostKey(k, testRev))
@@ -118,13 +118,20 @@ spec:
 	exported(t, "rendered Host", *doc.Host, *back.Host)
 }
 
-// A provider account written without an owner is the system's, like a host key written without one, so the pair needs no owner to match.
-func TestProviderAccountWithoutOwnerIsTheSystems(t *testing.T) {
-	doc := parseOne(t, "apiVersion: relay.wyolet.dev/v1alpha3\nkind: Account\nmetadata: {name: acme}\nspec: {host: anthropic-direct}\n")
-	translated(t, "ToAccount", &account.Account{
-		Meta: meta.Metadata{Name: "acme", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: account.Spec{HostID: "host-bbb"},
-	})(manifest.ToAccount(*doc.Account, testResolver))
+// A provider account written without an owner, or owned by system, is the organization's, like such a host key, so the pair needs no owner to match.
+func TestProviderAccountWithoutOwnerIsTheOrganizations(t *testing.T) {
+	for _, owner := range []string{"", ", owner: {kind: system}"} {
+		doc := parseOne(t, "apiVersion: relay.wyolet.dev/v1alpha3\nkind: Account\nmetadata: {name: acme"+owner+"}\nspec: {host: anthropic-direct}\n")
+		translated(t, "ToAccount", &account.Account{
+			Meta: meta.Metadata{Name: "acme", Owner: meta.Global},
+			Spec: account.Spec{HostID: "host-bbb"},
+		})(manifest.ToAccount(*doc.Account, testResolver))
+		key := parseOne(t, "apiVersion: relay.wyolet.dev/v1alpha3\nkind: HostKey\nmetadata: {name: k"+owner+"}\nspec: {hostId: anthropic-direct, account: acme-anthropic, valueFrom: {kind: env, env: KEY}}\n")
+		k, err := manifest.ToHostKey(*key.HostKey, testResolver)
+		if err != nil || k.Meta.Owner != meta.Global {
+			t.Errorf("host key %q: owner %+v (%v), want the organization", owner, k.Meta.Owner, err)
+		}
+	}
 }
 
 // A policy binding names its accounts, which resolve by name and render back.
@@ -132,13 +139,13 @@ func TestPolicyBinding_AccountsRoundTrip(t *testing.T) {
 	doc := parseOne(t, `
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
-metadata: {name: tiers, owner: {kind: system}}
+metadata: {name: tiers, owner: {kind: organization}}
 spec:
   policy: cheap-tier
   accounts: [acme-anthropic]
 `)
 	b := translated(t, "ToPolicyBinding", &policybinding.PolicyBinding{
-		Meta: meta.Metadata{Name: "tiers", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Meta: meta.Metadata{Name: "tiers", Owner: meta.Global},
 		Spec: policybinding.Spec{PolicyID: "policy-ddd", AccountIDs: []string{"acc-mmm"}},
 	})(manifest.ToPolicyBinding(*doc.PolicyBinding, testResolver))
 	exported(t, "FromPolicyBinding", *doc.PolicyBinding, manifest.FromPolicyBinding(b, testRev))

@@ -172,7 +172,8 @@ func TestMigrateUpGivesKeysTheirOwnersDefaultAccount(t *testing.T) {
 		id    string
 		owner meta.Owner
 	}{
-		{sys, meta.Owner{Kind: meta.OwnerSystem}},
+		// Made for the system's keys, then moved with them to the organization by migration 45.
+		{sys, meta.Global},
 		{ali, meta.Owner{Kind: meta.OwnerUser, ID: alice}},
 	} {
 		a, err := accounts.Get(ctx, tc.id)

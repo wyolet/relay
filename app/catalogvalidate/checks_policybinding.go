@@ -27,7 +27,7 @@ func checkPolicyBindingRefs(g *graph) []Issue {
 			if _, ok := g.Teams[name]; !ok {
 				out = append(out, refMissing(src, "metadata.owner", "Team", name))
 			}
-		case "system", "user":
+		case "organization", "system", "user":
 		default:
 			out = append(out, Issue{Severity: SeverityError, Kind: KindIncomplete,
 				Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "metadata.owner"},

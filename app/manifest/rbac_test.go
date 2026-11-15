@@ -85,17 +85,20 @@ func TestRoundTrip_RBAC(t *testing.T) {
 	docs := parseDocs(t, rbacYAML, 4)
 	rev := rbacRev
 	rev.Accounts = map[string]string{projectAccountUUID: "project-ml-search"}
-	system := meta.Owner{Kind: meta.OwnerSystem}
+	org := meta.Global
 	team := meta.Owner{Kind: meta.OwnerTeam, ID: teamUUID}
 
+	// The document's system owner is not the manifest's to choose: a role is the organization's.
 	r := translated(t, "ToRole", &role.Role{
-		Meta: meta.Metadata{Name: "developer", Owner: system},
+		Meta: meta.Metadata{Name: "developer", Owner: org},
 		Spec: role.Spec{Rules: []role.Rule{
 			{Kinds: []string{"keys", "service-accounts"}, Verbs: []string{"get", "list", "create", "rotate"}},
 			{Kinds: []string{"usage", "logs"}, Verbs: []string{"read"}},
 		}},
 	})(manifest.ToRole(*docs[0].Role, rbacResolver))
-	exported(t, "FromRole", *docs[0].Role, manifest.FromRole(r, rev))
+	wantRole := *docs[0].Role
+	wantRole.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerOrganization}
+	exported(t, "FromRole", wantRole, manifest.FromRole(r, rev))
 
 	scoped := translated(t, "ToRoleBinding", &rolebinding.RoleBinding{
 		Meta: meta.Metadata{Name: "platform-admins", Owner: team},
@@ -109,12 +112,14 @@ func TestRoundTrip_RBAC(t *testing.T) {
 	wantDoc.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerTeam, Name: "platform"}
 	exported(t, "FromRoleBinding", wantDoc, manifest.FromRoleBinding(scoped, rev))
 
+	// A system scope is the global scope's earlier name: it reads, and renders, as the organization.
 	global := translated(t, "ToRoleBinding system-scoped", &rolebinding.RoleBinding{
-		Meta: meta.Metadata{Name: "everyone-viewer", Owner: system},
-		Spec: rolebinding.Spec{RoleID: roleUUID, Scope: system, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}}},
+		Meta: meta.Metadata{Name: "everyone-viewer", Owner: org},
+		Spec: rolebinding.Spec{RoleID: roleUUID, Scope: org, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}}},
 	})(manifest.ToRoleBinding(*docs[2].RoleBinding, rbacResolver))
 	wantDoc = *docs[2].RoleBinding
-	wantDoc.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerSystem}
+	wantDoc.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerOrganization}
+	wantDoc.Spec.Scope = manifest.WireOwner{Kind: meta.OwnerOrganization}
 	exported(t, "FromRoleBinding system-scoped", wantDoc, manifest.FromRoleBinding(global, rev))
 
 	pb := translated(t, "ToPolicyBinding", &policybinding.PolicyBinding{

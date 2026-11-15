@@ -247,6 +247,7 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 			return nil, fmt.Errorf("catalog.Hydrate: %w", err)
 		}
 	}
+	runOrganizationMove(ctx, stores, opts)
 	if err := c.Reload(ctx); err != nil {
 		return nil, fmt.Errorf("catalog.Hydrate: initial reload: %w", err)
 	}

@@ -36,7 +36,7 @@ func (g *Group) validate() error {
 	if strings.HasPrefix(g.Meta.Name, ReservedGroupPrefix) {
 		return fmt.Errorf("%w: group %q: names starting with %q are reserved", ErrInvalid, g.Meta.Name, ReservedGroupPrefix)
 	}
-	if err := validateMeta("group", &g.Meta, OwnerUser, OwnerSystem); err != nil {
+	if err := validateMeta("group", &g.Meta, OwnerUser, Global.Kind); err != nil {
 		return err
 	}
 	if err := g.Spec.External.validate("group", g.Meta.Name); err != nil {

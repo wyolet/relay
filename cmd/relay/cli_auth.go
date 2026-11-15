@@ -163,7 +163,7 @@ func canIReason(a canIAnswer) string {
 // describe renders a ref as "<kind> <name>", the global scope as "global".
 func describe(r ref) string {
 	switch {
-	case r.Kind == "system":
+	case r.Kind == "organization" || r.Kind == "system":
 		return "global"
 	case r.Name != "":
 		return r.Kind + " " + r.Name

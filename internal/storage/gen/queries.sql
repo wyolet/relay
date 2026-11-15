@@ -208,6 +208,10 @@ SELECT count(*) FROM secret_values WHERE dek_id IS NULL;
 -- name: CountSealedSecretValues :one
 SELECT count(*) FROM secret_values WHERE dek_id IS NOT NULL OR nonce IS NULL;
 
+-- CountScopedSecretValues counts the rows sealed under one scope's data keys; migration 45's down refuses the organization's.
+-- name: CountScopedSecretValues :one
+SELECT count(*) FROM secret_values WHERE scope = $1;
+
 -- name: CountSecretValuesByDataKey :many
 SELECT dek_id, count(*) AS rows FROM secret_values WHERE dek_id IS NOT NULL GROUP BY dek_id;
 

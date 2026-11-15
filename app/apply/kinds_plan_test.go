@@ -282,15 +282,15 @@ func TestApplyDirtyRows(t *testing.T) {
 
 // A user owner with no id names nobody. Applied by a caller that is no user
 // (the admin token, the boot seed) the row is shared infrastructure and
-// lands system-owned; applied by a user it becomes theirs, as on CRUD.
+// lands organization-owned; applied by a user it becomes theirs, as on CRUD.
 func TestApplyStampsAnIDlessUserOwner(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		ctx  context.Context
 		want meta.Owner
 	}{
-		{"admin token", actor.WithActor(context.Background(), &actor.Actor{AdminToken: true}), meta.Owner{Kind: meta.OwnerSystem}},
-		{"boot seed", context.Background(), meta.Owner{Kind: meta.OwnerSystem}},
+		{"admin token", actor.WithActor(context.Background(), &actor.Actor{AdminToken: true}), meta.Global},
+		{"boot seed", context.Background(), meta.Global},
 		{"user session", actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"}), meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

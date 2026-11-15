@@ -179,7 +179,7 @@ func TestAccessReviewSelf(t *testing.T) {
 	want := accessReview{
 		Allowed: true, Reason: "binding",
 		Binding: &reviewedBinding{ID: w.aliceBinding, Name: "alice-dev", Subject: namedRef{Kind: "user", ID: alice.UserID, Name: "alice"}, Role: namedRef{Kind: "role", ID: w.roleID, Name: "developer"}, Scope: p1},
-		Chain:   []namedRef{p1, team, {Kind: "system"}},
+		Chain:   []namedRef{p1, team, {Kind: "organization"}},
 		Subject: reviewedSubject{Kind: "user", ID: alice.UserID, Name: "alice", Subjects: alice.Subjects},
 		Action:  "keys.get", Resource: reviewedResource{Kind: "key", ID: w.keyP1, Name: "k1", Owner: &p1},
 	}

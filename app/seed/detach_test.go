@@ -52,9 +52,11 @@ func TestMarkRowsDetachesOnlyDroppedCatalogRows(t *testing.T) {
 	tenant := tierPolicy("team-policy", meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()})
 	personal := tierPolicy("my-policy", meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()})
 	org := tierPolicy("org-policy", meta.Owner{Kind: meta.OwnerOrganization})
+	// The catalog ships no system policy: one is the operator's, never dropped.
+	operator := tierPolicy("operator-default", meta.Owner{Kind: meta.OwnerSystem})
 
 	res, written := markPolicies(t, o, []string{"acme-tier-1"},
-		shipped, dropped, droppedDirty, byoTier, orphan, tenant, personal, org)
+		shipped, dropped, droppedDirty, byoTier, orphan, tenant, personal, org, operator)
 
 	if res.Detached != 2 || len(written) != 2 || written[0] != "acme-tier-0" || written[1] != "acme-tier-legacy" {
 		t.Fatalf("detached %d, written %v; want the clean and the dirty dropped catalog tiers", res.Detached, written)
@@ -65,7 +67,7 @@ func TestMarkRowsDetachesOnlyDroppedCatalogRows(t *testing.T) {
 	if !droppedDirty.Meta.Dirty {
 		t.Fatal("marking cleared the dirty flag")
 	}
-	for _, p := range []*policy.Policy{shipped, byoTier, orphan, tenant, personal, org} {
+	for _, p := range []*policy.Policy{shipped, byoTier, orphan, tenant, personal, org, operator} {
 		if p.Meta.CatalogDetachedAt != nil {
 			t.Errorf("%s was marked", p.Meta.Name)
 		}
@@ -119,6 +121,8 @@ func TestOriginFromCatalog(t *testing.T) {
 		{"Pricing", meta.Owner{Kind: meta.OwnerHost, ID: host}, true},
 		{"RateLimit", meta.Owner{Kind: meta.OwnerHost, ID: host}, true},
 		{"RateLimit", meta.Owner{Kind: meta.OwnerSystem}, false},
+		{"Policy", meta.Owner{Kind: meta.OwnerSystem}, false},
+		{"Policy", meta.Owner{Kind: meta.OwnerHost, ID: host}, true},
 		{"Host", meta.Owner{}, false},
 		{"Policy", meta.Owner{Kind: meta.OwnerProject, ID: "p1"}, false},
 		// An organization row is the admins' own, whatever kind it is.

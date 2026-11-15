@@ -24,7 +24,7 @@ type TeamSpec struct {
 // IsEnabled reports whether the team is enabled.
 func (t *Team) IsEnabled() bool { return enabled(t.Spec.Enabled) }
 
-func (t *Team) validate() error { return validateMeta("team", &t.Meta, OwnerUser, OwnerSystem) }
+func (t *Team) validate() error { return validateMeta("team", &t.Meta, OwnerUser, Global.Kind) }
 
 // Project lives in one team and owns the product's rows that carry it as their owner. Its owner is always its team.
 type Project struct {

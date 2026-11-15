@@ -12,7 +12,6 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/internal/identity"
-	"github.com/wyolet/relay/pkg/meta"
 )
 
 // loginInput is the typed body for /auth/login.
@@ -51,7 +50,7 @@ func bindingScopes(d Deps, a *actor.Actor) []string {
 	var out []string
 	for _, subj := range a.Subjects {
 		for _, b := range snap.RoleBindingsForSubject(subj) {
-			if b.Spec.Scope.Kind == meta.OwnerSystem || b.Spec.Scope.ID == "" {
+			if b.Spec.Scope.DeploymentWide() || b.Spec.Scope.ID == "" {
 				continue
 			}
 			s := string(b.Spec.Scope.Kind) + ":" + b.Spec.Scope.ID

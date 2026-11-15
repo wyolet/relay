@@ -17,8 +17,9 @@ import (
 func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
 	m := d.Metadata.ToMeta()
 	if m.Owner.Kind == "" {
-		m.Owner.Kind = meta.OwnerSystem
+		m.Owner.Kind = meta.OwnerOrganization
 	}
+	m.Owner = m.Owner.AsGlobalScope()
 	resolveScopeOwner(&m.Owner, idx)
 	hostID := d.Spec.HostID
 	if hostID != "" {

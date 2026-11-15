@@ -96,7 +96,7 @@ Writes `GET /api/export` to stdout or a file. See [Export](/concepts/gitops#expo
 | `--scope <team:id \| project:id>` | Restrict the export to one team or project. |
 | `--kinds <plurals>` | Comma-separated API plurals. Default: every exportable kind. |
 | `--format <yaml \| json>` | Output format. Default `yaml`. |
-| `--include-system` | Also include system-owned rows and catalog rows edited through the API. |
+| `--include-system` | Also include system-owned rows (the relay's own rate limits) and catalog rows edited through the API. |
 | `-o <file>` | Write to this file (mode `0600`) instead of stdout. |
 | `--url`, `--token` | See [Configuration](#configuration). |
 

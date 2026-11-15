@@ -53,12 +53,16 @@ func (m *memRateLimits) Upsert(_ context.Context, rl *ratelimit.RateLimit) error
 	if m.beforeUpsert != nil {
 		m.beforeUpsert(m)
 	}
-	for _, r := range m.rows {
+	c := *rl
+	for i, r := range m.rows {
 		if r.Meta.Name == rl.Meta.Name && r.Meta.ID != rl.Meta.ID {
 			return errors.New("duplicate key value violates unique constraint")
 		}
+		if r.Meta.ID == rl.Meta.ID {
+			m.rows[i] = &c
+			return nil
+		}
 	}
-	c := *rl
 	m.rows = append(m.rows, &c)
 	return nil
 }
@@ -137,6 +141,30 @@ func TestCreateMissingSystemRateLimitsLeavesExistingRowsAlone(t *testing.T) {
 	again, err := CreateMissingSystemRateLimits(context.Background(), store, loadShipped(t, "").Rows)
 	if err != nil || len(again) != 0 || len(store.rows) != 2 {
 		t.Fatalf("second run: created %v err %v rows %d, want nothing new", again, err, len(store.rows))
+	}
+}
+
+// A binary that did not ship a built-in name moved its row to the organization; the next boot of one that ships it takes the row back unless an operator edited it since, and changes nothing else.
+func TestCreateMissingSystemRateLimitsTakesBackABuiltinName(t *testing.T) {
+	org := meta.Owner{Kind: meta.OwnerOrganization}
+	moved := &ratelimit.RateLimit{Meta: meta.Metadata{ID: meta.NewID(), Name: "per-ip", Owner: org}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{
+		Meter: ratelimit.MeterRequests, Amount: 7, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyFixedWindow,
+	}}}}
+	edited := &ratelimit.RateLimit{Meta: meta.Metadata{ID: meta.NewID(), Name: "ceiling", Owner: org, Dirty: true}}
+	other := &ratelimit.RateLimit{Meta: meta.Metadata{ID: meta.NewID(), Name: "ops-rpm", Owner: org}}
+	wantMoved := *moved
+	wantMoved.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem}
+	wantEdited, wantOther := *edited, *other
+	store := &memRateLimits{rows: []*ratelimit.RateLimit{moved, edited, other}}
+
+	created, err := CreateMissingSystemRateLimits(context.Background(), store, loadShipped(t, "").Rows)
+	if err != nil || len(created) != 0 {
+		t.Fatalf("created %v, err %v; want nothing created", created, err)
+	}
+	for name, want := range map[string]ratelimit.RateLimit{"per-ip": wantMoved, "ceiling": wantEdited, "ops-rpm": wantOther} {
+		if got := store.byName(name); !reflect.DeepEqual(*got, want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", name, *got, want)
+		}
 	}
 }
 

@@ -468,7 +468,7 @@ var wantReports = map[string][]string{
 		"error ref_missing RoleBinding/ghost-role.spec.subjects → ServiceAccount/ghost-sa: service account \"ghost-sa\" not found",
 		"error incomplete RoleBinding/no-role.spec.role: role is required",
 		"error ref_missing RoleBinding/odd-scope.spec.role → Role/ghost: role \"ghost\" not found",
-		"error invariant RoleBinding/odd-scope.spec.scope: scope.kind must be system, team, or project, got \"host\"",
+		"error invariant RoleBinding/odd-scope.spec.scope: scope.kind must be organization, team, or project, got \"host\"",
 	},
 	"rows owned by a missing project": {
 		"error ref_missing Account/acct.metadata.owner → Project/ghost: owner project \"ghost\" not found",

@@ -72,7 +72,7 @@ func NameOf(v *engine.View, ref engine.Ref) string {
 	return ""
 }
 
-// OwnerOf returns the owner of the input object ref names in v. Users are treated as system-owned for visibility purposes; overlays and derived kinds return system owner.
+// OwnerOf returns the owner of the input object ref names in v. Users are treated as the organization's for visibility purposes; overlays and derived kinds return system owner.
 func OwnerOf(v *engine.View, ref engine.Ref) meta.Owner {
 	sys := meta.Owner{Kind: meta.OwnerSystem}
 	switch ref.Kind {
@@ -107,8 +107,8 @@ func OwnerOf(v *engine.View, ref engine.Ref) meta.Owner {
 	case KindServiceAccount:
 		return metaOwner(engine.Get[serviceaccount.ServiceAccount](v, ref.ID), func(r *serviceaccount.ServiceAccount) meta.Owner { return r.Meta.Owner }, sys)
 	case KindUser:
-		// Users are identity rows without a tenant owner; the "user" singular treats them as system-owned.
-		return sys
+		// Users are identity rows without a tenant owner; the "user" singular treats them as the organization's.
+		return meta.Global
 	case KindKey:
 		return metaOwner(engine.Get[key.Key](v, ref.ID), func(r *key.Key) meta.Owner { return r.Meta.Owner }, sys)
 	case KindRole:

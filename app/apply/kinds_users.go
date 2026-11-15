@@ -52,7 +52,7 @@ func (b *builder) planUsers(ctx context.Context, docs []*authmanifest.Document) 
 			// The write applies only while the account is as this plan read it.
 			u.ResourceVersion = current.ResourceVersion
 		}
-		e := Entry{Kind: authmanifest.KindUser, Name: name, ID: u.ID, plural: "users", owner: meta.Owner{Kind: meta.OwnerSystem}}
+		e := Entry{Kind: authmanifest.KindUser, Name: name, ID: u.ID, plural: "users", owner: meta.Global}
 		if d.Metadata.ID != "" && d.Metadata.ID != u.ID {
 			e.IDMismatch = d.Metadata.ID
 		}

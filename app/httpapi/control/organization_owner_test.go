@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +35,6 @@ func TestOrganizationOwnerByMode(t *testing.T) {
 		notAdmin  = "an organization-owned policy requires an admin"
 		orgEdit   = "policy is owned by the organization: only an admin may edit it"
 		orgDelete = "policy is owned by the organization: only an admin may delete it"
-		reserved  = "owner.kind=system is reserved for seed; omit owner.kind on create"
 		byID      = "/policies/by-id/"
 	)
 	type outcome struct {
@@ -52,7 +52,10 @@ func TestOrganizationOwnerByMode(t *testing.T) {
 		{"admin creates", "root", "POST", "/policies", orgBody, ok(201), ok(201)},
 		{"admin token creates", "token", "POST", "/policies", orgBody, ok(201), ok(201)},
 		{"a user creates", "alice", "POST", "/policies", orgBody, outcome{403, notAdmin}, outcome{403, notAdmin}},
-		{"system stays reserved", "root", "POST", "/policies", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, outcome{400, reserved}, outcome{400, reserved}},
+		// A body from before the organization owner: system names it, for an admin alone.
+		{"system names the organization", "root", "POST", "/policies", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, ok(201), ok(201)},
+		{"a user's system body", "alice", "POST", "/policies", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, outcome{403, notAdmin}, outcome{403, notAdmin}},
+		{"an admin's system body keeps an organization row", "root", "PUT", byID + orgRowID, `{"metadata":{"name":"org-row","owner":{"kind":"system"}}}`, ok(200), ok(200)},
 
 		{"admin gets", "root", "GET", "/policies/" + orgRowID, "", ok(200), ok(200)},
 		{"a user gets", "alice", "GET", "/policies/" + orgRowID, "", ok(200), hidden},
@@ -83,7 +86,7 @@ func TestOrganizationOwnerByMode(t *testing.T) {
 				if w.Code != want.status {
 					t.Fatalf("status = %d, want %d: %s", w.Code, want.status, w.Body)
 				}
-				if tc.method == "POST" || (tc.method == "PUT" && tc.body == intoOrg) {
+				if tc.method == "POST" || (tc.method == "PUT" && strings.Contains(tc.body, `"owner"`)) {
 					if got := decodeMeta(t, w, want.status); got.Owner != (meta.Owner{Kind: meta.OwnerOrganization}) {
 						t.Fatalf("owner = %+v, want the organization", got.Owner)
 					}
@@ -124,9 +127,10 @@ func TestOrganizationRowsListedForAdminsOnly(t *testing.T) {
 	}
 }
 
-// Only policies, rate limits, budgets and pools take an organization owner; the kind is checked before the caller, so an admin hears the same 400.
+// The deployment's own kinds take an organization owner and the catalog's and the derived ones refuse it; the kind is checked before the caller, so an admin hears the same 400.
 func TestOrganizationOwnerKinds(t *testing.T) {
 	body := `{"metadata":{"name":"org-row","owner":{"kind":"organization"}}}`
+	refused := func(singular string) string { return singular + " cannot be owned by the organization" }
 	for _, tc := range []struct {
 		plural, singular string
 		status           int
@@ -136,9 +140,16 @@ func TestOrganizationOwnerKinds(t *testing.T) {
 		{"rate-limits", "rate-limit", 201, ""},
 		{"budgets", "budget", 201, ""},
 		{"pools", "pool", 201, ""},
-		{"host-keys", "host-key", 400, "host-key cannot be owned by the organization; only policies, rate limits, budgets and pools can"},
-		{"accounts", "account", 400, "account cannot be owned by the organization; only policies, rate limits, budgets and pools can"},
-		{"hosts", "host", 400, "host cannot be owned by the organization; only policies, rate limits, budgets and pools can"},
+		{"host-keys", "host-key", 201, ""},
+		{"accounts", "account", 201, ""},
+		{"teams", "team", 201, ""},
+		{"groups", "group", 201, ""},
+		{"roles", "role", 201, ""},
+		{"policy-bindings", "policy-binding", 201, ""},
+		{"hosts", "host", 400, refused("host")},
+		{"models", "model", 400, refused("model")},
+		{"keys", "key", 400, refused("key")},
+		{"projects", "project", 400, refused("project")},
 	} {
 		t.Run(tc.plural, func(t *testing.T) {
 			h, store := newThingHarness(t, testRBAC(), tc.plural, tc.singular, noSettings{})
@@ -157,7 +168,7 @@ func TestOrganizationOwnerKinds(t *testing.T) {
 	}
 }
 
-// The owner check policy duplication shares with create: a 400 for a kind the organization owns no rows of, a 403 for a non-admin in either mode.
+// The owner check policy duplication shares with create: a 400 for a kind the organization owns no rows of, a 403 for a non-admin in either mode on the admin-only kinds, and nothing for the rest, whose grant the authorizer decides.
 func TestRefuseOrganizationOwner(t *testing.T) {
 	org := meta.Owner{Kind: meta.OwnerOrganization}
 	for _, tc := range []struct {
@@ -174,8 +185,9 @@ func TestRefuseOrganizationOwner(t *testing.T) {
 		{"user, single mode", "alice", authz.AlwaysAllowAuthenticated{}, "policy", org, 403},
 		{"admin, single mode", "root", authz.AlwaysAllowAuthenticated{}, "policy", org, 0},
 		{"global admin binding", "granted", globalAdminRBAC(t), "policy", org, 0},
-		{"admin, policy binding", "root", testRBAC(), "policy-binding", org, 400},
-		{"user, policy binding", "alice", testRBAC(), "policy-binding", org, 400},
+		{"admin, host", "root", testRBAC(), "host", org, 400},
+		{"user, policy binding", "alice", testRBAC(), "policy-binding", org, 0},
+		{"user, team", "alice", testRBAC(), "team", org, 0},
 		{"another owner is not judged", "alice", testRBAC(), "host-key", meta.Owner{Kind: meta.OwnerUser}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

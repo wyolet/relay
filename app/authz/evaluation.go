@@ -13,7 +13,7 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-var globalScope = rbac.Scope{Kind: string(meta.OwnerSystem)}
+var globalScope = rbac.Scope{Kind: string(meta.Global.Kind)}
 
 // evaluation is one decision's view of the catalog for the rbac engine: its Source and ScopeResolver over a snapshot read at most once, so every lookup in the decision sees the same one. The buffers back the slices it hands the engine, which is done with each before the next call; pooling them keeps a decision free of conversion allocations.
 type evaluation struct {
@@ -142,7 +142,7 @@ func globalRole(snap Snapshot, subjects []string, match func(*role.Role) bool) b
 	}
 	for _, s := range subjects {
 		for _, b := range snap.RoleBindingsForSubject(s) {
-			if b.Spec.Scope != (meta.Owner{Kind: meta.OwnerKind(globalScope.Kind)}) {
+			if b.Spec.Scope != meta.Global {
 				continue
 			}
 			if r, ok := snap.Role(b.Spec.RoleID); ok && match(r) {

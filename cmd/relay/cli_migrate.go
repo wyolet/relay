@@ -64,6 +64,11 @@ func runMigrate(args []string) error {
 		slog.Info("migrate: schema version recorded", "version", version)
 		return nil
 	}
+	if version < organizationVersion {
+		if err := refuseOrganizationSealed(dsn, version); err != nil {
+			return err
+		}
+	}
 	if version < keyRingVersion {
 		if err := refuseSealedSecrets(dsn, version); err != nil {
 			return err
@@ -99,6 +104,31 @@ func refuseSealedSecrets(dsn string, target uint64) error {
 	}
 	if n > 0 {
 		return fmt.Errorf("migrate down: %d stored secrets are sealed under data keys, which schema %d cannot read; run `relay secret downgrade` first", n, target)
+	}
+	return nil
+}
+
+// organizationVersion is the schema version that seals the organization's host keys under its own data key.
+const organizationVersion = 45
+
+// refuseOrganizationSealed stops a rollback below organizationVersion while stored secrets are sealed under the organization's data key, which migration 45's down refuses too, leaving golang-migrate's version dirty.
+func refuseOrganizationSealed(dsn string, target uint64) error {
+	ctx := context.Background()
+	st, err := storagemod.Open(ctx, dsn, storagemod.WithMigrateOnBoot(false))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	b, err := stored.New(st.Pool(), nil)
+	if err != nil {
+		return err
+	}
+	n, err := b.OrganizationSealedRows(ctx)
+	if err != nil {
+		return fmt.Errorf("migrate down: count organization-sealed stored secrets: %w", err)
+	}
+	if n > 0 {
+		return fmt.Errorf("migrate down: %d stored secrets are sealed under the organization's data key, which schema %d does not know; run `relay secret organization-to-system` first", n, target)
 	}
 	return nil
 }

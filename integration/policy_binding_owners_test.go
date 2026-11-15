@@ -1,6 +1,6 @@
 //go:build integration
 
-// policy_binding_owners_test.go drives policy-binding owners through the control API under RELAY_AUTHZ=rbac: a team admin binds within their team, only a system-scope grant makes a system-owned binding, and accounts and policies outside the owner's scope are refused.
+// policy_binding_owners_test.go drives policy-binding owners through the control API under RELAY_AUTHZ=rbac: a team admin binds within their team, the organization's policies are bound by an admin, and accounts and policies outside the owner's scope are refused.
 
 package integration_test
 
@@ -49,6 +49,7 @@ func TestIntegration_PolicyBindingOwners(t *testing.T) {
 		return row.Metadata.ID
 	}
 	shared := mkPolicy("owners-shared", "")
+	ownPolicy := mkPolicy("owners-a-policy", `,"owner":{"kind":"team","id":"`+teamA+`"}`)
 	siblings := mkPolicy("owners-b-policy", `,"owner":{"kind":"team","id":"`+teamB+`"}`)
 
 	leadID := st.seedLogin(t, "owners-lead", "pw-owners-lead")
@@ -73,9 +74,12 @@ func TestIntegration_PolicyBindingOwners(t *testing.T) {
 		want      int
 		wantOwner string
 	}{
-		{"a team admin binds within the team", lead.do, binding("owners-team", ownTeam, shared, projectA), http.StatusCreated, "team"},
-		{"a team admin cannot make a system binding", lead.do, binding("owners-sys-lead", system, shared, teamAccount), http.StatusForbidden, ""},
-		{"the operator binds a provider account from the system", st.adminDo, binding("owners-sys-org", system, shared, orgs["owners-org"]), http.StatusCreated, "system"},
+		{"a team admin binds within the team", lead.do, binding("owners-team", ownTeam, ownPolicy, projectA), http.StatusCreated, "team"},
+		// The admin token's policy is the organization's, which only an admin sees.
+		{"a team admin cannot bind the organization's policy", lead.do, binding("owners-team-org", ownTeam, shared, teamAccount), http.StatusNotFound, ""},
+		{"the operator binds the organization's policy in a team", st.adminDo, binding("owners-team-shared", ownTeam, shared, teamAccount), http.StatusCreated, "team"},
+		{"a team admin cannot make a global binding", lead.do, binding("owners-sys-lead", system, ownPolicy, teamAccount), http.StatusBadRequest, ""},
+		{"the operator binds a provider account globally", st.adminDo, binding("owners-sys-org", system, shared, orgs["owners-org"]), http.StatusCreated, "organization"},
 		{"a project binding names a provider account it does not own", st.adminDo, binding("owners-project-org", ownProject, shared, orgs["owners-other-org"]), http.StatusBadRequest, ""},
 		{"a project binding names another project's service account", st.adminDo, binding("owners-project-sa", ownProject, shared, st.accountAt(t, "service:"+saB)), http.StatusBadRequest, ""},
 		{"a team binding uses a sibling team's policy", st.adminDo, binding("owners-sibling", ownTeam, siblings, teamAccount), http.StatusBadRequest, ""},
@@ -99,7 +103,7 @@ func TestIntegration_PolicyBindingOwners(t *testing.T) {
 	}
 }
 
-// A project admin may read a system policy to bind it, but not one linking another team's pool: binding it would put the project's traffic on that team's credentials.
+// The organization's policies are an admin's to bind: a project admin does not see them, and even an admin cannot bind one linking another team's pool in the project, which would put the project's traffic on that team's credentials.
 func TestIntegration_PolicyBindingRefusesAnotherTeamsPool(t *testing.T) {
 	t.Parallel()
 	st := newStackAuthz(t, "rbac")
@@ -136,15 +140,20 @@ func TestIntegration_PolicyBindingRefusesAnotherTeamsPool(t *testing.T) {
 	binding := func(name, policyID string) string {
 		return `{"metadata":{"name":"` + name + `","owner":{"kind":"project","id":"` + projA + `"}},"spec":{"policyId":"` + policyID + `","accountIds":["` + projAccount + `"]}}`
 	}
-	if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-pool", borrowing)); code != http.StatusBadRequest || !strings.Contains(string(raw), "uses a pool you cannot see") {
-		t.Fatalf("binding a system policy on another team's pool = %d, want 400 refusing the pool without naming it: %s", code, raw)
+	for _, id := range []string{borrowing, plain} {
+		if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-hidden", id)); code != http.StatusNotFound {
+			t.Fatalf("a project admin binding an organization policy = %d, want 404: %s", code, raw)
+		}
 	}
-	if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-plain", plain)); code != http.StatusCreated {
-		t.Fatalf("binding a system policy without links = %d, want 201: %s", code, raw)
+	if code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings", binding("borrow-pool", borrowing)); code != http.StatusBadRequest || !strings.Contains(string(raw), "borrow-b-pool") {
+		t.Fatalf("binding an organization policy on another team's pool = %d, want 400 naming the pool: %s", code, raw)
+	}
+	if code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings", binding("borrow-plain", plain)); code != http.StatusCreated {
+		t.Fatalf("binding an organization policy without links = %d, want 201: %s", code, raw)
 	}
 }
 
-// A binding created without metadata.owner takes the default other kinds do: system for the admin token, the caller's own user owner for a signed-in user.
+// A binding created without metadata.owner takes the default other kinds do: the organization for the admin token, the caller's own user owner for a signed-in user.
 func TestIntegration_PolicyBindingOmittedOwnerDefaults(t *testing.T) {
 	t.Parallel()
 	st := newStack(t)
@@ -173,7 +182,7 @@ func TestIntegration_PolicyBindingOmittedOwnerDefaults(t *testing.T) {
 		accountID        string
 		wantKind, wantID string
 	}{
-		{"the admin token", st.adminDo, shared.Metadata.ID, st.accountAt(t, "team:"+teamID), "system", ""},
+		{"the admin token", st.adminDo, shared.Metadata.ID, st.accountAt(t, "team:"+teamID), "organization", ""},
 		{"a signed-in user", alice.do, own.Metadata.ID, st.accountAt(t, "personal:"+aliceID), "user", aliceID},
 	} {
 		row := create(tc.as, "/api/policy-bindings", `{"metadata":{"name":"default-`+strings.ReplaceAll(tc.name, " ", "-")+`"},"spec":{"policyId":"`+tc.policyID+`","accountIds":["`+tc.accountID+`"]}}`)

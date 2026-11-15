@@ -48,7 +48,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rows.add(registerKind[team.Team](
 		api, "teams", "team", dk.teams, d.Authz, tmeta,
 		func(t *team.Team) error { return t.Validate() },
-		meta.OwnerSystem,
+		meta.OwnerOrganization,
 		listScanResolver(d.Stores.Team, tmeta),
 		nil,
 		nil,
@@ -99,7 +99,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rows.add(registerKind[group.Group](
 		api, "groups", "group", dk.groups, d.Authz, gmeta,
 		func(g *group.Group) error { return g.Validate() },
-		meta.OwnerSystem,
+		meta.OwnerOrganization,
 		listScanResolver(d.Stores.Group, gmeta),
 		guardGroup(d),
 		nil,
@@ -116,7 +116,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rows.add(registerKind[role.Role](
 		api, "roles", "role", dk.roles, d.Authz, rolemeta,
 		func(r *role.Role) error { return r.Validate() },
-		meta.OwnerSystem,
+		meta.OwnerOrganization,
 		listScanResolver(d.Stores.Role, rolemeta),
 		guardRole(d),
 		nil,

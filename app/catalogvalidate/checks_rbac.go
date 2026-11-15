@@ -58,10 +58,10 @@ func checkScopeTarget(g *graph, src Ref, scope manifest.WireOwner) []Issue {
 				Target:  Ref{Kind: "Project", Name: name},
 				Message: fmt.Sprintf("project %q not found", name)}}
 		}
-	case "system", "":
+	case "organization", "system", "":
 	default:
 		return []Issue{{Severity: SeverityError, Kind: KindInvariant, Source: field,
-			Message: fmt.Sprintf("scope.kind must be system, team, or project, got %q", scope.Kind)}}
+			Message: fmt.Sprintf("scope.kind must be organization, team, or project, got %q", scope.Kind)}}
 	}
 	return nil
 }

@@ -34,10 +34,33 @@ func SharedCatalogKind(kind string) bool { return sharedCatalogKinds[plural(kind
 // organizationKinds are the kinds whose rows the organization may own.
 var organizationKinds = map[string]bool{
 	"policies": true, "rate-limits": true, "budgets": true, "pools": true,
+	"host-keys": true, "accounts": true, "teams": true, "groups": true,
+	"roles": true, "role-bindings": true, "policy-bindings": true,
+}
+
+// organizationAdminKinds are the organization kinds whose organization rows only admins see or write. The rest keep what global role bindings grant on them.
+var organizationAdminKinds = map[string]bool{
+	"policies": true, "rate-limits": true, "budgets": true, "pools": true,
 }
 
 // OrganizationKind reports whether rows of kind (the singular handlers pass) may be owned by the organization.
 func OrganizationKind(kind string) bool { return organizationKinds[plural(kind)] }
+
+// OrganizationAdminOnly reports whether the organization's rows of kind (the singular handlers pass) are for admins alone.
+func OrganizationAdminOnly(kind string) bool { return organizationAdminKinds[plural(kind)] }
+
+// systemReadsAsOrganization are the kinds whose system rows the upgrade to the organization owner moved, so a system owner written for one (an export or body from before) names the organization. Roles stay out: the built-ins are system rows.
+var systemReadsAsOrganization = map[string]bool{
+	"policies": true, "rate-limits": true, "budgets": true, "pools": true,
+	"host-keys": true, "accounts": true, "teams": true, "groups": true,
+	"role-bindings": true, "policy-bindings": true,
+}
+
+// SystemMeansOrganization reports whether a system owner written for a row of kind (the singular handlers pass) names the organization. stored is the owner of the row it would write, empty for a new one: a rate limit stored system-owned is one of the built-ins, which stay system.
+func SystemMeansOrganization(kind string, stored meta.Owner) bool {
+	k := plural(kind)
+	return systemReadsAsOrganization[k] && !(k == "rate-limits" && stored.Kind == meta.OwnerSystem)
+}
 
 // scopedKinds are the kinds whose lists are filtered row by row through
 // Visible. Asking for such a list is safe for any authenticated caller: what

@@ -137,6 +137,6 @@ func deleteRow[T any](ctx context.Context, d *Directory, s Store[T], kind Kind, 
 
 func defaultOwner(m *Metadata) {
 	if m.Owner.Kind == "" {
-		m.Owner.Kind = OwnerSystem
+		m.Owner.Kind = Global.Kind
 	}
 }

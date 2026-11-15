@@ -52,8 +52,8 @@ Every row has an **owner**, and the owner decides who may change it.
 
 | Owner kind | Rows | Who may edit or delete |
 | --- | --- | --- |
-| `system` | Providers, hosts and host bindings from the catalog, the shipped system rate limits, and rows the admin token creates | Admins only. A delete is refused while anything references the row |
-| `organization` | Policies, rate limits, budgets and pools an admin made for the whole deployment. Only admins see them (the limits reads show their numbers, not their names); every scope may use them. Catalog upgrades and pruning never touch them, and a catalog document of the same name is skipped | Admins only |
+| `system` | Providers, hosts and host bindings from the catalog, the shipped system rate limits and the built-in roles | Admins only. A delete is refused while anything references the row |
+| `organization` | The deployment itself, which is also the global scope: teams, groups, custom roles, role and policy bindings at the global scope, provider accounts and host keys no tenant owns, and the rows the admin token creates. Its policies, rate limits, budgets and pools are visible to admins only (the limits reads show their numbers, not their names); every scope may use them. Catalog upgrades and pruning never touch these rows, and a catalog document of the same name is skipped | Admins only, except teams, groups and roles, which RBAC decides like tenant rows |
 | `provider`, `host` | Catalog data: models are provider-owned; pricing, tier policies and their rate limits are host-owned | Edits are allowed and deletes refused by default. `governance:model` and `governance:policy` change that for models and tier policies (`allowEdit`, `allowDelete`); see [Settings](/reference/settings) |
 | `user`, `team`, `project` | Tenant rows created by people: host keys, relay keys, policies, policy bindings, rate limits, budgets, accounts and pools. Projects are owned by their team. Team and project owners are what RBAC scopes on | The owner, subject to [RBAC](/concepts/auth#authorization) |
 

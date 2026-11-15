@@ -71,6 +71,7 @@ func (d Deps) duplicatePolicy(ctx context.Context, ref string, in duplicatePolic
 		m.Owner = *in.Owner
 	}
 	// The owner rules of POST /policies, whose default owner kind is user.
+	readSystemAsGlobal("policy", &m.Owner, meta.Owner{})
 	if m.Owner.Kind == meta.OwnerSystem {
 		return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 	}

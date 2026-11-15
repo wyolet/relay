@@ -234,7 +234,7 @@ func (od *oidcDeps) linkProvisioned(ctx context.Context, c oidc.Claims) (*user.U
 	}
 	u.OIDCSubject = subject
 	slog.Info("oidc: sign-in linked to a provisioned account", "username", u.Username)
-	owner := meta.Owner{Kind: meta.OwnerSystem}
+	owner := meta.Global
 	audit.RecordExtra(ctx, audit.Row{
 		Action:   "users.update",
 		Resource: audit.Resource{Kind: "user", ID: u.ID, Name: u.Username, Owner: &owner},

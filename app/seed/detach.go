@@ -122,8 +122,9 @@ func (o origin) fromCatalog(kind string, m *meta.Metadata) bool {
 	switch m.Owner.Kind {
 	case meta.OwnerSystem:
 		// System rate limits are the relay's own rows, created at boot from
-		// its built-in definitions, never catalog data.
-		return kind != "RateLimit"
+		// its built-in definitions, and system policies the operator's: the
+		// catalog ships both host-owned (catalogvalidate refuses a system one).
+		return kind != "RateLimit" && kind != "Policy"
 	case meta.OwnerProvider:
 		parent, ok := o.providers[m.Owner.ID]
 		return ok && catalogOwner(parent)

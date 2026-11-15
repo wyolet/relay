@@ -62,14 +62,15 @@ func TestValidate(t *testing.T) {
 		{"known kinds and verbs", fix(Rule{Kinds: []string{"keys", "policies"}, Verbs: []string{"get", "list"}}), ""},
 		{"wildcards", fix(Rule{Kinds: []string{"*"}, Verbs: []string{"*"}}), ""},
 		{"system owner", ownedBy(meta.Owner{Kind: meta.OwnerSystem}), ""},
+		{"organization owner", ownedBy(meta.Global), ""},
 		{"unknown kind", fix(keysGet, Rule{Kinds: []string{"keys", "widgets"}, Verbs: []string{"get"}}), "Key: 'Role.Spec.Rules[1].Kinds[1]' Error:Field validation for 'Kinds[1]' failed on the 'rbackind' tag"},
 		{"singular kind", fix(Rule{Kinds: []string{"key"}, Verbs: []string{"get"}}), "Key: 'Role.Spec.Rules[0].Kinds[0]' Error:Field validation for 'Kinds[0]' failed on the 'rbackind' tag"},
 		{"unknown verb", fix(Rule{Kinds: []string{"keys"}, Verbs: []string{"frobnicate"}}), "Key: 'Role.Spec.Rules[0].Verbs[0]' Error:Field validation for 'Verbs[0]' failed on the 'rbacverb' tag"},
 		{"no rules", fix(), "Key: 'Role.Spec.Rules' Error:Field validation for 'Rules' failed on the 'required' tag"},
 		{"a rule without kinds", fix(Rule{Verbs: []string{"get"}}), "Key: 'Role.Spec.Rules[0].Kinds' Error:Field validation for 'Kinds' failed on the 'required' tag"},
 		{"a rule without verbs", fix(Rule{Kinds: []string{"keys"}, Verbs: []string{}}), "Key: 'Role.Spec.Rules[0].Verbs' Error:Field validation for 'Verbs' failed on the 'min' tag"},
-		{"project owner", ownedBy(meta.Owner{Kind: meta.OwnerProject, ID: "01a19bc3-0000-7000-8000-000000000002"}), `role "custom": owner.kind must be system or user, got "project"`},
-		{"no owner", ownedBy(meta.Owner{}), `role "custom": owner.kind must be system or user, got ""`},
+		{"project owner", ownedBy(meta.Owner{Kind: meta.OwnerProject, ID: "01a19bc3-0000-7000-8000-000000000002"}), `role "custom": owner.kind must be system, organization or user, got "project"`},
+		{"no owner", ownedBy(meta.Owner{}), `role "custom": owner.kind must be system, organization or user, got ""`},
 	} {
 		got := ""
 		if err := tc.role.Validate(); err != nil {

@@ -13,6 +13,7 @@ import "github.com/wyolet/relay/app/catalogvalidate"
 // Rules is the curation rule set run through catalogvalidate.RunRules.
 var Rules = []catalogvalidate.Rule{
 	hostHasTierPolicy,
+	hostOwnedLimits,
 	pricingTargetMustBindToHost,
 	providerIconSet,
 }

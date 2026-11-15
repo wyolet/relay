@@ -12,7 +12,7 @@ import (
 // Account / Pool / Budget
 // ---------------------------------------------------------------------------
 
-// ToAccount resolves the host name. A document with no host names a caller account, whose holder and kind the loader takes from the stored row. A provider account with no owner is the system's, as a host key with none is, so the two documents pair up as written.
+// ToAccount resolves the host name. A document with no host names a caller account, whose holder and kind the loader takes from the stored row. A provider account with no owner, or one owned by system, is the organization's, as such a host key is, so the two documents pair up as written.
 func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
 	var hostID string
 	if d.Spec.Host != "" {
@@ -24,8 +24,9 @@ func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
 	}
 	m := d.Metadata.ToMeta()
 	if m.Owner.Kind == "" && hostID != "" {
-		m.Owner.Kind = meta.OwnerSystem
+		m.Owner.Kind = meta.OwnerOrganization
 	}
+	m.Owner = m.Owner.AsGlobalScope()
 	resolveScopeOwner(&m.Owner, idx)
 	a := &account.Account{
 		Meta: m,

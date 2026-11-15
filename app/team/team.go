@@ -29,15 +29,15 @@ type Spec struct {
 func (t *Team) IsEnabled() bool { return t.Spec.Enabled == nil || *t.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is user or system.
+//   - Owner.Kind is user or organization (system, its earlier name, is read as it).
 func (t *Team) Validate() error {
 	if err := meta.Validator.Struct(t); err != nil {
 		return err
 	}
-	switch t.Meta.Owner.Kind {
-	case meta.OwnerUser, meta.OwnerSystem:
+	switch t.Meta.Owner.AsGlobalScope().Kind {
+	case meta.OwnerUser, meta.OwnerOrganization:
 	default:
-		return fmt.Errorf("team %q: owner.kind must be user or system, got %q", t.Meta.Name, t.Meta.Owner.Kind)
+		return fmt.Errorf("team %q: owner.kind must be user or organization, got %q", t.Meta.Name, t.Meta.Owner.Kind)
 	}
 	return nil
 }
