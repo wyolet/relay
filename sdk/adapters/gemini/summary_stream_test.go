@@ -29,6 +29,11 @@ func TestGeminiSummaryFrame(t *testing.T) {
 		{"finish named in text", `data: {"candidates":[{"content":{"parts":[{"text":"\"finishReason\":\"STOP\""}]}}]}`, false},
 		{"functionCall null", `data: {"candidates":[{"content":{"parts":[{"text":"hi","functionCall":null}]}}]}`, false},
 		{"second candidate finishing", `data: {"candidates":[{"content":{"parts":[{"text":"a"}]}},{"finishReason":"STOP"}]}`, false},
+		{"promptFeedback null", `data: {"promptFeedback":null,"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`, false},
+		{"prompt feedback beside a candidate", `data: {"promptFeedback":{"safetyRatings":[]},"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`, true},
+		{"functionCall after role", `data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"f","args":{}}}]}}]}`, true},
+		{"unreadable part", `data: {"candidates":[{"content":{"parts":[{"text"}]}}]}`, true},
+		{"parts not an array", `data: {"candidates":[{"content":{"parts":{}}}]}`, true},
 		{"finish", `data: {"candidates":[{"content":{"parts":[{"text":""}]},"finishReason":"STOP"}],` + geminiUsage + `}`, true},
 		{"finish key case", `data: {"candidates":[{"content":{"parts":[]},"FinishReason":"STOP"}]}`, true},
 		{"content null", `data: {"candidates":[{"content":null}],` + geminiUsage + `}`, true},
@@ -38,8 +43,8 @@ func TestGeminiSummaryFrame(t *testing.T) {
 		{"error", `data: {"error":{"code":429,"message":"quota","status":"RESOURCE_EXHAUSTED"}}`, true},
 		{"no candidates", `data: {` + geminiUsage + `}`, true},
 		{"empty candidates", `data: {"candidates":[]}`, true},
-		{"duplicate candidates", `data: {"candidates":[{"content":{"parts":[]}}],"candidates":[{"index":0}]}`, true},
-		{"duplicate content", `data: {"candidates":[{"content":{"parts":[]},"content":null}]}`, true},
+		{"duplicate candidates", `data: {"candidates":[{"content":{"parts":[]}}],"candidates":[{"content":{"parts":[]}}]}`, true},
+		{"duplicate content", `data: {"candidates":[{"content":{"parts":[]},"content":{"parts":[]}}]}`, true},
 		{"truncated", `data: {"candidates":[{"content":{"parts":[{"text":"h`, true},
 	}
 	for _, tc := range cases {
