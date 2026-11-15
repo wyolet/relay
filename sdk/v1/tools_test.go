@@ -106,6 +106,8 @@ func TestToolChoice_JSON(t *testing.T) {
 		{wire: `{"type":"function","name":"get_weather"}`, want: ToolChoice{Mode: "function", FunctionName: "get_weather"}},
 		{wire: `"any"`, want: ToolChoice{Mode: "any"}},
 		{wire: `{"type":"allowed","name":"x"}`, want: ToolChoice{Mode: "allowed", FunctionName: "x"}, rewire: `"allowed"`},
+		{wire: `{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"a"},{"type":"function","name":"b"}]}`, want: ToolChoice{Mode: "auto", Allowed: []string{"a", "b"}}},
+		{wire: `{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"a"}]}`, want: ToolChoice{Mode: "required", Allowed: []string{"a"}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.wire, func(t *testing.T) {
@@ -113,8 +115,8 @@ func TestToolChoice_JSON(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.wire), &got); err != nil {
 				t.Fatal(err)
 			}
-			if got != tc.want {
-				t.Errorf("choice = %+v, want %+v", got, tc.want)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("choice (-want +got):\n%s", diff)
 			}
 			rewire := tc.rewire
 			if rewire == "" {
@@ -127,4 +129,11 @@ func TestToolChoice_JSON(t *testing.T) {
 	var tc ToolChoice
 	wantErr(t, json.Unmarshal([]byte(`5`), &tc), "tool_choice object: json: cannot unmarshal number…")
 	wantErr(t, json.Unmarshal([]byte(`{"type":1}`), &tc), "tool_choice object: json: cannot unmarshal number…")
+	wantErr(t, json.Unmarshal([]byte(`{"type":"allowed_tools","mode":"none","tools":[{"type":"function","name":"a"}]}`), &tc), `tool_choice allowed_tools: mode "none", want auto or required`)
+	wantErr(t, json.Unmarshal([]byte(`{"type":"allowed_tools","mode":"auto","tools":[]}`), &tc), "tool_choice allowed_tools: tools is empty")
+	wantErr(t, json.Unmarshal([]byte(`{"type":"allowed_tools","mode":"auto","tools":[{"type":"mcp","name":"a"}]}`), &tc), `tool_choice allowed_tools: tools[0]: want a named function tool, got type "mcp"`)
+
+	// Allowed is ignored with a mode that does not choose among tools.
+	wantJSON(t, ToolChoice{Mode: "function", FunctionName: "a", Allowed: []string{"a"}}, `{"type":"function","name":"a"}`)
+	wantJSON(t, ToolChoice{Mode: "none", Allowed: []string{"a"}}, `"none"`)
 }

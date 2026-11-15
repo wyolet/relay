@@ -147,9 +147,10 @@ func (tc ResponsesToolChoice) MarshalJSON() ([]byte, error) {
 		return json.Marshal("auto")
 	}
 	// Reconstructed from canonical (Raw is lost across the canonical round-trip,
-	// which carries only Mode): emit the minimal object form. Sufficient for a
-	// hosted-tool choice (just {type}); the sub-fields of allowed_tools/mcp/custom
-	// are an irreducible drop through canonical.
+	// which carries only Mode; allowed_tools travels as ToolChoice.Allowed and is
+	// rebuilt with Raw set): emit the minimal object form. Sufficient for a
+	// hosted-tool choice (just {type}); the sub-fields of mcp/custom are an
+	// irreducible drop through canonical.
 	// canonical: tool_choice object sub-fields dropped — no canonical field.
 	return json.Marshal(struct {
 		Type string `json:"type"`

@@ -44,6 +44,7 @@ func TestSerializeRequest_CanonicalFieldFidelity(t *testing.T) {
 			"ModelConfig.Output.Verbosity":          "no verbosity control",
 			"Tools.Definitions.Strict":              "tools take no strict flag",
 			"Tools.Definitions.ProviderData":        "another vendor's tool definition",
+			"Tools.Choice.Allowed":                  "moot: the fixture's choice forces one tool",
 			"CacheConfig.Key":                       "deterministic breakpoints need no routing key",
 			"Metadata":                              "metadata accepts user_id only",
 			"Extensions":                            "no Anthropic-owned keys (rule 7)",

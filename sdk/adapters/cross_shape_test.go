@@ -16,6 +16,8 @@ const (
 	chatSchemaReq   = `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":` + answerSchema + `,"strict":true}}`
 	messagesFormat  = `"output_config":{"format":{"type":"json_schema","schema":` + answerSchema + `}}`
 	messagesHiTurns = `"messages":[{"role":"user","content":"hi"}]`
+	chatTwoTools    = `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"a","parameters":{"type":"object"}}},{"type":"function","function":{"name":"b","parameters":{"type":"object"}}}]`
+	geminiHiTurn    = `"contents":[{"role":"user","parts":[{"text":"hi"}]}]`
 )
 
 // A request parsed from one shape serializes to another shape's exact wire body, or is refused.
@@ -54,6 +56,25 @@ func TestCrossShapeRequest(t *testing.T) {
 			from: "openai-chat", to: "anthropic",
 			body: chatSchemaReq + `,"tools":[{"type":"function","function":{"name":"lookup","description":"look up","parameters":{"type":"object"}}}],"tool_choice":{"type":"function","function":{"name":"lookup"}}}`,
 			want: `{"model":"m","max_tokens":4096,` + messagesHiTurns + `,"tools":[{"name":"lookup","description":"look up","input_schema":{"type":"object"}}],"tool_choice":{"type":"tool","name":"lookup"},` + messagesFormat + `}`,
+		},
+		{
+			name: "chat allowed_tools reaches Messages as only the allowed tools",
+			from: "openai-chat", to: "anthropic",
+			body: chatTwoTools + `,"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"b"}}]}}}`,
+			want: `{"model":"m","max_tokens":4096,` + messagesHiTurns + `,"tools":[{"name":"b","input_schema":{"type":"object"}}],"tool_choice":{"type":"any"}}`,
+		},
+		{
+			name: "chat required allowed_tools reaches Gemini as allowedFunctionNames",
+			from: "openai-chat", to: "gemini",
+			body: chatTwoTools + `,"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"b"}},{"type":"function","function":{"name":"a"}}]}}}`,
+			want: `{` + geminiHiTurn + `,"tools":[{"functionDeclarations":[{"name":"a","parameters":{"type":"object"}},{"name":"b","parameters":{"type":"object"}}]}],
+				"toolConfig":{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["b","a"]}}}`,
+		},
+		{
+			name: "chat auto allowed_tools reaches Gemini as only the allowed declarations",
+			from: "openai-chat", to: "gemini",
+			body: chatTwoTools + `,"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"b"}}]}}}`,
+			want: `{` + geminiHiTurn + `,"tools":[{"functionDeclarations":[{"name":"b","parameters":{"type":"object"}}]}],"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}`,
 		},
 		{
 			name: "responses json_schema and effort reach chat",

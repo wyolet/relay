@@ -97,6 +97,16 @@ func TestCCParseRequest(t *testing.T) {
 			wire: `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"tool_choice":"required"}`,
 		},
 		{
+			name: "allowed_tools tool_choice",
+			body: `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}},{"type":"function","function":{"name":"g"}}],
+				"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"g"}}]}}}`,
+			canon: `{"model":"m","output_mode":"sync","input":null,"tools":{
+				"definitions":[{"type":"function","name":"f","parameters":{}},{"type":"function","name":"g","parameters":{}}],
+				"choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"g"}]}}}`,
+			wire: `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","parameters":{}}},{"type":"function","function":{"name":"g","parameters":{}}}],
+				"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"g"}}]}}}`,
+		},
+		{
 			name: "json_schema response format with verbosity",
 			body: `{"model":"m","messages":[],"verbosity":"high","response_format":{"type":"json_schema","json_schema":{"name":"out","description":"d","schema":{"type":"object"},"strict":true}}}`,
 			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{"output":{"verbosity":"high",
@@ -154,7 +164,6 @@ func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 		},
 		{
 			name: "allowed_tools tool_choice",
-			bug:  `tool_choice {"type":"allowed_tools","allowed_tools":{...}} → "tool_choice":"allowed_tools", the tool list lost`,
 			body: `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
 			keep: `"allowed_tools":{`,
 		},
@@ -196,6 +205,9 @@ func TestCCParseRequest_Errors(t *testing.T) {
 		"mistyped user content": `{"model":"m","messages":[{"role":"user","content":5}]}`,
 		"mistyped tool content": `{"model":"m","messages":[{"role":"tool","tool_call_id":"c","content":{}}]}`,
 		"mistyped tool_choice":  `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":5}`,
+		"allowed custom tool":   `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"custom","custom":{"name":"g"}}]}}}`,
+		"empty allowed list":    `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[]}}}`,
+		"allowed mode none":     `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"none","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
 	} {
 		if req, err := (CCTranslator{}).ParseRequest([]byte(body)); err == nil {
 			t.Errorf("%s: want an error, got %s", name, mustJSON(req))

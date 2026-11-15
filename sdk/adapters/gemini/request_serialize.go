@@ -89,11 +89,15 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 
 	// Tools are task-level (req.Tools), shared across models — not per-model.
 	if tc := req.Tools; tc != nil {
+		autoAllowed := autoAllowedNames(tc.Choice)
 		var decls []functionDeclaration
 		for _, tool := range tc.Definitions {
 			ft, ok := tool.(*v1.FunctionTool)
 			if !ok {
 				return nil, fmt.Errorf("gemini serialize_request: unsupported tool type %T", tool)
+			}
+			if autoAllowed != nil && !autoAllowed[ft.Name] {
+				continue
 			}
 			schema := ft.Parameters
 			if schema == nil {
@@ -143,6 +147,18 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// autoAllowedNames returns the tools an auto choice is limited to, or nil when it is not. Gemini takes allowedFunctionNames only with ANY or VALIDATED (which adds constrained decoding auto lacks), so an auto choice is limited by sending only these declarations.
+func autoAllowedNames(tc *v1.ToolChoice) map[string]bool {
+	if tc == nil || tc.Mode != "auto" || len(tc.Allowed) == 0 {
+		return nil
+	}
+	names := make(map[string]bool, len(tc.Allowed))
+	for _, n := range tc.Allowed {
+		names[n] = true
+	}
+	return names
+}
+
 // canonicalChoiceToGemini maps canonical ToolChoice to Gemini toolConfig.
 func canonicalChoiceToGemini(tc *v1.ToolChoice) *toolConfig {
 	if tc == nil {
@@ -154,6 +170,7 @@ func canonicalChoiceToGemini(tc *v1.ToolChoice) *toolConfig {
 		cfg.Mode = "AUTO"
 	case "required":
 		cfg.Mode = "ANY"
+		cfg.AllowedFunctionNames = tc.Allowed
 	case "none":
 		cfg.Mode = "NONE"
 	case "function":

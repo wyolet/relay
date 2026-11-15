@@ -330,9 +330,12 @@ func geminiToolModeToChoice(cfg *functionCallingConfig) *v1.ToolChoice {
 		if len(cfg.AllowedFunctionNames) == 1 {
 			return &v1.ToolChoice{Mode: "function", FunctionName: cfg.AllowedFunctionNames[0]}
 		}
-		return &v1.ToolChoice{Mode: "required"}
+		return &v1.ToolChoice{Mode: "required", Allowed: cfg.AllowedFunctionNames}
 	case "NONE":
 		return &v1.ToolChoice{Mode: "none"}
+	case "VALIDATED":
+		// canonical: VALIDATED's constrained decoding dropped — canonical has no per-choice decoding switch.
+		return &v1.ToolChoice{Mode: "auto", Allowed: cfg.AllowedFunctionNames}
 	default:
 		return &v1.ToolChoice{Mode: "auto"}
 	}
