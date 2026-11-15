@@ -38,7 +38,7 @@ func resolveScopeOwner(o *meta.Owner, idx Resolver) {
 	}
 }
 
-// ToTeam translates through the auth module, which makes every team system-owned: a user-owned one would let its author inherit every binding made at its scope.
+// ToTeam translates through the auth module, which makes every team the organization's: a user-owned one would let its author inherit every binding made at its scope.
 func ToTeam(d TeamDTO, idx Resolver) (*team.Team, error) {
 	row, err := AuthManifests.ToTeam(teamDoc(d), authRefs{idx})
 	if err != nil {
@@ -99,7 +99,7 @@ func FromServiceAccount(sa *serviceaccount.ServiceAccount, rev ReverseResolver) 
 	return dto
 }
 
-// ToGroup resolves member usernames → user ids. The module makes every group system-owned: a user-owned one named after an IdP group would inherit that group's bindings.
+// ToGroup resolves member usernames → user ids. The module makes every group the organization's: a user-owned one named after an IdP group would inherit that group's bindings.
 func ToGroup(d GroupDTO, idx Resolver) (*group.Group, error) {
 	row, err := AuthManifests.ToGroup(groupDoc(d), authRefs{idx})
 	if err != nil {

@@ -183,7 +183,7 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 		t.Errorf("subjects = %+v", scoped.Spec.Subjects)
 	}
 
-	// Global binding: the system scope carries no id.
+	// Global binding: the scope, written by its earlier name system, carries no id and is stored as the organization.
 	body = `{"metadata":{"name":"everyone-viewer"},"spec":{"roleId":"` + roles["viewer"].Meta.ID + `",` +
 		`"scope":{"kind":"system"},"subjects":[{"kind":"group","name":"system:authenticated"}]}}`
 	code, raw = st.adminDo(http.MethodPost, "/api/role-bindings", body)
@@ -194,8 +194,8 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 	if err := json.Unmarshal(raw, &global); err != nil {
 		t.Fatalf("decode global binding: %v", err)
 	}
-	if global.Metadata.Owner.Kind != "system" || global.Metadata.Owner.ID != "" {
-		t.Errorf("global owner = %+v, want {system}", global.Metadata.Owner)
+	if global.Metadata.Owner.Kind != "organization" || global.Metadata.Owner.ID != "" {
+		t.Errorf("global owner = %+v, want {organization}", global.Metadata.Owner)
 	}
 
 	// Unknown role, and a user subject that is not a user.

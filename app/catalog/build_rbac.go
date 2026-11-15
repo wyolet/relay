@@ -42,7 +42,8 @@ func (s *Snapshot) addRoleBindings(bindings []*rolebinding.RoleBinding, roles, t
 
 // sanitizeRoleBinding drops the binding when its Role is missing or its
 // scope names a team/project that is not in the snapshot — with no scope
-// target there is nothing for the grant to apply to.
+// target there is nothing for the grant to apply to. A system scope is
+// indexed as the global one it names.
 func sanitizeRoleBinding(b *rolebinding.RoleBinding, roles, teams, projects idSet) (*rolebinding.RoleBinding, bool) {
 	if !roles(b.Spec.RoleID) {
 		return nil, false
@@ -58,6 +59,7 @@ func sanitizeRoleBinding(b *rolebinding.RoleBinding, roles, teams, projects idSe
 		}
 	}
 	clean := *b
+	clean.StampOwner()
 	return &clean, true
 }
 
@@ -82,7 +84,7 @@ func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, sc
 	}
 }
 
-// ownerScopeExists reports whether a policy binding's owner scope is in the snapshot: its project, its team, or the system. Users are not snapshot rows; a user-owned binding goes with its user through the foreign key.
+// ownerScopeExists reports whether a policy binding's owner scope is in the snapshot: its project, its team, or the organization. Users are not snapshot rows; a user-owned binding goes with its user through the foreign key.
 func (s *Snapshot) ownerScopeExists(o meta.Owner) bool {
 	switch o.Kind {
 	case meta.OwnerProject:
@@ -94,20 +96,21 @@ func (s *Snapshot) ownerScopeExists(o meta.Owner) bool {
 	case meta.OwnerUser:
 		return o.ID != ""
 	}
-	return o.Kind == meta.OwnerSystem
+	return o == meta.Global
 }
 
 // sanitizePolicyBinding drops the binding when its owner scope or its Policy
 // is missing: both edges are hard, a dangling one would resolve a principal
 // to nothing.
 func sanitizePolicyBinding(b *policybinding.PolicyBinding, scopes func(meta.Owner) bool, policies idSet) (*policybinding.PolicyBinding, bool) {
-	if !scopes(b.Meta.Owner) {
-		return nil, false
-	}
-	if !policies(b.Spec.PolicyID) {
-		return nil, false
-	}
 	clean := *b
+	clean.Meta.Owner = clean.Meta.Owner.AsGlobalScope()
+	if !scopes(clean.Meta.Owner) {
+		return nil, false
+	}
+	if !policies(clean.Spec.PolicyID) {
+		return nil, false
+	}
 	return &clean, true
 }
 

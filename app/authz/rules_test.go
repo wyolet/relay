@@ -217,16 +217,23 @@ func TestKindNames(t *testing.T) {
 		}
 	}
 
-	organization := map[string]bool{"policy": true, "rate-limit": true, "budget": true, "pool": true}
+	adminOnly := map[string]bool{"policy": true, "rate-limit": true, "budget": true, "pool": true}
+	organization := map[string]bool{"host-key": true, "account": true, "team": true, "group": true, "role": true, "role-binding": true, "policy-binding": true}
+	for k := range adminOnly {
+		organization[k] = true
+	}
 	for _, kind := range role.Kinds {
 		k := authz.Singular(kind)
 		if got := authz.OrganizationKind(k); got != organization[k] {
 			t.Errorf("OrganizationKind(%q) = %v, want %v", k, got, organization[k])
 		}
+		if got := authz.OrganizationAdminOnly(k); got != adminOnly[k] {
+			t.Errorf("OrganizationAdminOnly(%q) = %v, want %v", k, got, adminOnly[k])
+		}
 	}
 }
 
-// An organization row is an admin's alone: no binding reaches it, not even a global one, and ownership grants nothing.
+// The organization's policies, rate limits, budgets and pools are an admin's alone: no binding reaches them, not even a global one.
 func TestOrganizationRows(t *testing.T) {
 	cat := newFixture(t)
 	r := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
@@ -264,6 +271,17 @@ func TestOrganizationRows(t *testing.T) {
 	}
 	if err := r.Authorize(ctxOf(globalEditor), "rate-limits.update", authz.Resource{Kind: "rate-limit", ID: ids.New(), Owner: &globalScope}); err != nil {
 		t.Fatalf("global editor on a system rate limit = %v, want allowed", err)
+	}
+	// The organization's other rows are decided by the bindings, as system rows were: a team viewer reads its organization-owned team, and custom roles read for everyone.
+	carol := actorOf(carolID, subjectsOf(carolID))
+	if err := r.Authorize(ctxOf(carol), "teams.get", authz.Resource{Kind: "team", ID: t1ID, Owner: org}); err != nil {
+		t.Fatalf("team viewer on its organization-owned team = %v, want allowed", err)
+	}
+	if err := r.Authorize(ctxOf(carol), "host-keys.get", authz.Resource{Kind: "host-key", ID: ids.New(), Owner: org}); err != authz.ErrForbidden {
+		t.Fatalf("team viewer on an organization host key = %v, want forbidden", err)
+	}
+	if err := r.Authorize(ctxOf(refused["no binding"]), "roles.get", authz.Resource{Kind: "role", ID: ids.New(), Owner: org}); err != nil {
+		t.Fatalf("signed-in caller on an organization role = %v, want allowed", err)
 	}
 
 	// A filter cannot take back what a global grant selects, so ScopeOf declines there and answers everywhere else.

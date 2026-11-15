@@ -2,13 +2,19 @@ package stored
 
 import "context"
 
-// ScopeSystem is the scope of relay's own secrets (the token signing key, payload-log credentials) and of host keys the deployment owns.
+// ScopeSystem is the scope of relay's own secrets (the token signing key, payload-log credentials).
 const ScopeSystem = "system"
+
+// ScopeOrganization is the scope of host keys the organization owns.
+const ScopeOrganization = "organization"
 
 // OwnerScope is the scope a host key's stored value is sealed under: its owner, so each user's or project's keys sit under their own data key.
 func OwnerScope(kind, id string) string {
-	if kind == "" || kind == ScopeSystem {
+	switch kind {
+	case "", ScopeSystem:
 		return ScopeSystem
+	case ScopeOrganization:
+		return ScopeOrganization
 	}
 	return kind + ":" + id
 }

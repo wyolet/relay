@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -61,6 +62,16 @@ func (s *Backend) Downgrade(ctx context.Context, masterKey []byte) (int, error) 
 // SealedRows counts the stored secrets a relay from before the key ring cannot read (sealed, or without a nonce), the same rows migration 34's down refuses; 0 on a schema that predates the key ring.
 func (s *Backend) SealedRows(ctx context.Context) (int64, error) {
 	n, err := s.q.CountSealedSecretValues(ctx)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "42703" {
+		return 0, nil
+	}
+	return n, err
+}
+
+// OrganizationSealedRows counts the stored secrets sealed under the organization's data keys, the rows migration 45's down refuses; 0 on a schema that predates the key ring.
+func (s *Backend) OrganizationSealedRows(ctx context.Context) (int64, error) {
+	n, err := s.q.CountScopedSecretValues(ctx, pgtype.Text{String: ScopeOrganization, Valid: true})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "42703" {
 		return 0, nil

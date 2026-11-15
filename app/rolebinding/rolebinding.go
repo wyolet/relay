@@ -46,11 +46,11 @@ type RoleBinding struct {
 }
 
 // Spec carries the role, the scope, the subjects, and the enabled flag.
-// Scope is a meta.Owner: {system} is global, {team,id} and {project,id}
-// name a tenancy row. Meta.Owner mirrors it.
+// Scope is a meta.Owner: {organization} is global, {team,id} and
+// {project,id} name a tenancy row. Meta.Owner mirrors it.
 type Spec struct {
 	RoleID   string     `json:"roleId"   yaml:"roleId"   validate:"required,uuid" doc:"Id of the granted role."`
-	Scope    meta.Owner `json:"scope"    yaml:"scope"    validate:"required" doc:"Where the grant applies: system, or a team or project by id. It covers every resource in that scope and below; the binding's owner follows it."`
+	Scope    meta.Owner `json:"scope"    yaml:"scope"    validate:"required" doc:"Where the grant applies: organization (everywhere; system is read as organization), or a team or project by id. It covers every resource in that scope and below; the binding's owner follows it."`
 	Subjects []Subject  `json:"subjects" yaml:"subjects" validate:"required,min=1,dive" doc:"Users, groups and service accounts granted the role."`
 	Enabled  *bool      `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False suspends the grant. Omitted means true."`
 }
@@ -58,13 +58,17 @@ type Spec struct {
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (b *RoleBinding) IsEnabled() bool { return b.Spec.Enabled == nil || *b.Spec.Enabled }
 
-// StampOwner sets Meta.Owner to the binding's scope. Called by every write
-// path so Owner never drifts from Spec.Scope.
-func (b *RoleBinding) StampOwner() { b.Meta.Owner = b.Spec.Scope }
+// StampOwner sets Meta.Owner to the binding's scope, reading a system scope
+// as the global one. Called by every read and write path so Owner never
+// drifts from Spec.Scope.
+func (b *RoleBinding) StampOwner() {
+	b.Spec.Scope = b.Spec.Scope.AsGlobalScope()
+	b.Meta.Owner = b.Spec.Scope
+}
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Scope.Kind is system, team, or project; a non-system scope carries an id
-//     and a system scope carries none.
+//   - Scope.Kind is organization (the global scope, no id), team or project
+//     (with an id).
 //   - Meta.Owner equals Spec.Scope.
 //   - subjects are distinct, group subjects carry a name and the others an id.
 func (b *RoleBinding) Validate() error {
@@ -72,7 +76,7 @@ func (b *RoleBinding) Validate() error {
 		return err
 	}
 	switch b.Spec.Scope.Kind {
-	case meta.OwnerSystem:
+	case meta.OwnerOrganization:
 		if b.Spec.Scope.ID != "" {
 			return fmt.Errorf("rolebinding %q: global scope carries no id", b.Meta.Name)
 		}
@@ -81,7 +85,7 @@ func (b *RoleBinding) Validate() error {
 			return fmt.Errorf("rolebinding %q: scope.kind %q requires an id", b.Meta.Name, b.Spec.Scope.Kind)
 		}
 	default:
-		return fmt.Errorf("rolebinding %q: scope.kind must be system, team, or project, got %q", b.Meta.Name, b.Spec.Scope.Kind)
+		return fmt.Errorf("rolebinding %q: scope.kind must be organization, team, or project, got %q", b.Meta.Name, b.Spec.Scope.Kind)
 	}
 	if b.Meta.Owner != b.Spec.Scope {
 		return fmt.Errorf("rolebinding %q: owner %s/%s does not mirror scope %s/%s",

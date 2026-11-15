@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-const secretUsage = "usage: relay secret status | migrate | downgrade | rotate (--scope <scope> | --all) | rewrap --to <kek id> | destroy <data key id> [--force]"
+const secretUsage = "usage: relay secret status | migrate | downgrade | organization-to-system | rotate (--scope <scope> | --all) | rewrap --to <kek id> | destroy <data key id> [--force]\n" +
+	"  organization-to-system  with every relay server stopped, move the organization's host keys back to system, their values sealed under the system data key; run it before `relay migrate down 44`"
 
 // secretCommand is a parsed `relay secret` invocation.
 type secretCommand struct {
@@ -29,7 +30,7 @@ func parseSecretArgs(args []string) (secretCommand, error) {
 	fs := flag.NewFlagSet("secret "+cmd.name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	switch cmd.name {
-	case "status", "migrate", "downgrade":
+	case "status", "migrate", "downgrade", "organization-to-system":
 	case "rotate":
 		fs.StringVar(&cmd.scope, "scope", "", "")
 		fs.BoolVar(&cmd.all, "all", false, "")

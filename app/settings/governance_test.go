@@ -10,7 +10,7 @@ import (
 
 // The owner tier decides: a system row is an admin's (unless it is a Team,
 // Group or Role, which are system-owned only because nobody owns them
-// personally), an organization row is an admin's, a tenant's row is the tenant's whatever the section says, and
+// personally), an organization row likewise, a tenant's row is the tenant's whatever the section says, and
 // a catalog-managed row follows its governance section, which binds an admin too.
 func TestGoverns(t *testing.T) {
 	const (
@@ -45,8 +45,10 @@ func TestGoverns(t *testing.T) {
 
 		{"organization policy: edit", OpEdit, "policy", "organization", false, open, orgOwned},
 		{"organization budget: delete", OpDelete, "budget", "organization", false, nil, orgOwned},
-		// The system tier's Team, Group and Role exception does not carry over.
-		{"organization team: edit", OpEdit, "team", "organization", false, nil, orgOwned},
+		// Teams, groups and custom roles are the organization's because nobody owns them personally.
+		{"organization team: edit", OpEdit, "team", "organization", false, nil, allowed},
+		{"organization role: delete", OpDelete, "role", "organization", false, nil, allowed},
+		{"organization host key: edit", OpEdit, "host-key", "organization", false, nil, orgOwned},
 		{"organization policy: admin edits under a locked section", OpEdit, "policy", "organization", true, locked, allowed},
 		{"organization pool: admin deletes", OpDelete, "pool", "organization", true, nil, allowed},
 

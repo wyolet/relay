@@ -69,9 +69,9 @@ func (b *RoleBinding) validate() error {
 	switch {
 	case b.Spec.Scope.Kind == "":
 		return fmt.Errorf("%w: role binding %q: scope kind is required", ErrInvalid, b.Meta.Name)
-	case b.Spec.Scope.Kind == OwnerSystem && b.Spec.Scope.ID != "":
+	case b.Spec.Scope.Kind == Global.Kind && b.Spec.Scope.ID != "":
 		return fmt.Errorf("%w: role binding %q: the global scope carries no id", ErrInvalid, b.Meta.Name)
-	case b.Spec.Scope.Kind != OwnerSystem && b.Spec.Scope.ID == "":
+	case b.Spec.Scope.Kind != Global.Kind && b.Spec.Scope.ID == "":
 		return fmt.Errorf("%w: role binding %q: scope kind %q requires an id", ErrInvalid, b.Meta.Name, b.Spec.Scope.Kind)
 	}
 	if len(b.Spec.Subjects) == 0 {

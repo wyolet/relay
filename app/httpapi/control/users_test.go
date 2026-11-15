@@ -179,8 +179,8 @@ func TestUserUpdateAuthorizesAtTheGlobalScope(t *testing.T) {
 	if _, err := updateUser(context.Background(), users, c, disableUserInput("u-1", true)); err == nil {
 		t.Fatal("a forbidden caller updated the account")
 	}
-	if c.got.Owner == nil || c.got.Owner.Kind != meta.OwnerSystem {
-		t.Fatalf("authorized against owner %+v, want {system}", c.got.Owner)
+	if c.got.Owner == nil || *c.got.Owner != meta.Global {
+		t.Fatalf("authorized against owner %+v, want the organization", c.got.Owner)
 	}
 	if users.row("u-1").Disabled {
 		t.Error("the row was written despite the denial")
@@ -368,8 +368,8 @@ func TestUsersListAuthorizesAtTheGlobalScope(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
-	if c.got.Owner == nil || c.got.Owner.Kind != meta.OwnerSystem {
-		t.Fatalf("authorized against owner %+v, want {system}", c.got.Owner)
+	if c.got.Owner == nil || *c.got.Owner != meta.Global {
+		t.Fatalf("authorized against owner %+v, want the organization", c.got.Owner)
 	}
 }
 

@@ -616,7 +616,7 @@ func scanRoleRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 	}
 	for _, u := range users {
 		if u.HasRole(r.Meta.Name) {
-			out = append(out, referenceItem{Kind: "user", ID: u.ID, Name: u.Username, Via: "roles", owner: meta.Owner{Kind: meta.OwnerSystem}, detachable: true})
+			out = append(out, referenceItem{Kind: "user", ID: u.ID, Name: u.Username, Via: "roles", owner: meta.Global, detachable: true})
 		}
 	}
 	return out, nil

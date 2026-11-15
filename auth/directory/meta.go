@@ -20,7 +20,7 @@ const (
 	OwnerProject = "project"
 )
 
-// Global is the scope every chain ends in and the scope a binding names to apply everywhere.
+// Global is the scope every chain ends in and the scope a binding names to apply everywhere. Its kind is also the owner of rows that belong to the whole deployment (teams, groups, a product's own roles). A product that names its global scope otherwise sets it once, before using the module; system then stays the owner of rows the product ships.
 var Global = rbac.Scope{Kind: OwnerSystem}
 
 var (

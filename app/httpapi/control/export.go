@@ -183,8 +183,8 @@ func (e *exporter) wanted(ctx context.Context, plural, singular string, m *meta.
 	if e.kinds != nil && !e.kinds[plural] {
 		return false
 	}
-	// Teams, groups, roles and role bindings are system-owned by rule, so the
-	// kind, not provenance, decides membership. The scope filter still
+	// Teams, groups, roles and role bindings are the organization's by rule, so
+	// the kind, not provenance, decides membership. The scope filter still
 	// applies: a global row only survives an unscoped export.
 	switch {
 	case singular == "role" && role.IsBuiltin(m.Name):

@@ -13,10 +13,12 @@ func (t *Team) ToDirectory() (*directory.Team, error) {
 	}, nil
 }
 
-// FromDirectory is a directory row as a Team.
+// FromDirectory is a directory row as a Team. A team written as system-owned reads as the organization's.
 func FromDirectory(r *directory.Team) (*Team, error) {
-	return &Team{
+	t := &Team{
 		Meta: meta.FromDirectory(r.Meta),
 		Spec: Spec{Enabled: r.Spec.Enabled},
-	}, nil
+	}
+	t.Meta.Owner = t.Meta.Owner.AsGlobalScope()
+	return t, nil
 }

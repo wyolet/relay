@@ -354,7 +354,7 @@ var roleBindingFilter = filter.Schema[rolebinding.RoleBinding]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(b *rolebinding.RoleBinding) string { return b.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(b *rolebinding.RoleBinding) bool { return enabledTrue(b.Spec.Enabled) }},
 		{Name: "role_id", Kind: filter.String, Repeat: true, Get: func(b *rolebinding.RoleBinding) string { return b.Spec.RoleID }},
-		{Name: "scope_kind", Kind: filter.String, Enum: []string{"system", "team", "project"},
+		{Name: "scope_kind", Kind: filter.String, Enum: []string{"organization", "system", "team", "project"},
 			Get: func(b *rolebinding.RoleBinding) string { return string(b.Spec.Scope.Kind) }},
 		{Name: "scope_id", Kind: filter.String, Repeat: true, Get: func(b *rolebinding.RoleBinding) string { return b.Spec.Scope.ID }},
 		{Name: "subject", Kind: filter.String, Repeat: true,

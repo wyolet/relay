@@ -87,6 +87,7 @@ func (r recordingAuthz) Authorize(_ context.Context, action string, res authz.Re
 // verb against its owner, or against authorizeAt when the entry carries one.
 func TestAuthorizeProbesEachEntry(t *testing.T) {
 	system := meta.Owner{Kind: meta.OwnerSystem}
+	global := meta.Global
 	team := meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}
 	proj := meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}
 	alice := meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
@@ -103,7 +104,7 @@ func TestAuthorizeProbesEachEntry(t *testing.T) {
 	wantProbes := []probe{
 		{"system.apply", "system", "", "", proj},
 		{"keys.create", "key", "k-1", "k", proj},
-		{"system.apply", "system", "", "", system},
+		{"system.apply", "system", "", "", global},
 		{"host-keys.update", "host-key", "hk-1", "hk", alice},
 		{"system.apply", "system", "", "", team},
 		{"projects.delete", "project", "p-1", "p", team},

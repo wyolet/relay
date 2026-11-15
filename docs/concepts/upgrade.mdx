@@ -69,6 +69,12 @@ docker run --rm --network host \
 
 ## Release notes
 
+### The organization owner (schema 45)
+
+The global scope is named `organization`, and the rows that belong to the deployment rather than its catalog move to it: migration 45 moves teams, groups, custom roles, global role and policy bindings and system-owned accounts; the first boot moves system-owned policies, rate limits, budgets and pools the catalog does not ship (the shipped system rate limits stay system) and system-owned host keys, sealing each stored value again under the organization's data key and decrypting it before the change commits. A key that does not move stays system-owned, keeps serving, is logged (`organization move: host key left system-owned`), and is tried again at every boot. `{kind: system}` is still accepted for a global role binding scope and for the owner of a global policy binding, team or group, and is read as `organization`.
+
+Older pods cannot read the moved rows or the newly sealed values, so this is a [stop-and-start upgrade](#stop-and-start-upgrades). `relay migrate down 44` refuses to run while any stored value is still sealed under the organization's data key; its error names the command that seals them under the system data key again.
+
 ### 0.20.0: accounts and the policy ladder (schema 35 to 39)
 
 Policies link pools, rate limits and budgets, and bindings attach them to [accounts](/concepts/accounts): one per team, project and service account, a personal and member accounts per user, and provider accounts. Migration 36 drops the 0.11 policy links without converting them; migration 39 converts the bindings to accounts and stops on the cases it cannot convert. The bundled state store moves to Dragonfly. This is a [stop-and-start upgrade](#stop-and-start-upgrades) with manual steps before and after it; follow [Upgrading to 0.20](/concepts/upgrade-0-20). To return to 0.11, restore the Postgres backup: `relay migrate down 34` does not bring the dropped links back.

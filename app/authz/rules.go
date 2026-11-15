@@ -30,21 +30,21 @@ func decision(allow bool) rbac.Decision {
 	return rbac.Continue
 }
 
-// organizationRowRule: an organization row is the deployment admins' alone: the admin actor, decided before any rule, and a caller bound to the built-in admin role at the global scope, who could make themselves one. It refuses everyone else; without it a global binding would reach the row, whose scope chain is the global one.
+// organizationRowRule: the organization's policies, rate limits, budgets and pools are the deployment admins' alone: the admin actor, decided before any rule, and a caller bound to the built-in admin role at the global scope, who could make themselves one. It refuses everyone else; without it a global binding would reach the row, whose scope chain is the global one.
 type organizationRowRule struct{ ev *evaluation }
 
 func (organizationRowRule) Name() string { return "organization-row" }
 
-func (r organizationRowRule) Decide(_ context.Context, p *principal.Principal, _, _ string, res coreauthz.Resource) (rbac.Decision, error) {
-	if res.Owner != nil && res.Owner.Kind == ownerOrganization && !r.ev.globalAdmin(p) {
+func (r organizationRowRule) Decide(_ context.Context, p *principal.Principal, kind, _ string, res coreauthz.Resource) (rbac.Decision, error) {
+	if organizationAdminKinds[kind] && res.Owner != nil && res.Owner.Kind == ownerOrganization && !r.ev.globalAdmin(p) {
 		return rbac.Deny, nil
 	}
 	return rbac.Continue, nil
 }
 
-// Filter admits nothing. A filter cannot take back what a global binding admits, so for a caller holding one on a kind organization rows exist in, ScopeOf cannot answer; a global admin's binding selects every row and the rule refuses none of them.
+// Filter admits nothing. A filter cannot take back what a global binding admits, so for a caller holding one on a kind whose organization rows the rule refuses, ScopeOf cannot answer; a global admin's binding selects every row and the rule refuses none of them.
 func (r organizationRowRule) Filter(_ context.Context, p *principal.Principal, kind, verb string) (rbac.Filter, error) {
-	if organizationKinds[kind] && r.ev.globalGrant(p, kind, verb) && !r.ev.globalAdmin(p) {
+	if organizationAdminKinds[kind] && r.ev.globalGrant(p, kind, verb) && !r.ev.globalAdmin(p) {
 		return rbac.Filter{}, rbac.ErrUnfilterable
 	}
 	return rbac.Filter{}, nil
@@ -104,20 +104,21 @@ func (sharedPolicyReadRule) Filter(_ context.Context, _ *principal.Principal, ki
 	return rbac.Filter{OwnerKinds: []string{ownerSystem, ownerHost}}, nil
 }
 
-// systemRoleReadRule: a system-owned Role is a shared rule set, not tenant data: creating a binding means reading the role it names, and a scoped admin holds no binding at the global scope the row lives in.
+// systemRoleReadRule: a Role owned by the system (built-in) or the organization is a shared rule set, not tenant data: creating a binding means reading the role it names, and a scoped admin holds no binding at the global scope the row lives in.
 type systemRoleReadRule struct{}
 
 func (systemRoleReadRule) Name() string { return "system-role-read" }
 
 func (systemRoleReadRule) Decide(_ context.Context, _ *principal.Principal, kind, verb string, res coreauthz.Resource) (rbac.Decision, error) {
-	return decision(readVerb(verb) && kind == "roles" && res.Owner != nil && res.Owner.Kind == ownerSystem), nil
+	return decision(readVerb(verb) && kind == "roles" && res.Owner != nil &&
+		(res.Owner.Kind == ownerSystem || res.Owner.Kind == ownerOrganization)), nil
 }
 
 func (systemRoleReadRule) Filter(_ context.Context, _ *principal.Principal, kind, verb string) (rbac.Filter, error) {
 	if !readVerb(verb) || kind != "roles" {
 		return rbac.Filter{}, nil
 	}
-	return rbac.Filter{OwnerKinds: []string{ownerSystem}}, nil
+	return rbac.Filter{OwnerKinds: []string{ownerSystem, ownerOrganization}}, nil
 }
 
 // scopedListRule: a list call names no row and its result is filtered through Visible, so the call itself needs no binding: a deployment whose bindings have not been written yet answers an empty list rather than 403 everywhere.

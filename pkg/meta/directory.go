@@ -9,7 +9,11 @@ import (
 
 	"github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/auth/rbac"
 )
+
+// Every package that reaches the directory converts through this one, so the directory names the global scope as the relay does before any row is read or written.
+func init() { directory.Global = rbac.Scope{Kind: string(Global.Kind)} }
 
 // ToDirectory is m as the directory stores it.
 func ToDirectory(m Metadata) directory.Metadata {

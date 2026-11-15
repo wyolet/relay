@@ -59,7 +59,7 @@ func (p *Provisioner) CreateGroup(ctx context.Context, in ProvisionedGroup) (*Gr
 		return nil, err
 	}
 	g := &Group{
-		Meta: Metadata{ID: NewID(), Name: name, DisplayName: in.DisplayName, Owner: authz.Owner{Kind: OwnerSystem}},
+		Meta: Metadata{ID: NewID(), Name: name, DisplayName: in.DisplayName, Owner: authz.Owner{Kind: Global.Kind}},
 		Spec: GroupSpec{MemberIDs: in.MemberIDs, External: External{Source: p.source, ID: in.ExternalID}},
 	}
 	if err := g.validate(); err != nil {

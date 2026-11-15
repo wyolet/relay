@@ -63,6 +63,18 @@ func (q *Queries) CountLegacySecretValues(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countScopedSecretValues = `-- name: CountScopedSecretValues :one
+SELECT count(*) FROM secret_values WHERE scope = $1
+`
+
+// CountScopedSecretValues counts the rows sealed under one scope's data keys; migration 45's down refuses the organization's.
+func (q *Queries) CountScopedSecretValues(ctx context.Context, scope pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, countScopedSecretValues, scope)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSealedSecretValues = `-- name: CountSealedSecretValues :one
 SELECT count(*) FROM secret_values WHERE dek_id IS NOT NULL OR nonce IS NULL
 `

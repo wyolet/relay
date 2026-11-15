@@ -137,7 +137,7 @@ func RequireAdmin(ctx context.Context, a authz.Authorizer, what string) error {
 
 // StampOwnerID fills Owner.ID from the acting user on a user-owned row. A
 // caller that is no user (the admin token, a loader with no actor) creates
-// shared infrastructure, so an id-less user owner becomes system. A supplied
+// shared infrastructure, so an id-less user owner becomes the organization. A supplied
 // owner.id must be the caller's own; only the admin token may name someone else.
 func StampOwnerID(ctx context.Context, o *meta.Owner) error {
 	if o.Kind != meta.OwnerUser {
@@ -146,7 +146,7 @@ func StampOwnerID(ctx context.Context, o *meta.Owner) error {
 	a := actor.From(ctx)
 	switch {
 	case o.ID == "" && (a == nil || a.AdminToken):
-		*o = meta.Owner{Kind: meta.OwnerSystem}
+		*o = meta.Global
 	case o.ID == "":
 		o.ID = a.UserID
 	case a == nil || o.ID == a.UserID || a.AdminToken:

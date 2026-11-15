@@ -18,7 +18,7 @@ func rowMeta(d *Document) directory.Metadata {
 
 // systemOwned is the owner of a Team, Role or Group: the row names a scope or a grant, so an owner taken from the document would let its author inherit what is granted through it.
 func systemOwned(m directory.Metadata) directory.Metadata {
-	m.Owner.Kind, m.Owner.ID = directory.OwnerSystem, ""
+	m.Owner.Kind, m.Owner.ID = directory.Global.Kind, ""
 	return m
 }
 

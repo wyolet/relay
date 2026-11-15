@@ -148,12 +148,23 @@ func NewID() string { return ids.New() }
 // Owner describes who created / manages a row. Kind=provider requires ID;
 // the other kinds leave ID empty.
 type Owner struct {
-	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,organization,provider,host,user,team,project" doc:"Owning scope: system (the catalog and the relay's own rows), organization (rows the deployment's admins made, visible to admins only), provider or host (catalog rows), user, team or project."`
+	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,organization,provider,host,user,team,project" doc:"Owning scope: system (the catalog and the relay's own rows), organization (the deployment: its teams, groups, credentials and the rows its admins made; organization-owned policies, rate limits, budgets and pools are visible to admins only), provider or host (catalog rows), user, team or project."`
 	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"   doc:"Id of the owning provider, host, user, team or project; empty for system and organization. Defaults to the caller for user-owned rows."`
 }
 
+// Global is the scope every other scope sits in: a role binding there applies everywhere, and a row owned by it serves every scope.
+var Global = Owner{Kind: OwnerOrganization}
+
 // DeploymentWide reports whether the owner is the deployment as a whole, system or organization, rather than a tenant or a catalog tier.
 func (o Owner) DeploymentWide() bool { return o.Kind == OwnerSystem || o.Kind == OwnerOrganization }
+
+// AsGlobalScope reads system, the global scope's spelling before organization, as Global, so documents written before keep naming the global scope.
+func (o Owner) AsGlobalScope() Owner {
+	if o.Kind == OwnerSystem && o.ID == "" {
+		return Global
+	}
+	return o
+}
 
 // Tenant reports whether the owner is a user, team or project rather than
 // the deployment itself or its catalog.
@@ -189,8 +200,9 @@ type Icon struct {
 type OwnerKind string
 
 const (
+	// OwnerSystem owns the catalog's deployment-wide rows and the relay's own (built-in roles and rate limits).
 	OwnerSystem OwnerKind = "system"
-	// OwnerOrganization owns rows the deployment's admins made for the whole deployment. Unlike system rows they are never catalog data and only admins see them. ID stays empty until a deployment holds more than one organization.
+	// OwnerOrganization is the deployment itself: the global scope, and the owner of the rows it holds rather than its catalog. Organization-owned rows are never catalog data. ID stays empty until a deployment holds more than one organization.
 	OwnerOrganization OwnerKind = "organization"
 	OwnerProvider     OwnerKind = "provider"
 	OwnerHost         OwnerKind = "host"

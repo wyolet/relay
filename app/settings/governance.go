@@ -89,7 +89,7 @@ func (e *MutationError) Error() string { return e.Reason }
 //   - system  → edited or deleted only by an admin (the admin role or the
 //     admin token). A delete is still refused while anything references the
 //     row; that check lives with the references, not here.
-//   - organization → edited or deleted only by an admin, whatever the kind.
+//   - organization → as system: an admin's, except a Team, Group or Role.
 //   - user / team / project → always allowed (the row belongs to a tenant,
 //     not to the catalog). RBAC will later add an owner match here.
 //   - else (provider/host-owned, i.e. catalog-managed) → consult the kind's
@@ -110,7 +110,9 @@ func Governs(r Reader, op Op, kind, ownerKind string, admin bool) error {
 		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind,
 			Reason: fmt.Sprintf("%s is system-owned: only an admin may %s it", kind, op)}
 	case ownerOrganization:
-		if admin {
+		// As on the system tier: the organization owns every Team and Group and
+		// the custom Roles because nobody owns them personally.
+		if tenancyKinds[kind] || admin {
 			return nil
 		}
 		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind,

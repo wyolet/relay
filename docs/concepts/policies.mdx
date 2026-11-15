@@ -121,7 +121,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 | Field (API) | Field (manifest) | Meaning |
 | --- | --- | --- |
-| `metadata.owner` | `metadata.owner` | `{kind: system}`, or a team, project or user. Left out of an API create, the caller's own user, or the system for the admin token. |
+| `metadata.owner` | `metadata.owner` | `{kind: organization}` (`{kind: system}` is read as it), or a team, project or user. Left out of an API create, the caller's own user, or the organization for the admin token. |
 | `policyId` | `policy` (name) | The policy it applies. |
 | `accountIds` | `accounts` (names) | One or more accounts. |
 | `enabled` | `enabled` | Default `true`. A disabled binding binds nothing. |
@@ -132,7 +132,7 @@ The owner decides which accounts a binding may name:
 
 | Owner | May bind |
 | --- | --- |
-| System | Any account. |
+| Organization | Any account. |
 | Team | The team's account and every account owned by the team or one of its projects: project, member, service and provider accounts. |
 | Project | The project's account and the accounts it owns: its members', its service accounts' and its provider accounts. |
 | User | The accounts the user owns: the personal account and the user's own provider accounts. |

@@ -226,7 +226,7 @@ The four sections `governance:provider`, `governance:host`, `governance:model` a
 
 They guard against accidental changes to rows the catalog owns; they are not access control. Every update and delete through the control API, the admin UI and `relay apply` is judged by the row's owner:
 
-- **System-owned rows** (for example catalog providers and hosts) can be edited or deleted by an admin only, whatever the governance sections say. Teams, groups and roles are system-owned but follow the tenant rule below.
+- **System- and organization-owned rows** (for example catalog providers and hosts, the deployment's host keys) can be edited or deleted by an admin only, whatever the governance sections say. Teams, groups and roles are owned by the organization but follow the tenant rule below.
 - **Tenant-owned rows** (owned by a user, team or project) are always allowed; access control decides who may touch them.
 - **Catalog-managed rows** (owned by a provider or a host, such as catalog models and host tier policies) consult the governance section of their kind. A kind with no section, such as host-owned pricing, uses the defaults: edit allowed, delete refused. Admins are bound by these sections too.
 - A row the catalog no longer ships (detached) counts as tenant-owned.

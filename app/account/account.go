@@ -71,9 +71,9 @@ func (r Receiver) Key() string { return string(r.Kind) + ":" + r.ID }
 
 // ShareParty names one side of a share: the owner of the real account, or the receiver.
 type ShareParty struct {
-	Kind string `json:"kind" enum:"system,user,team,project,serviceaccount" doc:"Kind of the party: the system, a user, a team, a project or a service account."`
-	ID   string `json:"id,omitempty"   doc:"Id of the user, team, project or service account; empty for the system."`
-	Name string `json:"name,omitempty" doc:"Username, or slug of the team, project or service account; empty for the system or when the row is gone."`
+	Kind string `json:"kind" enum:"organization,system,user,team,project,serviceaccount" doc:"Kind of the party: the organization, the system, a user, a team, a project or a service account."`
+	ID   string `json:"id,omitempty"   doc:"Id of the user, team, project or service account; empty for the organization and the system."`
+	Name string `json:"name,omitempty" doc:"Username, or slug of the team, project or service account; empty for the organization, the system, or when the row is gone."`
 }
 
 // IsShared reports whether a is a shared account: one that reaches another provider account's keys and holds none of its own.
@@ -194,7 +194,7 @@ func MemberKey(scope meta.Owner, userID string) string {
 	return "member:" + string(scope.Kind) + ":" + scope.ID + ":" + userID
 }
 
-// Validate runs intra-row rules via the shared meta.Validator, derives Spec.Kind, and enforces each kind's shape: a provider account has a host, an owner of kind system, team, project or user, and no holder; a caller account has no host or org id.
+// Validate runs intra-row rules via the shared meta.Validator, derives Spec.Kind, and enforces each kind's shape: a provider account has a host, an owner of kind organization, system, team, project or user, and no holder; a caller account has no host or org id.
 //
 // Cross-row checks (the host and holder exist) live in app/refcheck.
 func (a *Account) Validate() error {
@@ -204,12 +204,16 @@ func (a *Account) Validate() error {
 	o := a.Meta.Owner
 	switch o.Kind {
 	case meta.OwnerSystem, meta.OwnerUser:
+	case meta.OwnerOrganization:
+		if o.ID != "" {
+			return fmt.Errorf("account %q: an organization owner carries no id", a.Meta.Name)
+		}
 	case meta.OwnerTeam, meta.OwnerProject:
 		if o.ID == "" {
 			return fmt.Errorf("account %q: owner.kind %q requires an id", a.Meta.Name, o.Kind)
 		}
 	default:
-		return fmt.Errorf("account %q: owner.kind must be system, team, project or user, got %q", a.Meta.Name, o.Kind)
+		return fmt.Errorf("account %q: owner.kind must be organization, system, team, project or user, got %q", a.Meta.Name, o.Kind)
 	}
 	k := a.DerivedKind()
 	switch {
@@ -223,7 +227,7 @@ func (a *Account) Validate() error {
 		return fmt.Errorf("account %q: only a provider account is shared", a.Meta.Name)
 	case a.IsShared() && a.Spec.OrgID != "":
 		return fmt.Errorf("account %q: a shared account takes its org and keys from the real account; orgId stays on that one", a.Meta.Name)
-	case a.IsShared() && o.Kind == meta.OwnerSystem:
+	case a.IsShared() && o.DeploymentWide():
 		return fmt.Errorf("account %q: a shared account is owned by the user, team or project it was shared with", a.Meta.Name)
 	case a.IsShared() && a.Spec.SourceAccountID == a.Meta.ID:
 		return fmt.Errorf("account %q: an account cannot be shared with itself", a.Meta.Name)

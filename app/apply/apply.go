@@ -398,7 +398,8 @@ func applyScope(o meta.Owner) *meta.Owner {
 	case meta.OwnerTeam, meta.OwnerProject:
 		return &o
 	}
-	return &meta.Owner{Kind: meta.OwnerSystem}
+	g := meta.Global
+	return &g
 }
 
 // Authorized returns the RBAC action the entry was authorized under, the

@@ -8,10 +8,12 @@ import (
 	"os"
 
 	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/hostkey"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // runSecret implements `relay secret <command>` (see secretUsage). The commands talk to Postgres directly with the deployment's RELAY_PG_DSN and master keys, so they work with every relay server stopped, which migrate and downgrade expect; rotate, rewrap and destroy also run against a live fleet, which learns of the change through the database. Every command but status writes audit rows under a cli actor.
@@ -45,8 +47,39 @@ func runSecret(args []string) error {
 		}
 		return printJSON(status)
 	}
+	if cmd.name == "organization-to-system" {
+		n, err := organizationToSystem(ctx, hostkey.NewStore(st.Pool(), sec.Registry, sec.Stored))
+		rows := []audit.Row{secretAuditRow("secret-keys.organization-to-system", "", rowCount(n), err)}
+		return errors.Join(err, writeSecretAudit(ctx, st.Pool(), cmd, rows))
+	}
 	rows, err := runSecretChange(ctx, sec.Stored, cfg.MasterKey, cmd)
 	return errors.Join(err, writeSecretAudit(ctx, st.Pool(), cmd, rows))
+}
+
+// organizationToSystem moves every organization-owned host key back to system, its stored value sealed again under the system data key, so schema 45 can be rolled back. Keys it cannot move are listed in the error and keep the rollback refused.
+func organizationToSystem(ctx context.Context, keys *hostkey.Store) (int, error) {
+	all, err := keys.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var moved int
+	var failed []string
+	for _, k := range all {
+		if k.Meta.Owner.Kind != meta.OwnerOrganization {
+			continue
+		}
+		if err := keys.ChangeOwner(ctx, k, meta.Owner{Kind: meta.OwnerSystem}); err != nil {
+			failed = append(failed, k.Meta.Name+": "+err.Error())
+			continue
+		}
+		moved++
+	}
+	fmt.Printf("moved %d host keys from the organization to system\n", moved)
+	if len(failed) > 0 {
+		return moved, fmt.Errorf("%d host keys left with the organization: %v", len(failed), failed)
+	}
+	fmt.Println("schema 45 can now be rolled back: relay migrate down 44")
+	return moved, nil
 }
 
 // runSecretChange runs a command that changes stored secrets or the key ring, through the same backend methods as the control API's /secret-keys, and returns the audit rows describing what it did or why it was refused.

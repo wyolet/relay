@@ -75,7 +75,17 @@ func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 // ciphertext-free secrets row. Cleartext Spec.Value never reaches the
 // secrets table and is cleared after a successful stored write. A key
 // that names no account is refused with ErrNoAccount.
-func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
+func (s *Store) Upsert(ctx context.Context, k *HostKey) error { return s.upsert(ctx, k, false) }
+
+// ChangeOwner moves k, as read at its version, to owner: a stored or oauth value stays as stored, sealed again under the new owner's scope in the same transaction and decrypted before it commits; k's resolved value is not needed. A row changed since k was read, or a value that does not open, leaves the key as it was.
+func (s *Store) ChangeOwner(ctx context.Context, k *HostKey, owner meta.Owner) error {
+	k.Meta.Owner = owner
+	k.Spec.Value = ""
+	return s.upsert(ctx, k, true)
+}
+
+// upsert is Upsert; keepValue writes no value and moves the stored one instead, as an edit carrying none does.
+func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 	if k.Spec.AccountID == "" {
 		return fmt.Errorf("hostkey.Upsert %q: %w", k.Meta.Name, ErrNoAccount)
 	}
@@ -116,7 +126,7 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 		// value is kept, only moved to the owner's scope if the owner changed.
 		// It is the only way to edit an oauth key without re-supplying its
 		// token blob (its Resolved is the access token, not the stored blob).
-		if k.Spec.Value == "" && k.Resolved == "" {
+		if k.Spec.Value == "" && k.Resolved == "" && !keepValue {
 			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
 		}
 		scope := SecretScope(k.Meta.Owner)
