@@ -112,7 +112,14 @@ for i, r in ipairs(rules) do
       local rate  = cur_val + prev_val * (1.0 - frac)
       if rate > amount then
         local retry_ms = win_ms - (now_ms - bucket_start_ms)
-        return cjson.encode({exceeded=true, retry_after_ms=math.floor(retry_ms),
+        if cur_val > amount then
+          -- Next window this bucket is the previous one; it fits once its weight decays to amount.
+          retry_ms = retry_ms + win_ms - amount * win_ms / cur_val
+        else
+          local wait = retry_ms - (amount - cur_val) * win_ms / prev_val
+          if wait > 0 and wait < retry_ms then retry_ms = wait end
+        end
+        return cjson.encode({exceeded=true, retry_after_ms=math.ceil(retry_ms),
           rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
       end
       -- no pending entry — tokens incremented at Commit
@@ -134,7 +141,10 @@ for i, r in ipairs(rules) do
 
     if rate > amount then
       local retry_ms = win_ms - elapsed_ms
-      if prev_val > 0 then
+      if new_cur > amount and cur_val > 0 then
+        -- Next window this bucket is the previous one; the request fits once its weight decays to amount - 1.
+        retry_ms = retry_ms + win_ms - (amount - 1) * win_ms / cur_val
+      elseif prev_val > 0 then
         -- Fits once the previous bucket's weight decays to amount - new_cur; dividing last keeps a whole-ms wait exact.
         local wait = retry_ms - (amount - new_cur) * win_ms / prev_val
         if wait > 0 and wait < retry_ms then retry_ms = wait end
@@ -665,10 +675,9 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 						frac := float64(nowMs-bucketStart) / float64(winMs)
 						rate := float64(curVal) + float64(prevVal)*(1.0-frac)
 						if rate > float64(amount) {
-							retryMs := float64(winMs) - float64(nowMs-bucketStart)
 							result = reserveResult{
 								Exceeded:     true,
-								RetryAfterMs: int64(math.Floor(retryMs)),
+								RetryAfterMs: slidingRetryMs(amount, curVal, prevVal, 0, nowMs-bucketStart, winMs),
 								RuleKey:      r.RuleKey,
 								RuleName:     r.RuleName,
 								Meter:        r.Meter,
@@ -694,16 +703,9 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 					rate := float64(newCur) + float64(prevVal)*(1.0-frac)
 
 					if rate > float64(amount) {
-						retryMs := float64(winMs) - float64(elapsedMs)
-						if prevVal > 0 {
-							wait := retryMs - float64(amount-newCur)*float64(winMs)/float64(prevVal)
-							if wait > 0 && wait < retryMs {
-								retryMs = wait
-							}
-						}
 						result = reserveResult{
 							Exceeded:     true,
-							RetryAfterMs: int64(math.Ceil(retryMs)),
+							RetryAfterMs: slidingRetryMs(amount, curVal, prevVal, 1, elapsedMs, winMs),
 							RuleKey:      r.RuleKey,
 							RuleName:     r.RuleName,
 							Meter:        r.Meter,
