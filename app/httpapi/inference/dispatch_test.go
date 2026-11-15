@@ -127,6 +127,28 @@ func TestDispatch_ShapeSelection(t *testing.T) {
 	}
 }
 
+// A translated request keeps the caller's options when the routed upstream name differs from the name it was sent with.
+func TestDispatch_CrossShapeKeepsOptionsUnderUpstreamName(t *testing.T) {
+	upURL, last := answeringUpstream(t, "application/json", `{"id":"msg_1","type":"message","role":"assistant","model":"test-model","content":[{"type":"text","text":"{}"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	cat, pr := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	pointHostAt(t, cat, upURL)
+	d := buildRunnableDeps(t, cat)
+	useSpecs(&d, productionSpecs())
+
+	const schema = `{"type":"object","properties":{"a":{"type":"string"}}}`
+	w := dispatch(d, pr, DispatchInput{
+		Inbound:   adapters.OpenAI,
+		Body:      []byte(`{"model":"test-model@anthropic","messages":[{"role":"user","content":"hi"}],"max_tokens":256,"response_format":{"type":"json_schema","json_schema":{"name":"out","schema":` + schema + `}}}`),
+		ModelName: "test-model@anthropic",
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	_, body := last()
+	wantJSON(t, "upstream body", body, `{"model":"test-model","max_tokens":256,"messages":[{"role":"user","content":"hi"}],"output_config":{"format":{"type":"json_schema","schema":`+schema+`}}}`)
+}
+
 // A request refused at routing, before any runner exists, still records what the caller was answered.
 func TestDispatch_RoutingRefusal(t *testing.T) {
 	cat, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)

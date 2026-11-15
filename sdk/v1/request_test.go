@@ -38,6 +38,28 @@ func TestRequest_MarshalJSON(t *testing.T) {
 	wantJSON(t, &Request{Model: ModelRefs{"m"}}, `{"model":"m","input":null}`)
 }
 
+func TestRequest_ModelOptsFor(t *testing.T) {
+	a, b := &ModelOpts{}, &ModelOpts{}
+	tests := []struct {
+		name   string
+		config map[string]*ModelOpts
+		want   *ModelOpts
+	}{
+		{name: "exact key", config: map[string]*ModelOpts{"up": a, "other": b}, want: a},
+		{name: "sole entry under another name", config: map[string]*ModelOpts{"alias": a}, want: a},
+		{name: "several entries, none matching", config: map[string]*ModelOpts{"x": a, "y": b}, want: nil},
+		{name: "no config", config: nil, want: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &Request{Model: ModelRefs{"up"}, ModelConfig: tc.config}
+			if got := req.ModelOptsFor("up"); got != tc.want {
+				t.Errorf("ModelOptsFor = %p, want %p", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestModelRefs_JSON(t *testing.T) {
 	tests := []struct {
 		name string

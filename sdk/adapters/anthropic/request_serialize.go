@@ -78,7 +78,7 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 	}
 
-	if opts, ok := req.ModelConfig[model]; ok && opts != nil {
+	if opts := req.ModelOptsFor(model); opts != nil {
 		if opts.Sampling != nil {
 			s := opts.Sampling
 			out.Temperature = s.Temperature

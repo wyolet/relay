@@ -29,8 +29,33 @@ func TestCrossShapeRequest(t *testing.T) {
 		name     string
 		from, to string
 		body     string
+		upstream string // when set, replaces the parsed model, as routing does
 		want     string // empty: the target refuses with ErrUnsupportedRequest
 	}{
+		{
+			name: "chat options reach Messages under a different upstream name",
+			from: "openai-chat", to: "anthropic", upstream: "up",
+			body: `{"model":"alias","messages":[{"role":"user","content":"hi"}],"temperature":0.5,"max_tokens":256,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":` + answerSchema + `,"strict":true}}}`,
+			want: `{"model":"up","max_tokens":256,"temperature":0.5,` + messagesHiTurns + `,` + messagesFormat + `}`,
+		},
+		{
+			name: "Messages options reach chat under a different upstream name",
+			from: "anthropic", to: "openai-chat", upstream: "up",
+			body: `{"model":"alias","max_tokens":256,"temperature":0.5,` + messagesHiTurns + `,"output_config":{"format":{"type":"json_schema","schema":` + answerSchema + `}}}`,
+			want: `{"model":"up","messages":[{"role":"user","content":"hi"}],"max_tokens":256,"temperature":0.5,"response_format":{"type":"json_schema","json_schema":{"name":"response","schema":` + answerSchema + `}}}`,
+		},
+		{
+			name: "chat options reach Responses under a different upstream name",
+			from: "openai-chat", to: "openai-responses", upstream: "up",
+			body: `{"model":"alias","messages":[{"role":"user","content":"hi"}],"temperature":0.5,"max_tokens":256,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":` + answerSchema + `,"strict":true}}}`,
+			want: `{"model":"up","store":false,"include":["reasoning.encrypted_content"],"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"temperature":0.5,"max_output_tokens":256,"text":{"format":{"type":"json_schema","name":"answer","schema":` + answerSchema + `,"strict":true}}}`,
+		},
+		{
+			name: "chat options reach Gemini under a different upstream name",
+			from: "openai-chat", to: "gemini", upstream: "up",
+			body: `{"model":"alias","messages":[{"role":"user","content":"hi"}],"temperature":0.5,"max_tokens":256,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":` + answerSchema + `,"strict":true}}}`,
+			want: `{` + geminiHiTurn + `,"generationConfig":{"temperature":0.5,"maxOutputTokens":256,"responseMimeType":"application/json","responseSchema":` + answerSchema + `}}`,
+		},
 		{
 			name: "chat json_schema reaches Messages as output_config.format, with no tool",
 			from: "openai-chat", to: "anthropic",
@@ -132,6 +157,9 @@ func TestCrossShapeRequest(t *testing.T) {
 			req, err := shapeByName(tc.from).tr.ParseRequest([]byte(tc.body))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.upstream != "" {
+				req.Model = v1.ModelRefs{tc.upstream}
 			}
 			wire, err := shapeByName(tc.to).tr.SerializeRequest(req)
 			if tc.want == "" {
