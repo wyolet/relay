@@ -2,8 +2,11 @@ package openai
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -37,6 +40,16 @@ func TestResponsesParseRequest(t *testing.T) {
 			want: `{"model":"gpt-5","input":` + respHiInput + `,"output_mode":"sync"}`,
 		},
 		{
+			name: "empty reasoning and text objects set no model options",
+			body: `{"model":"gpt-5","input":"hi","reasoning":{},"text":{}}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"output_mode":"sync"}`,
+		},
+		{
+			name: "reasoning summary alone",
+			body: `{"model":"gpt-5","input":"hi","reasoning":{"summary":"auto"}}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"model_config":{"gpt-5":{"reasoning":{"summary":"auto"}}},"output_mode":"sync"}`,
+		},
+		{
 			// Hosted tools and an mcp tool MCPTool cannot hold drop; namespaced tools flatten to their own names.
 			name: "tool definitions",
 			body: `{"model":"gpt-5","input":"hi","parallel_tool_calls":false,"tool_choice":{"type":"file_search"},"tools":[
@@ -44,11 +57,17 @@ func TestResponsesParseRequest(t *testing.T) {
 				{"type":"function","name":"f"},
 				{"type":"namespace","name":"ns","description":"","tools":[{"type":"function","name":"a","description":"A","parameters":{"type":"object"},"strict":true},{"type":"web_search"}]},
 				{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}},
-				{"type":"mcp","server_label":"gated","server_url":"https://mcp.example.com","require_approval":"never"}]}`,
+				{"type":"mcp","server_label":"gated","server_url":"https://mcp.example.com","require_approval":"never"},
+				{"type":"mcp","server_label":"no-url"},
+				{"type":"mcp","server_url":"https://no-label.example.com"},
+				{"type":"abc","server_label":"not-mcp","server_url":"https://x.example.com"},
+				{"type":"zzz","server_label":"not-mcp","server_url":"https://x.example.com"},
+				{"type":"function","name":"last"}]}`,
 			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":{"definitions":[
 				{"type":"function","name":"f","parameters":{}},
 				{"type":"function","name":"a","description":"A","parameters":{"type":"object"},"strict":true},
-				{"type":"mcp","name":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}}],
+				{"type":"mcp","name":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}},
+				{"type":"function","name":"last","parameters":{}}],
 				"choice":"file_search","parallel":false},"output_mode":"sync"}`,
 		},
 		{
@@ -80,13 +99,19 @@ func TestResponsesParseRequest(t *testing.T) {
 				{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://x/cat.png","detail":"high"},{"type":"input_file","file_id":"file-1","filename":"a.pdf"}]},
 				{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"S"}],"content":[{"type":"reasoning_text","text":"221 = "},{"type":"reasoning_text","text":"13 * 17"}],"encrypted_content":"BLOB"},
 				{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}","status":"completed"},
-				{"type":"function_call_output","call_id":"c1","output":""}]}`,
+				{"type":"function_call_output","call_id":"c1","output":""},
+				{"type":"function_call_output","call_id":"c2","content":[{"type":"input_text","text":"legacy"}]},
+				{"type":"function_call_output","call_id":"c3","output":"o","content":null},
+				{"type":"message","role":"user"}]}`,
 			want: `{"model":"gpt-5","input":[
 				{"type":"message","role":"developer","content":[{"type":"input_text","text":"look"}]},
 				{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://x/cat.png","detail":"high"},{"type":"input_file","file_id":"file-1","filename":"a.pdf"}]},
 				{"type":"reasoning","id":"rs_1","summary":[{"text":"S"}],"content":"221 = 13 * 17","provider_data":{"encrypted_content":"BLOB","id":"rs_1"}},
 				{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}","status":"completed"},
-				{"type":"function_call_output","call_id":"c1"}],"output_mode":"sync"}`,
+				{"type":"function_call_output","call_id":"c1"},
+				{"type":"function_call_output","call_id":"c2","content":[{"type":"input_text","text":"legacy"}]},
+				{"type":"function_call_output","call_id":"c3","output":"o"},
+				{"type":"message","role":"user","content":[]}],"output_mode":"sync"}`,
 		},
 	}
 	for _, tc := range cases {
@@ -111,7 +136,10 @@ func TestResponsesParseRequest_Rejected(t *testing.T) {
 		{"truncation", `{"model":"m","input":"hi","truncation":"auto"}`, stateful("truncation")},
 		{"safety_identifier", `{"model":"m","input":"hi","safety_identifier":"s"}`, stateful("safety_identifier")},
 		{"context_management", `{"model":"m","input":"hi","context_management":{"type":"auto"}}`, stateful("context_management")},
+		{"context_management list", `{"model":"m","input":"hi","context_management":[{"type":"compaction"}]}`, stateful("context_management")},
 		{"stored prompt", `{"model":"m","input":"hi","prompt":{"id":"pmpt_1","version":"2"}}`, stateful("prompt")},
+		{"stored prompt id", `{"model":"m","input":"hi","prompt":"pmpt_1"}`, stateful("prompt")},
+		{"unmodeled tool result part", `{"model":"m","input":[{"type":"function_call_output","call_id":"c","output":[{"type":"input_audio"}]}]}`, `input item: unsupported part type "input_audio"`},
 		{"unmodeled input part", audioInput, `input item: unsupported part type "input_audio"`},
 		{"allowed hosted tool", `{"model":"m","input":"hi","tools":[{"type":"function","name":"f"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"},{"type":"file_search"}]}}`,
 			`tool_choice allowed_tools: tools[1]: "file_search" entries not supported by the upstream API`},
@@ -127,6 +155,7 @@ func TestResponsesParseRequest_Rejected(t *testing.T) {
 		{"metadata key length", `{"model":"m","input":"hi","metadata":{"` + strings.Repeat("k", 65) + `":"v"}}`, `responses parse_request: metadata: key "` + strings.Repeat("k", 65) + `" exceeds 64 characters`},
 		{"metadata value length", `{"model":"m","input":"hi","metadata":{"k":"` + strings.Repeat("v", 257) + `"}}`, `responses parse_request: metadata: value for key "k" exceeds 256 characters`},
 		{"metadata value charset", `{"model":"m","input":"hi","metadata":{"k":"a\nb"}}`, `responses parse_request: metadata: value for key "k" contains non-printable or disallowed ASCII characters`},
+		{"metadata value not ASCII", `{"model":"m","input":"hi","metadata":{"k":"é"}}`, `responses parse_request: metadata: value for key "k" contains non-printable or disallowed ASCII characters`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -139,6 +168,77 @@ func TestResponsesParseRequest_Rejected(t *testing.T) {
 	// The same-shape byte-pass path decodes the wire without canonical, so it must still accept what canonical refuses.
 	if _, err := ParseResponsesRequest([]byte(audioInput)); err != nil {
 		t.Errorf("ParseResponsesRequest refused an unmodeled part: %v", err)
+	}
+}
+
+// A mistyped member fails the parse instead of decoding to a zero value.
+func TestResponsesParseRequest_MistypedMembers(t *testing.T) {
+	content := func(part string) string {
+		return `"input":[{"type":"message","role":"assistant","content":[` + part + `]}]`
+	}
+	for name, members := range map[string]string{
+		"input":                        `"input":5`,
+		"input item":                   `"input":[5]`,
+		"message role":                 `"input":[{"type":"message","role":5}]`,
+		"message content":              `"input":[{"type":"message","role":"user","content":5}]`,
+		"function_call":                `"input":[{"type":"function_call","call_id":5}]`,
+		"function_call_output":         `"input":[{"type":"function_call_output","call_id":5}]`,
+		"function_call_output output":  `"input":[{"type":"function_call_output","call_id":"c","output":5}]`,
+		"function_call_output content": `"input":[{"type":"function_call_output","call_id":"c","content":{}}]`,
+		"reasoning":                    `"input":[{"type":"reasoning","summary":5}]`,
+		"custom_tool_call":             `"input":[{"type":"custom_tool_call","call_id":5}]`,
+		"custom_tool_call_output":      `"input":[{"type":"custom_tool_call_output","call_id":5}]`,
+		"part":                         content(`5`),
+		"input_text part":              content(`{"type":"input_text","text":5}`),
+		"input_image part":             content(`{"type":"input_image","detail":5}`),
+		"input_file part":              content(`{"type":"input_file","file_id":5}`),
+		"output_text part":             content(`{"type":"output_text","text":5}`),
+		"refusal part":                 content(`{"type":"refusal","refusal":5}`),
+		"annotation":                   content(`{"type":"output_text","text":"x","annotations":[5]}`),
+		"url_citation annotation":      content(`{"type":"output_text","text":"x","annotations":[{"type":"url_citation","url":5}]}`),
+		"file_citation annotation":     content(`{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":5}]}`),
+		"tools":                        `"input":"hi","tools":{}`,
+		"tool":                         `"input":"hi","tools":[5]`,
+		"function tool":                `"input":"hi","tools":[{"type":"function","name":5}]`,
+		"custom tool":                  `"input":"hi","tools":[{"type":"custom","name":5}]`,
+		"namespace tool":               `"input":"hi","tools":[{"type":"namespace","tools":5}]`,
+		"tool_choice":                  `"input":"hi","tool_choice":5`,
+	} {
+		var typeErr *json.UnmarshalTypeError
+		if req, err := (ResponsesTranslator{}).ParseRequest([]byte(`{"model":"m",` + members + `}`)); !errors.As(err, &typeErr) {
+			t.Errorf("%s: err = %v, want the decode error (parsed %s)", name, err, mustJSON(req))
+		}
+	}
+}
+
+func TestResponsesParseRequest_MetadataAtTheCaps(t *testing.T) {
+	req := respParseRequest(t, `{"model":"m","input":"hi","metadata":{`+respMetadataEntries(15)+`,"`+strings.Repeat("k", 64)+`":"`+strings.Repeat("v", 254)+` ~"}}`)
+	if len(req.Metadata) != 16 {
+		t.Errorf("kept %d metadata entries, want 16", len(req.Metadata))
+	}
+}
+
+func TestResponsesRoutingHints(t *testing.T) {
+	cases := []struct {
+		body    string
+		want    *ResponsesHints
+		wantErr string
+	}{
+		{`{"model":"m","stream":true,"user":"u","previous_response_id":"resp_1","store":false,"background":true}`,
+			&ResponsesHints{Model: "m", Stream: true, User: "u", PreviousResponseID: "resp_1", Store: respPtr(false), Background: respPtr(true)}, ""},
+		{`{"model":"m"}`, &ResponsesHints{Model: "m"}, ""},
+		{`{"stream":true}`, nil, "model is required"},
+		{`{"model":`, nil, "invalid JSON: unexpected end of JSON input"},
+	}
+	for _, tc := range cases {
+		got, err := ResponsesRoutingHints([]byte(tc.body))
+		gotErr := ""
+		if err != nil {
+			gotErr = err.Error()
+		}
+		if diff := cmp.Diff(tc.want, got); diff != "" || gotErr != tc.wantErr {
+			t.Errorf("%s: err %q, want %q; hints (-want +got):\n%s", tc.body, gotErr, tc.wantErr, diff)
+		}
 	}
 }
 
@@ -168,9 +268,10 @@ func TestResponsesSerializeRequest(t *testing.T) {
 				ModelConfig: map[string]*v1.ModelOpts{"gpt-5": {
 					Sampling:  &v1.SamplingParams{Temperature: respPtr(0.2), TopP: respPtr(0.9), TopK: respPtr(40), MaxTokens: respPtr(64), Stop: []string{"END"}, Seed: respPtr(7)},
 					Reasoning: &v1.ReasoningConfig{Effort: "low", BudgetTokens: respPtr(100)},
+					Output:    &v1.OutputConfig{Format: &v1.Format{Type: "json_object"}},
 				}},
 			},
-			want: `{"model":"gpt-5","input":` + respHiInput + `,"temperature":0.2,"top_p":0.9,"max_output_tokens":64,"reasoning":{"effort":"low"},
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"temperature":0.2,"top_p":0.9,"max_output_tokens":64,"reasoning":{"effort":"low"},"text":{"format":{"type":"json_object"}},
 				"user":"u1","metadata":{"team":"core"},"stream":true,` + tail + `,"prompt_cache_key":"conv-1","prompt_cache_retention":"in_memory","service_tier":"flex"}`,
 		},
 		{
@@ -179,7 +280,7 @@ func TestResponsesSerializeRequest(t *testing.T) {
 			req: &v1.Request{Model: v1.ModelRefs{"gpt-5"}, Input: []v1.Item{
 				&v1.Message{ID: "m_0", Status: v1.StatusCompleted, Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
 				&v1.Reasoning{ID: "r_0", Content: "thinking", Status: v1.StatusCompleted, ProviderData: json.RawMessage(`{"type":"thinking","signature":"anthropic-signed"}`)},
-				&v1.FunctionCall{ID: "t_0", CallID: "toolu_01", Name: "search", Arguments: `{"q":"x"}`, Status: v1.StatusCompleted},
+				&v1.FunctionCall{ID: "t_0", CallID: "toolu_01", Name: "search", Arguments: `{"q":"x"}`, Status: v1.StatusCompleted, ProviderData: json.RawMessage(`{"vendor":"x"}`)},
 				&v1.FunctionCallOutput{CallID: "toolu_01", Output: "result"},
 				&v1.Reasoning{ID: "rs_1", Content: "raw", Status: v1.StatusCompleted, ProviderData: json.RawMessage(`{"encrypted_content":"BLOB"}`)},
 				&v1.FunctionCall{ID: "fc_1", CallID: "c1", Name: "search", Arguments: `{}`, Status: v1.StatusCompleted},
@@ -212,8 +313,10 @@ func TestResponsesSerializeRequest(t *testing.T) {
 				{"type":"message","role":"system","content":[{"type":"input_text","text":"d"}]}],` + tail + `}`,
 		},
 		{
-			name: "tools and hosted tool choice",
-			req: &v1.Request{Model: v1.ModelRefs{"gpt-5"}, Input: []v1.Item{respUserText("hi")}, CacheConfig: &v1.CacheConfig{Key: "k"},
+			name: "tools and hosted tool choice; a hoisted system item alone is the instructions; an empty output config sends no text",
+			req: &v1.Request{Model: v1.ModelRefs{"gpt-5"}, CacheConfig: &v1.CacheConfig{Key: "k"},
+				Input:       []v1.Item{respUserText("hi"), &v1.Message{Role: v1.RoleSystem, Hoist: true, Content: []v1.Part{&v1.TextPart{Text: "typed"}}}},
+				ModelConfig: map[string]*v1.ModelOpts{"gpt-5": {Output: &v1.OutputConfig{}}},
 				Tools: &v1.ToolsConfig{
 					Definitions: v1.Tools{
 						&v1.FunctionTool{Name: "f", ProviderData: json.RawMessage(`{"foreign":true}`)},
@@ -222,7 +325,7 @@ func TestResponsesSerializeRequest(t *testing.T) {
 					Choice:   &v1.ToolChoice{Mode: "file_search"},
 					Parallel: respPtr(true),
 				}},
-			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":[
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"instructions":"typed","tools":[
 				{"type":"function","name":"f","parameters":{}},
 				{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}}],
 				"tool_choice":{"type":"file_search"},"parallel_tool_calls":true,` + tail + `,"prompt_cache_key":"k"}`,
@@ -263,6 +366,7 @@ func TestResponsesSerializeRequest_Rejected(t *testing.T) {
 	}{
 		"no model":         {&v1.Request{Input: []v1.Item{respUserText("hi")}}, "canonical request has no model"},
 		"name-only mcp":    {withTool(&v1.MCPTool{Name: "docs"}), "responses serialize_request: mcp tool needs both name and server_url"},
+		"url-only mcp":     {withTool(&v1.MCPTool{ServerURL: "https://mcp.example.com"}), "responses serialize_request: mcp tool needs both name and server_url"},
 		"relay-run tool":   {withTool(&v1.ServerTool{Name: "web_search"}), "responses serialize_request: unsupported tool type *v1.ServerTool"},
 		"bad service tier": {&v1.Request{Model: v1.ModelRefs{"m"}, Extensions: map[string]json.RawMessage{extServiceTier: json.RawMessage(`5`)}}, `extensions["openai.service_tier"]: json: cannot unmarshal number into Go value of type string`},
 	}
@@ -289,9 +393,17 @@ func TestResponsesResponseOutputReplaysAsInput(t *testing.T) {
 		{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"hi","annotations":[],"logprobs":[]}]}]`)
 }
 
-func TestResponsesParseRequest_TopK(t *testing.T) {
-	req := respParseRequest(t, `{"model":"m","input":"hi","top_k":40}`)
-	respJSONEq(t, req.ModelConfig["m"].Sampling, `{"top_k":40}`)
+func TestResponsesParseRequest_OneSamplingParamAlone(t *testing.T) {
+	for param, want := range map[string]string{
+		`"temperature":0.5`:        `{"temperature":0.5}`,
+		`"top_p":0.9`:              `{"top_p":0.9}`,
+		`"top_k":40`:               `{"top_k":40}`,
+		`"max_output_tokens":9`:    `{"max_tokens":9}`,
+		`"stop_sequences":["END"]`: `{"stop":["END"]}`,
+	} {
+		req := respParseRequest(t, `{"model":"m","input":"hi",`+param+`}`)
+		respJSONEq(t, req.ModelConfig, `{"m":{"sampling":`+want+`}}`)
+	}
 }
 
 // The Responses API types function_call_output.output as a string or an array of input_text/input_image/input_file parts; there is no content member.
