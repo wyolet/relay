@@ -197,7 +197,7 @@ func (q *Queries) DeleteModel(ctx context.Context, id string) error {
 	return err
 }
 
-const deleteOverlay = `-- name: DeleteOverlay :exec
+const deleteOverlay = `-- name: DeleteOverlay :execrows
 DELETE FROM overlays WHERE kind = $1 AND resource_id = $2
 `
 
@@ -206,9 +206,12 @@ type DeleteOverlayParams struct {
 	ResourceID string `db:"resource_id" json:"resource_id"`
 }
 
-func (q *Queries) DeleteOverlay(ctx context.Context, arg DeleteOverlayParams) error {
-	_, err := q.db.Exec(ctx, deleteOverlay, arg.Kind, arg.ResourceID)
-	return err
+func (q *Queries) DeleteOverlay(ctx context.Context, arg DeleteOverlayParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOverlay, arg.Kind, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deletePolicy = `-- name: DeletePolicy :exec

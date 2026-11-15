@@ -60,12 +60,13 @@ func (s *Store) Upsert(ctx context.Context, o *Overlay) error {
 	return nil
 }
 
-// Delete removes the overlay targeting (kind, resourceID). Idempotent.
-func (s *Store) Delete(ctx context.Context, kind, resourceID string) error {
-	if err := s.q.DeleteOverlay(ctx, gen.DeleteOverlayParams{Kind: kind, ResourceID: resourceID}); err != nil {
-		return fmt.Errorf("overlay.Delete: %w", err)
+// Delete removes the overlay targeting (kind, resourceID) and reports whether one existed. Idempotent.
+func (s *Store) Delete(ctx context.Context, kind, resourceID string) (bool, error) {
+	n, err := s.q.DeleteOverlay(ctx, gen.DeleteOverlayParams{Kind: kind, ResourceID: resourceID})
+	if err != nil {
+		return false, fmt.Errorf("overlay.Delete: %w", err)
 	}
-	return nil
+	return n > 0, nil
 }
 
 func fromRow(r gen.Overlay) *Overlay {
