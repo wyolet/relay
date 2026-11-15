@@ -48,6 +48,9 @@ var lossyRoundTrips = func() map[string]lossyRoundTrip {
 	for _, c := range []string{"service-tier", "text"} {
 		m["testdata/anthropic/"+c+" "+responseInput] = lossyRoundTrip{why: "SerializeResponse drops service_tier (annotated): the canonical tier is the serving upstream's lane name, which usage.service_tier would mislabel when another vendor served it"}
 	}
+	for _, c := range []string{"tool-calls", "tool-call-ids"} {
+		m["testdata/gemini/"+c+" "+requestInput] = lossyRoundTrip{why: "SerializeRequest gives a step's unsigned first functionCall the documented skip thoughtSignature, which the re-parse reads as a signature"}
+	}
 	return m
 }()
 

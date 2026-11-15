@@ -144,6 +144,16 @@ func TestCrossShapeRequest(t *testing.T) {
 			want: `{"contents":[{"role":"user","parts":[{"text":"hi"}]},{"role":"model","parts":[{"text":"ok"}]}],"generationConfig":{"maxOutputTokens":1024}}`,
 		},
 		{
+			name: "chat tool round reaches Gemini with the skip signature on its first call",
+			from: "openai-chat", to: "gemini",
+			body: `{"model":"m","messages":[{"role":"user","content":"weather?"},` +
+				`{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}},{"id":"call_2","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Rome\"}"}}]},` +
+				`{"role":"tool","tool_call_id":"call_1","content":"{\"temp\":21}"},{"role":"tool","tool_call_id":"call_2","content":"{\"temp\":25}"}]}`,
+			want: `{"contents":[{"role":"user","parts":[{"text":"weather?"}]},` +
+				`{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"get_weather","args":{"city":"Paris"}},"thoughtSignature":"skip_thought_signature_validator"},{"functionCall":{"id":"call_2","name":"get_weather","args":{"city":"Rome"}}}]},` +
+				`{"role":"user","parts":[{"functionResponse":{"id":"call_1","name":"get_weather","response":{"temp":21}}},{"functionResponse":{"id":"call_2","name":"get_weather","response":{"temp":25}}}]}]}`,
+		},
+		{
 			name: "Gemini text-part signatures do not reach Messages",
 			from: "gemini", to: "anthropic",
 			body: signedGeminiTurns,
