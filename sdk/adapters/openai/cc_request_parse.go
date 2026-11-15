@@ -75,10 +75,11 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			hasSampling = true
 		} else {
 			var single string
-			if err2 := json.Unmarshal(wire.Stop, &single); err2 == nil {
-				sampling.Stop = []string{single}
-				hasSampling = true
+			if err2 := json.Unmarshal(wire.Stop, &single); err2 != nil {
+				return nil, fmt.Errorf("cc parse_request: stop: want a string or an array of strings")
 			}
+			sampling.Stop = []string{single}
+			hasSampling = true
 		}
 	}
 	if hasSampling {
