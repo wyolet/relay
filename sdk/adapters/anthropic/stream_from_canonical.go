@@ -116,6 +116,10 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 			"input": map[string]any{},
 		}
 	case v1.ItemTypeReasoning:
+		if data := redactedThinkingData(e.ProviderData); data != "" {
+			cb = map[string]any{"type": "redacted_thinking", "data": data}
+			break
+		}
 		cb = map[string]any{"type": "thinking", "thinking": "", "signature": ""}
 	default:
 		return nil, nil
@@ -218,6 +222,21 @@ func thinkingSignature(providerData json.RawMessage) string {
 		return ""
 	}
 	return pd.Signature
+}
+
+// redactedThinkingData returns the encrypted data an Anthropic redacted_thinking block left in provider_data; anything else yields "".
+func redactedThinkingData(providerData json.RawMessage) string {
+	if len(providerData) == 0 {
+		return ""
+	}
+	var pd struct {
+		Type string `json:"type"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(providerData, &pd); err != nil || pd.Type != "redacted_thinking" {
+		return ""
+	}
+	return pd.Data
 }
 
 func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]byte, error) {

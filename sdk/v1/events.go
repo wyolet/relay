@@ -47,6 +47,10 @@ type ItemStartedEvent struct {
 	Name string `json:"name,omitempty"`
 	// CallID is the call id for FunctionCall items. Empty for other kinds.
 	CallID string `json:"call_id,omitempty"`
+	// ProviderData is the same-vendor opaque blob a serializer needs to open
+	// the item's wire block (an Anthropic redacted_thinking block's data).
+	// Other vendors ignore it, as they ignore an item's provider_data.
+	ProviderData json.RawMessage `json:"provider_data,omitempty"`
 }
 
 // ItemDeltaEvent carries an incremental chunk into the current item.

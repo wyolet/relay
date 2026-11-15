@@ -175,8 +175,54 @@ func TestCrossShapeRequest_NamelessSchemaGetsAName(t *testing.T) {
 	}
 }
 
+// A stream translated from one shape to another yields that shape's exact frames; clock values read as <now>.
+func TestCrossShapeStream(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		from, to string
+		stream   string
+		want     []string // event, data pairs
+	}{
+		{
+			name: "Messages redacted thinking does not reach Responses",
+			from: "anthropic", to: "openai-responses",
+			stream: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"model\":\"m\",\"usage\":{\"input_tokens\":10}}}\n\n" +
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"ENC\"}}\n\n" +
+				"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n" +
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+			want: []string{
+				"response.created", `{"type":"response.created","sequence_number":0,"response":{"id":"msg_01","object":"response","created_at":"<now>","model":"m","status":"in_progress","output":[],"error":null,"incomplete_details":null,"instructions":null,"temperature":null,"top_p":null,"parallel_tool_calls":false,"tools":[],"metadata":{},"tool_choice":"auto"}}`,
+				"response.in_progress", `{"type":"response.in_progress","sequence_number":1,"response":{"id":"msg_01","object":"response","created_at":"<now>","model":"m","status":"in_progress","output":[],"error":null,"incomplete_details":null,"instructions":null,"temperature":null,"top_p":null,"parallel_tool_calls":false,"tools":[],"metadata":{},"tool_choice":"auto"}}`,
+				"response.output_item.added", `{"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"reasoning","id":"r_0","summary":[],"status":"in_progress"}}`,
+				"response.reasoning_text.done", `{"type":"response.reasoning_text.done","sequence_number":3,"item_id":"r_0","output_index":0,"content_index":0,"text":""}`,
+				"response.output_item.done", `{"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"type":"reasoning","id":"r_0","summary":[{"type":"summary_text","text":""}],"status":"completed"}}`,
+				"response.completed", `{"type":"response.completed","sequence_number":5,"response":{"id":"msg_01","object":"response","created_at":"<now>","model":"m","status":"completed","output":[{"type":"reasoning","id":"r_0","summary":[{"type":"summary_text","text":""}],"status":"completed"}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}},"error":null,"incomplete_details":null,"instructions":null,"temperature":null,"top_p":null,"parallel_tool_calls":false,"tools":[],"metadata":{},"tool_choice":"auto"}}`,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			canon, err := translateFrames(shapeByName(tc.from).tr.NewToCanonicalStream(), splitFrames([]byte(tc.stream)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := translateFrames(shapeByName(tc.to).tr.NewFromCanonicalStream(), canon)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, f := range recordFrames(wire) {
+				got = append(got, f.Event, string(scrubClock(f.Data)))
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("wire (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 const (
-	messagesJSONAnswer = `{"id":"msg_01","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"{\"answer\":\"Paris\"}"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`
+	messagesJSONAnswer =`{"id":"msg_01","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"{\"answer\":\"Paris\"}"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`
 	messagesJSONStream = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"model\":\"m\",\"usage\":{\"input_tokens\":10}}}\n\n" +
 		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"{\\\"answer\\\":\"}}\n\n" +
