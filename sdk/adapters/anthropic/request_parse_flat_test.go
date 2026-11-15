@@ -20,6 +20,7 @@ func flatCaseBody(members string) []byte {
 // encoding/json behaviour it has to reproduce.
 var flatAcceptCases = []string{
 	`"messages":[{"role":"user","content":"hi"}]`,
+	`"messages":[{"role":"user","content":"\n starts with an escape"}]`,
 	`"Messages":[{"ROLE":"user","Content":[{"TYPE":"text","Text":"folded keys"}]}]`,
 	`"messages":[{"role":"user","content":"esc \" \\ \/ \b \f \n \r \t é ` + bs + `u00e9 ` + bs + `ud83d` + bs + `ude00 ` + bs + `ud800 \\u0041"}]`,
 	"\"messages\":[{\"role\":\"user\",\"content\":\"raw invalid utf-8 \xff\xfe end\"}]",
@@ -31,7 +32,7 @@ var flatAcceptCases = []string{
 	`"tools":[{"name":"f","cache_control":null}],"tool_choice":null`,
 	`"temperature":0.5,"top_p":0.9,"top_k":40,"stop_sequences":["x"],"stream":true,"metadata":{"user_id":"u"},"thinking":{"type":"adaptive","display":"summarized"},"output_config":{"effort":"high"},"unknown_member":[1,{"a":2}]`,
 	`"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"hmm","signature":"sig"},{"type":"thinking","thinking":"unsigned"},{"type":"redacted_thinking","data":"x"},{"type":"tool_use","id":"t1","name":"f","input":{"a" : [1, 2]},"cache_control":{"type":"ephemeral"}},{"type":"tool_use","id":"t2","name":"g"},{"type":"tool_use","id":"t3","name":"h","input":null}]}]`,
-	`"messages":[{"role":"assistant","content":null},{"role":"assistant"},{"role":"assistant","content":"said"},{"role":"assistant","content":[]},{"role":"assistant","content":[{"type":"text","text":"t","cache_control":{"type":"ephemeral"}},{"type":"image","source":{"type":"url","url":"u"},"cache_control":{"type":"ephemeral","ttl":"1h"}}]}]`,
+	`"messages":[{"role":"assistant","content":null},{"role":"assistant"},{"role":"assistant","content":"said"},{"role":"assistant","content":[]},{"role":"assistant","content":[{"type":"text","text":"t","cache_control":{"type":"ephemeral"}},{"type":"image","source":{"type":"url","url":"u"},"cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"marked","cache_control":{"type":"ephemeral"}},{"type":"text","text":"unmarked"}]}]`,
 	`"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"out"},{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]},{"type":"tool_result","tool_use_id":"t3","content":[{"type":"text","text":"see"},{"type":"image","source":{"type":"base64","data":"QQ=="}}],"cache_control":{"type":"ephemeral"}},{"type":"tool_result","tool_use_id":"t4","content":null},{"type":"tool_result","tool_use_id":"t5","content":{"type":"text"}},{"type":"tool_result","tool_use_id":"t6"},{"type":"tool_result","tool_use_id":"t7","content":[{"type":"tool_result","content":"nested"}],"is_error":true},{"type":"text","text":"and","cache_control":{"type":"ephemeral"}}]}]`,
 	`"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QQ=="}},{"type":"image","source":{"type":"url","url":""}},{"type":"image","source":null},{"type":"image"},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"QQ=="},"title":"t"},{"type":"document","source":{"type":"url","url":"https://x"}},{"type":"document","source":{"type":"file","file_id":"f"}},{"type":"document","source":{"type":"text","data":"x"}},{"type":null,"text":"untyped","cache_control":null}]}]`,
 	`"messages":[{"role":"user","content":"<system>\nbe brief\n</system>"},{"role":"user","content":[{"type":"text","text":"<system>\nwrapped\n</system>","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t"},{"type":"text","text":"<system>\nnot alone\n</system>"}]}]`,
@@ -67,6 +68,9 @@ var flatDeclineCases = []string{
 	`"tools":["f"]`,
 	`"system":[{"type":"text","text":"a"},"b"]`,
 	`"model":5`,
+	`"system":tru`,
+	`"m` + bs + `u0065ssages":[{"role":"user","content":"escaped top-level key"}]`,
+	`"tools":[{"name":"f","description":5}]`,
 	`"messages":[1,]`,
 }
 

@@ -97,12 +97,13 @@ var responseCases = []struct {
 	{
 		name: "reasoning from another vendor",
 		dir:  serializeOnly,
-		wire: respBody(`"content":[{"type":"thinking","thinking":"content"},{"type":"thinking","thinking":"summary"},{"type":"text","text":"in"}],"stop_reason":"end_turn"`),
+		wire: respBody(`"content":[{"type":"thinking","thinking":"content"},{"type":"thinking","thinking":"summary"},{"type":"thinking","thinking":"bare"},{"type":"text","text":"in"}],"stop_reason":"end_turn"`),
 		resp: response(func(r *v1.Response) {
 			r.Output = []v1.Item{
 				&v1.Reasoning{Content: "content", Summary: []v1.SummaryText{{Text: "ignored"}}},
-				&v1.Reasoning{Summary: []v1.SummaryText{{Text: "summary"}}, ProviderData: json.RawMessage(`{"type":"other"}`)},
+				&v1.Reasoning{Summary: []v1.SummaryText{{Text: "summary"}}, ProviderData: json.RawMessage(`{"type":"thought","thinking":"not ours"}`)},
 				&v1.Reasoning{ProviderData: json.RawMessage(`{"type":"other"}`)},
+				&v1.Reasoning{ProviderData: json.RawMessage(`{"type":"thinking","thinking":"bare"}`)},
 				&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.TextPart{Text: "in"}}},
 			}
 		}),
