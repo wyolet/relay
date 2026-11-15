@@ -248,15 +248,25 @@ func (*ResponsesRawItem) isResponsesItem()                       {}
 func (r *ResponsesRawItem) ResponsesItemType() ResponsesItemType { return r.Type }
 func (r *ResponsesRawItem) MarshalJSON() ([]byte, error)         { return r.Raw, nil }
 
-// responsesUnmarshalItem decodes a single item from the wire format.
-func responsesUnmarshalItem(data []byte) (ResponsesItem, error) {
+// responsesUnmarshalItem decodes a single item from the wire format; input marks a request input item.
+func responsesUnmarshalItem(data []byte, input bool) (ResponsesItem, error) {
 	var probe struct {
 		Type ResponsesItemType `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
-	switch probe.Type {
+	typ := probe.Type
+	// type is optional on an input message: the API reads a type-less input item with a role as a message.
+	if input && typ == "" {
+		var msg struct {
+			Role ResponsesRole `json:"role"`
+		}
+		if json.Unmarshal(data, &msg) == nil && msg.Role != "" {
+			typ = ResponsesItemTypeMessage
+		}
+	}
+	switch typ {
 	case ResponsesItemTypeMessage:
 		var v ResponsesMessage
 		if err := json.Unmarshal(data, &v); err != nil {
@@ -309,7 +319,7 @@ func responsesUnmarshalItems(data []byte) ([]ResponsesItem, error) {
 	}
 	items := make([]ResponsesItem, 0, len(raws))
 	for _, raw := range raws {
-		it, err := responsesUnmarshalItem(raw)
+		it, err := responsesUnmarshalItem(raw, true)
 		if err != nil {
 			return nil, err
 		}
