@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/wyolet/relay/sdk/internal/dataurl"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -44,15 +45,13 @@ func canonicalPartsToGemini(parts []v1.Part) ([]geminiPart, error) {
 }
 
 func canonicalImageToGemini(url string) (geminiPart, error) {
+	// fileData.fileUri takes no data: URI, so every data URL goes inline.
 	if strings.HasPrefix(url, "data:") {
-		rest := url[5:]
-		semi := strings.Index(rest, ";")
-		comma := strings.Index(rest, ",")
-		if semi >= 0 && comma > semi {
-			mt := rest[:semi]
-			data := rest[comma+1:]
-			return geminiPart{InlineData: &inlineData{MIMEType: mt, Data: data}}, nil
+		mt, data, err := dataurl.Base64(url)
+		if err != nil {
+			return geminiPart{}, fmt.Errorf("gemini serialize_request: %w: image: %w", v1.ErrUnsupportedRequest, err)
 		}
+		return geminiPart{InlineData: &inlineData{MIMEType: mt, Data: data}}, nil
 	}
 	// Plain URL — use fileData.
 	return geminiPart{FileData: &fileData{FileURI: url}}, nil

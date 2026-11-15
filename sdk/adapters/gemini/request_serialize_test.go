@@ -143,6 +143,11 @@ func TestSerializeRequest_Contents(t *testing.T) {
 			items:    []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.FilePart{FileData: "QUJD"}, &v1.ImagePart{ImageURL: "https://example.com/i;v=1,2.png"}}}},
 			contents: `[{"role":"user","parts":[{"inlineData":{"mimeType":"application/octet-stream","data":"QUJD"}},{"fileData":{"fileUri":"https://example.com/i;v=1,2.png"}}]}]`,
 		},
+		{
+			name:     "image data URL without base64 goes inline re-encoded",
+			items:    []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.ImagePart{ImageURL: "data:image/png,abc"}}}},
+			contents: `[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"YWJj"}}]}]`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -202,11 +207,8 @@ func TestSerializeRequest_RejectsUnknownFormatType(t *testing.T) {
 }
 
 func TestSerializeRequest_UnsendableImageOrFilePart(t *testing.T) {
-	for name, part := range map[string]v1.Part{"file without data or URL": &v1.FilePart{}, "image data URL without base64": &v1.ImagePart{ImageURL: "data:image/png,abc"}} {
+	for name, part := range map[string]v1.Part{"file without data or URL": &v1.FilePart{}, "image data URL with a bad percent escape": &v1.ImagePart{ImageURL: "data:image/png,%zz"}, "image data URL without a comma": &v1.ImagePart{ImageURL: "data:image/png;base64"}} {
 		t.Run(name, func(t *testing.T) {
-			if _, ok := part.(*v1.ImagePart); ok {
-				t.Skip("bug: an image data URL without a ;base64 payload is sent as fileData.fileUri, which takes no data: URI")
-			}
 			req := &v1.Request{Input: []v1.Item{&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{part}}}}
 			if body, err := tr.SerializeRequest(req); err == nil {
 				t.Errorf("serialized to %s, want an error", body)
