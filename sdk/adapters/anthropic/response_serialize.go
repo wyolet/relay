@@ -40,8 +40,8 @@ func (AnthropicTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) (
 						"type": "text",
 						"text": tp.Text,
 					}
-					if len(tp.Annotations) > 0 {
-						block["citations"] = canonicalAnnotationsToAnthropic(tp.Annotations)
+					if cits := canonicalAnnotationsToAnthropic(tp.Annotations); len(cits) > 0 {
+						block["citations"] = cits
 					}
 					content = append(content, block)
 				case *v1.TextPart:

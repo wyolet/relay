@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/wyolet/relay/sdk/usage"
@@ -135,8 +136,8 @@ func anthropicCitationsToCanonical(cits []anthropicCitation) []v1.Annotation {
 				EndIndex:   c.EndIndex,
 			})
 		case "web_search_result_location":
-			// canonical: web_search_result_location cited_text and encrypted_index dropped — URLCitationAnnotation holds only url, title and output-text offsets.
-			out = append(out, &v1.URLCitationAnnotation{URL: c.URL, Title: c.Title})
+			// The whole citation rides in ProviderData: cited_text and encrypted_index have no canonical field, and replay needs both.
+			out = append(out, &v1.URLCitationAnnotation{URL: c.URL, Title: c.Title, ProviderData: c.raw})
 		default:
 			out = append(out, &v1.RawAnnotation{Type: c.Type, JSON: c.raw})
 		}
@@ -144,20 +145,40 @@ func anthropicCitationsToCanonical(cits []anthropicCitation) []v1.Annotation {
 	return out
 }
 
-// canonicalAnnotationsToAnthropic maps canonical annotations to Anthropic citations.
-func canonicalAnnotationsToAnthropic(anns []v1.Annotation) []map[string]any {
-	var out []map[string]any
+// canonicalAnnotationsToAnthropic writes back the Anthropic citations canonical carries verbatim; nil when none are left.
+func canonicalAnnotationsToAnthropic(anns []v1.Annotation) []json.RawMessage {
+	var out []json.RawMessage
 	for _, a := range anns {
 		switch v := a.(type) {
 		case *v1.URLCitationAnnotation:
-			out = append(out, map[string]any{
-				"type":        "url_citation",
-				"url":         v.URL,
-				"title":       v.Title,
-				"start_index": v.StartIndex,
-				"end_index":   v.EndIndex,
-			})
+			if isAnthropicCitation(v.ProviderData) {
+				out = append(out, v.ProviderData)
+			}
+			// canonical: URL citation without Anthropic provider_data dropped — web_search_result_location needs the encrypted_index only Anthropic issues, and Anthropic has no plain URL citation.
+		case *v1.RawAnnotation:
+			if isAnthropicLocation(v.Type) && len(v.JSON) > 0 {
+				out = append(out, v.JSON)
+			}
+			// canonical: raw annotation of another vendor dropped — Anthropic accepts only its own citation types.
+		case *v1.TextCitationAnnotation:
+			// canonical: text_citation dropped — Anthropic locations name a document and its cited text, which output-text offsets cannot rebuild.
 		}
 	}
 	return out
+}
+
+func isAnthropicLocation(typ string) bool {
+	switch typ {
+	case "char_location", "page_location", "content_block_location", "search_result_location", "web_search_result_location":
+		return true
+	}
+	return false
+}
+
+// isAnthropicCitation reports whether provider_data holds a citation an Anthropic parse left there, not another vendor's blob.
+func isAnthropicCitation(providerData json.RawMessage) bool {
+	var pd struct {
+		Type string `json:"type"`
+	}
+	return len(providerData) > 0 && json.Unmarshal(providerData, &pd) == nil && isAnthropicLocation(pd.Type)
 }
