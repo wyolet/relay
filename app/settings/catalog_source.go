@@ -25,6 +25,15 @@ type CatalogSource struct {
 	// each check of the catalog index it makes while running.
 	CheckedAt string `json:"checkedAt,omitempty" doc:"When a relay with RELAY_CATALOG_VERSION=latest last checked the catalog index while running, RFC 3339."`
 	LastError string `json:"lastError,omitempty" doc:"Why that check failed to read the index or to fetch, verify or seed the release; empty when it succeeded."`
+
+	// Prune is what the automatic prune after that seed did.
+	Prune *CatalogPrune `json:"prune,omitempty" doc:"What the prune after the last versioned seed did; absent when it is off (RELAY_CATALOG_PRUNE=off), failed, or the seed was not versioned."`
+}
+
+// CatalogPrune counts what one prune of detached catalog rows did.
+type CatalogPrune struct {
+	Pruned       int `json:"pruned"       doc:"Detached rows the prune deleted."`
+	KeptDetached int `json:"keptDetached" doc:"Detached rows it left in place: edited, with an overlay, still referenced, or with recent or unknown traffic."`
 }
 
 func (c *CatalogSource) Validate() error { return nil }

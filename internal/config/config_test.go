@@ -35,7 +35,7 @@ func defaults() *Config {
 		RedisPostFlightPoolSize: 25 * cpus, RedisPostFlightPoolTimeout: time.Second, RedisPostFlightReadTimeout: time.Second,
 		RedisPostFlightBatchSize: 64, RedisPostFlightBatchDelay: 2 * time.Millisecond, RedisPostFlightQueueSize: 4096,
 		Authz: AuthzSingle, MigrateOnBoot: true, MigrateLockTimeout: 10 * time.Second,
-		ConfigDir: "config", CatalogPollInterval: time.Hour,
+		ConfigDir: "config", CatalogPollInterval: time.Hour, CatalogPrune: true, CatalogPruneIdle: 720 * time.Hour,
 		InflightSchedP99: 20 * time.Millisecond, BatchMaxItems: 50000, UpstreamDialTimeout: 10 * time.Second,
 		ConnQueue: 1024, ConnQueueTimeout: time.Second,
 		Limiter: "hybrid", LimiterSync: time.Second, PlanCellIdle: 10 * time.Minute, PlanResync: 10 * time.Minute,
@@ -130,6 +130,8 @@ func TestLoad_Values(t *testing.T) {
 			func(c *Config) {
 				c.CatalogPollInterval, c.CatalogWebhookURL = 15*time.Minute, "http://relay.local:8080"
 			}},
+		{"catalog prune off with its own window", map[string]string{"RELAY_CATALOG_PRUNE": " OFF ", "RELAY_CATALOG_PRUNE_IDLE": "168h"}, "",
+			func(c *Config) { c.CatalogPrune, c.CatalogPruneIdle = false, 168*time.Hour }},
 		{"queues", map[string]string{"RELAY_USAGE_QUEUE_SIZE": "32768", "RELAY_USAGE_REFUSED_QUEUE_SIZE": "64", "RELAY_PAYLOAD_QUEUE_BYTES": "1048576", "RELAY_PAYLOAD_REFUSED_QUEUE_BYTES": "4096"}, "",
 			func(c *Config) {
 				c.UsageQueueSize, c.UsageRefusedQueueSize, c.PayloadQueueBytes, c.PayloadRefusedQueueBytes = 32768, 64, 1048576, 4096
@@ -230,6 +232,9 @@ func TestLoad_Rejects(t *testing.T) {
 		{"account domain with a space", map[string]string{"RELAY_ACCOUNT_DOMAIN": "accounts example.com"}, `RELAY_ACCOUNT_DOMAIN must be a bare domain such as accounts.example.com, got "accounts example.com"`},
 		{"poll interval not a duration", map[string]string{"RELAY_CATALOG_POLL_INTERVAL": "hourly"}, `RELAY_CATALOG_POLL_INTERVAL must be a non-negative Go duration such as 1h or 15m (0 disables polling), got "hourly"`},
 		{"poll interval negative", map[string]string{"RELAY_CATALOG_POLL_INTERVAL": "-1m"}, `RELAY_CATALOG_POLL_INTERVAL must be a non-negative Go duration such as 1h or 15m (0 disables polling), got "-1m"`},
+		{"catalog prune switch", map[string]string{"RELAY_CATALOG_PRUNE": "sometimes"}, `RELAY_CATALOG_PRUNE must be "on" or "off", got "sometimes"`},
+		{"catalog prune window in days", map[string]string{"RELAY_CATALOG_PRUNE_IDLE": "30d"}, `RELAY_CATALOG_PRUNE_IDLE must be a positive Go duration such as 720h, got "30d"`},
+		{"catalog prune window zero", map[string]string{"RELAY_CATALOG_PRUNE_IDLE": "0"}, `RELAY_CATALOG_PRUNE_IDLE must be a positive Go duration such as 720h, got "0"`},
 		{"webhook over plain http", map[string]string{"RELAY_CATALOG_WEBHOOK_URL": "http://relay.example.com"}, `RELAY_CATALOG_WEBHOOK_URL: must be an https URL such as https://relay.example.com, got "http://relay.example.com" (http needs RELAY_COOKIE_SECURE=false)`},
 		{"webhook over another scheme even with insecure cookies", map[string]string{"RELAY_CATALOG_WEBHOOK_URL": "ftp://relay.example.com", "RELAY_COOKIE_SECURE": "false"}, `RELAY_CATALOG_WEBHOOK_URL: must be an https URL such as https://relay.example.com, got "ftp://relay.example.com" (http needs RELAY_COOKIE_SECURE=false)`},
 		{"webhook without a scheme", map[string]string{"RELAY_CATALOG_WEBHOOK_URL": "relay.example.com"}, `RELAY_CATALOG_WEBHOOK_URL: must be an https URL such as https://relay.example.com, got "relay.example.com" (http needs RELAY_COOKIE_SECURE=false)`},

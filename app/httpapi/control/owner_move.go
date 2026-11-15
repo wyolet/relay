@@ -23,19 +23,11 @@ func refuseStrandingMove(ctx context.Context, d Deps, kind, id, name string, own
 	if d.Stores == nil {
 		return nil
 	}
-	var items []referenceItem
 	// A link a delete would take still strands on a move: the policy keeps
 	// pointing at a row it may no longer draw on.
-	for _, scans := range []map[string]func(context.Context, Deps, string) ([]referenceItem, error){referenceScans, droppedLinkScans} {
-		scan, ok := scans[kind]
-		if !ok {
-			continue
-		}
-		more, err := scan(ctx, d, id)
-		if err != nil {
-			return huma.Error500InternalServerError(err.Error())
-		}
-		items = append(items, more...)
+	items, err := referencesOf(ctx, d, kind, id)
+	if err != nil {
+		return huma.Error500InternalServerError(err.Error())
 	}
 	var stranded []referenceItem
 	for _, it := range items {

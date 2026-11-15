@@ -103,6 +103,8 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.catalogVersion` | `""` | `RELAY_CATALOG_VERSION`: pin the catalog to a relay-catalog release tag; a change re-seeds at the next boot. |
 | `relay.catalogPollInterval` | `""` | `RELAY_CATALOG_POLL_INTERVAL`: with `catalogVersion: latest`, how often a running relay checks for a newer release (default 1h, `0` off). |
 | `relay.catalogWebhookUrl` | `""` | `RELAY_CATALOG_WEBHOOK_URL`: with `catalogVersion: latest`, this relay's public https base URL; it registers for release nudges from the catalog server. |
+| `relay.catalogPrune` | `""` | `RELAY_CATALOG_PRUNE`: `off` stops deleting, after each catalog upgrade, the detached catalog rows nothing holds (default on). |
+| `relay.catalogPruneIdle` | `""` | `RELAY_CATALOG_PRUNE_IDLE`: how long a detached model or host binding must have served no request before the prune deletes it (default `720h`). |
 | `relay.catalogUrl` | `""` | `RELAY_CATALOG_URL`, for a mirror. The archive needs its `.sha256` file next to it. |
 | `relay.extraEnv` | `[]` | Extra `name`/`value` env vars for the relay container and the migration Job (for example `RELAY_MAX_INFLIGHT`, `RELAY_PPROF_ADDR`). |
 | `resources` | requests 250m / 256Mi, limits 1 CPU / 1Gi | Relay container. |

@@ -17,17 +17,20 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/wyolet/relay/app/seed"
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // ErrSeedBusy reports a check skipped because another relay holds the seed lock.
 var ErrSeedBusy = errors.New("catalog: another relay is seeding the catalog")
 
-// CheckResult is the catalog-source version before and after one check.
+// CheckResult is the catalog-source version before and after one check, and
+// what the prune after a seed it made did (nil when none ran).
 type CheckResult struct {
 	Previous string
 	Current  string
 	Changed  bool
+	Pruned   *settings.CatalogPrune
 }
 
 // defaultRecheckDelay is how long Run waits to check again when a release
@@ -194,7 +197,7 @@ func (f *Follower) check(ctx context.Context) (checkReport, error) {
 				return err
 			}
 			res.Previous, res.Current = st.version(), st.version()
-			outcome, seedErr = seedRelease(ctx, f.stores, f.opts, idx.Latest, st, false)
+			outcome, res.Pruned, seedErr = seedRelease(ctx, f.stores, f.opts, idx.Latest, st, false)
 			if outcome == seedUpdated {
 				res.Current = idx.Latest
 			}
