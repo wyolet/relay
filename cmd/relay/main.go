@@ -130,6 +130,7 @@ func main() {
 
 	usageCtl, usageReader := buildUsageLog(listenerCtx, cfg, cat, kvStore, lifecycleReg)
 	defer usageCtl.Close()
+	bootOpts.Prune.Usage, bootOpts.Prune.UsageReady = pruneUsage{usageCtl}, usageCtl.ReaderReady
 
 	// Payload logging: the second lifecycle observer. Always wired; its
 	// runtime config lives in the "payload-logging" settings section, so it
@@ -178,7 +179,8 @@ func main() {
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlSrv, ctrlErr = startControl(cfg, st, cat, stores, idStore, usersStore, tokenSigner, tokenVerifier,
 			kvStore, limiter, sessMgr, licenseSvc, cookieSecure, usageReader, auditEmitter, auditStore, payloadReader,
-			selector, hostHealth, revoked, specRegistry, plans.plans, plans.engine.View, counting, catalogSync(catalogFollower))
+			selector, hostHealth, revoked, specRegistry, plans.plans, plans.engine.View, counting, catalogSync(catalogFollower),
+			catalogPrune(stores, bootOpts))
 	}
 
 	pprofSrv, pprofErr := startPprof(cfg)

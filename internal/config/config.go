@@ -113,8 +113,15 @@ type Config struct {
 	// server sends release webhooks to (RELAY_CATALOG_WEBHOOK_URL); empty
 	// registers none.
 	CatalogWebhookURL string
-	InstanceID        string
-	EventlogDir       string
+	// CatalogPrune runs the prune of detached catalog rows after every
+	// versioned reseed and on a following relay's checks (RELAY_CATALOG_PRUNE,
+	// default on).
+	CatalogPrune bool
+	// CatalogPruneIdle is how long a detached model or host binding must have
+	// served no request to be pruned (RELAY_CATALOG_PRUNE_IDLE, default 720h).
+	CatalogPruneIdle time.Duration
+	InstanceID       string
+	EventlogDir      string
 	// UsageQueueSize is how many usage events wait in memory for the sink before new ones are dropped (RELAY_USAGE_QUEUE_SIZE); 0 = usagelog.DefaultQueueSize.
 	UsageQueueSize int
 	// UsageRefusedQueueSize is the same for events of requests that never reached an upstream (RELAY_USAGE_REFUSED_QUEUE_SIZE); 0 = usagelog.DefaultRefusedQueueSize.
@@ -424,6 +431,9 @@ func Load() (*Config, error) {
 	cfg.CatalogURL = os.Getenv("RELAY_CATALOG_URL")
 	cfg.CatalogIndexURL = os.Getenv("RELAY_CATALOG_INDEX_URL")
 	if err := loadCatalogFollow(cfg); err != nil {
+		return nil, err
+	}
+	if err := loadCatalogPrune(cfg); err != nil {
 		return nil, err
 	}
 

@@ -21,9 +21,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/wyolet/relay/app/catalogprune"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/metrics"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // releaseServer is a catalog server: a channel index with an ETag, and
@@ -483,5 +485,63 @@ func TestIntegration_Follower_SeedReachesOtherPods(t *testing.T) {
 			t.Fatal("the other pod's snapshot never saw the seeded release")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// noTraffic is a usage store with no requests in it.
+type noTraffic struct{}
+
+func (noTraffic) Events(context.Context, usage.EventQuery) ([]usage.Event, error) { return nil, nil }
+
+// A relay that upgrades onto an already seeded release prunes the rows earlier
+// releases detached on its next check, with no release to seed: only with the
+// prune on and once usage can answer. With no detached row left it judges
+// nothing.
+func TestIntegration_Follower_PrunesTheBacklog(t *testing.T) {
+	pool, ctx, cancel := setupDB(t)
+	defer cancel()
+	rs := newReleaseServer(t)
+	rs.release("v1.0.0", "acme", "beta")
+	opts := rs.opts(pool, "latest")
+	_, stores, _ := hydrate(t, ctx, opts)
+	rs.release("v1.1.0", "acme")
+	if res, err := NewFollower(stores, opts).Check(ctx); err != nil || !res.Changed || res.Pruned != nil {
+		t.Fatalf("seeding v1.1.0 without a prune = %+v, %v", res, err)
+	}
+
+	judged := 0
+	ready := true
+	pruning := opts
+	pruning.Prune = PruneOptions{
+		Auto: true, Idle: time.Hour, Usage: noTraffic{}, UsageReady: func() bool { return ready },
+		References: func(context.Context, *Stores, string, string) ([]catalogprune.Ref, error) {
+			judged++
+			return nil, nil
+		},
+	}
+	off := pruning
+	off.Prune.Auto = false
+	if res, err := NewFollower(stores, off).Check(ctx); err != nil || res.Pruned != nil || judged != 0 {
+		t.Fatalf("prune off: check = %+v, %v after judging %d rows", res, err, judged)
+	}
+	ready = false
+	f := NewFollower(stores, pruning)
+	if res, err := f.Check(ctx); err != nil || res.Pruned != nil || judged != 0 {
+		t.Fatalf("usage not ready: check = %+v, %v after judging %d rows", res, err, judged)
+	}
+
+	ready = true
+	res, err := f.Check(ctx)
+	if err != nil || res.Changed || res.Pruned == nil || *res.Pruned != (settings.CatalogPrune{Pruned: 1}) {
+		t.Fatalf("check = %+v (prune %+v), %v; want beta pruned", res, res.Pruned, err)
+	}
+	provs, err := stores.Provider.List(ctx)
+	if err != nil || len(provs) != 1 || provs[0].Meta.Name != "acme" {
+		t.Fatalf("providers after the prune = %d, %v", len(provs), err)
+	}
+
+	judged = 0
+	if res, err := f.Check(ctx); err != nil || res.Pruned != nil || judged != 0 {
+		t.Fatalf("nothing detached: check = %+v, %v after judging %d rows", res, err, judged)
 	}
 }

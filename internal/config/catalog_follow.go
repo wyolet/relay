@@ -31,6 +31,27 @@ func loadCatalogFollow(cfg *Config) error {
 	return nil
 }
 
+// defaultCatalogPruneIdle matches app/catalog.DefaultPruneIdle.
+const defaultCatalogPruneIdle = 30 * 24 * time.Hour
+
+// loadCatalogPrune reads the automatic prune's switch and traffic window.
+func loadCatalogPrune(cfg *Config) error {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_CATALOG_PRUNE"))); v {
+	case "", "on", "1", "true":
+		cfg.CatalogPrune = true
+	case "off", "0", "false":
+		cfg.CatalogPrune = false
+	default:
+		return fmt.Errorf(`RELAY_CATALOG_PRUNE must be "on" or "off", got %q`, v)
+	}
+	idle, err := envDuration("RELAY_CATALOG_PRUNE_IDLE", defaultCatalogPruneIdle)
+	if err != nil || idle <= 0 {
+		return fmt.Errorf("RELAY_CATALOG_PRUNE_IDLE must be a positive Go duration such as 720h, got %q", os.Getenv("RELAY_CATALOG_PRUNE_IDLE"))
+	}
+	cfg.CatalogPruneIdle = idle
+	return nil
+}
+
 // webhookBase validates the public base URL of this relay's inference
 // listener. Plain http is accepted only under the plain-HTTP opt-out the
 // session cookie uses (RELAY_COOKIE_SECURE=false), for local setups.

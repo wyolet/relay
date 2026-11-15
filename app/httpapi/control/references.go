@@ -23,6 +23,8 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalogprune"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -135,6 +137,41 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			return out, nil
 		})
 	}
+}
+
+// referencesOf lists every row referencing kind's row id: the ones its delete
+// refuses on and the ones it would take a link from.
+func referencesOf(ctx context.Context, d Deps, kind, id string) ([]referenceItem, error) {
+	var items []referenceItem
+	for _, scans := range []map[string]func(context.Context, Deps, string) ([]referenceItem, error){referenceScans, droppedLinkScans} {
+		scan, ok := scans[kind]
+		if !ok {
+			continue
+		}
+		more, err := scan(ctx, d, id)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, more...)
+	}
+	return items, nil
+}
+
+// CatalogReferences lists every row referencing the catalog row id of kind (an
+// API singular), unscoped by caller: the rows its delete refuses on and the
+// ones it would take a link from. The catalog prune keeps a row any of them
+// still references, so a prune holds a row wherever an admin delete would
+// refuse or change something else.
+func CatalogReferences(ctx context.Context, stores *appcatalog.Stores, kind, id string) ([]catalogprune.Ref, error) {
+	items, err := referencesOf(ctx, Deps{Stores: stores, Users: stores.Users}, kind, id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]catalogprune.Ref, 0, len(items))
+	for _, it := range items {
+		out = append(out, catalogprune.Ref{Kind: it.Kind, ID: it.ID, Name: it.Name})
+	}
+	return out, nil
 }
 
 func sortReferences(items []referenceItem) {

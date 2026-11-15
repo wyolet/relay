@@ -171,6 +171,33 @@ func TestController_Reconcile(t *testing.T) {
 	}
 }
 
+// The reader is ready only while it serves the backend the settings name: not
+// before the first reconcile, not while a change waits for one, and not while
+// a failed build leaves the old backend serving.
+func TestController_ReaderReady(t *testing.T) {
+	src := usageSettings("file")
+	var b backends
+	c := NewController(src, b.build, EmitterOptions{}, testLogger())
+	defer c.Close()
+	ctx := context.Background()
+	want := func(step string, ready bool) {
+		t.Helper()
+		if got := c.ReaderReady(); got != ready {
+			t.Fatalf("%s: ReaderReady = %v, want %v", step, got, ready)
+		}
+	}
+	want("before the first reconcile", false)
+	c.reconcile(ctx)
+	want("reconciled", true)
+	src.Set(settings.SectionUsageLogging, &settings.UsageLogging{Backend: "clickhouse"})
+	want("settings changed, not reconciled", false)
+	c.reconcile(ctx)
+	want("reconciled again", true)
+	src.Set(settings.SectionUsageLogging, &settings.UsageLogging{Backend: "bad"})
+	c.reconcile(ctx)
+	want("a build that fails", false)
+}
+
 // Run applies the stored section, then follows each change: events emitted
 // after a reroute land in the new backend, and Close closes the live one.
 func TestController_RunFollowsSettings(t *testing.T) {

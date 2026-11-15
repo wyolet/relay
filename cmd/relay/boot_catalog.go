@@ -2,18 +2,23 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalogprune"
+	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/usagelog"
 	relayconfig "github.com/wyolet/relay/config"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // catalogSeedLock is the advisory-lock id every catalog seed, at boot or by
@@ -34,6 +39,10 @@ func catalogBootOptions(cfg *config.Config, st *storagemod.Storage) appcatalog.B
 			return storagemod.TryAdvisoryLock(ctx, st.Pool(), catalogSeedLock, fn)
 		},
 		AllowDowngrade: cfg.CatalogAllowDowngrade,
+		Prune: appcatalog.PruneOptions{
+			Auto: cfg.CatalogPrune, Idle: cfg.CatalogPruneIdle,
+			References: control.CatalogReferences,
+		},
 	}
 	if cfg.AutoSeedIfEmpty && cfg.CatalogDir != "" {
 		bootOpts.AutoSeedDir = cfg.CatalogDir
@@ -46,6 +55,28 @@ func catalogBootOptions(cfg *config.Config, st *storagemod.Storage) appcatalog.B
 	}
 	bootOpts.SystemRateLimits = loadSystemRateLimits(cfg)
 	return bootOpts
+}
+
+// errUsageNotReady is the prune's usage answer before the usage backend is up.
+var errUsageNotReady = errors.New("the usage store is not connected yet")
+
+// pruneUsage answers the prune's traffic guard from the usage store, and
+// refuses until the backend the settings name is live: before that the reader
+// answers empty or from another backend, which would pass for no traffic.
+type pruneUsage struct{ ctl *usagelog.Controller }
+
+func (u pruneUsage) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, error) {
+	if !u.ctl.ReaderReady() {
+		return nil, errUsageNotReady
+	}
+	return u.ctl.Reader().Events(ctx, q)
+}
+
+// catalogPrune is the prune POST /api/catalog/prune runs.
+func catalogPrune(stores *appcatalog.Stores, opts appcatalog.BootstrapOptions) func(context.Context, time.Duration, bool) (catalogprune.Report, error) {
+	return func(ctx context.Context, idle time.Duration, apply bool) (catalogprune.Report, error) {
+		return appcatalog.PruneDetached(ctx, stores, opts, idle, apply)
+	}
 }
 
 // loadSystemRateLimits returns the system rate limit definitions the boot seeds: the ones shipped in the binary, each replaced by a definition of the same name under <config dir>/ratelimits when there is one.

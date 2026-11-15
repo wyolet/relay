@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalogprune"
 	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
@@ -40,7 +41,8 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	usageReader usagelog.Reader, auditEmitter *audit.Emitter, auditStore *audit.Store, payloadReader *payloadReaderResolver,
 	selector *keypool.Selector, hostHealth *hosthealth.Recorder, revoked *revocation.List, specs *adapter.Registry,
 	planHolder *plan.Holder, planView func() *engine.View, counters control.CounterReader,
-	catalogSync func(context.Context) (appcatalog.CheckResult, error)) (*http.Server, <-chan error) {
+	catalogSync func(context.Context) (appcatalog.CheckResult, error),
+	catalogPrune func(context.Context, time.Duration, bool) (catalogprune.Report, error)) (*http.Server, <-chan error) {
 	ctrlRouter := chi.NewRouter()
 	ctrlRouter.Use(httpmw.SecurityHeaders)
 	if len(cfg.ControlAllowOrigins) > 0 {
@@ -78,6 +80,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		Catalog:        cat,
 		Stores:         stores,
 		CatalogSync:    catalogSync,
+		CatalogPrune:   catalogPrune,
 		Plans:          planHolder,
 		CookieSecure:   cookieSecure,
 		UsageReader:    usageReader,

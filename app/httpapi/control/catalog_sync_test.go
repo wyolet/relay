@@ -11,20 +11,23 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/settings"
 )
 
 func TestCatalogSyncAnswersTheCheck(t *testing.T) {
 	d := Deps{
 		Authz: authz.AlwaysAllowAuthenticated{},
 		CatalogSync: func(context.Context) (appcatalog.CheckResult, error) {
-			return appcatalog.CheckResult{Previous: "v0.2.1", Current: "v0.2.2", Changed: true}, nil
+			return appcatalog.CheckResult{Previous: "v0.2.1", Current: "v0.2.2", Changed: true,
+				Pruned: &settings.CatalogPrune{Pruned: 412, KeptDetached: 3}}, nil
 		},
 	}
 	out, err := syncCatalog(asAdminToken(), d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Body.Previous != "v0.2.1" || out.Body.Current != "v0.2.2" || !out.Body.Changed {
+	if out.Body.Previous != "v0.2.1" || out.Body.Current != "v0.2.2" || !out.Body.Changed ||
+		out.Body.Prune == nil || *out.Body.Prune != (settings.CatalogPrune{Pruned: 412, KeptDetached: 3}) {
 		t.Fatalf("body = %+v", out.Body)
 	}
 }

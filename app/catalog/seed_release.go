@@ -77,11 +77,12 @@ func readCatalogSource(ctx context.Context, stores *Stores) (*settings.CatalogSo
 // seedRelease brings the catalog to version unless it is non-empty and the
 // marker names version, or a newer release while allowOlder is false. A tree in
 // AutoSeedDir stamped with version seeds from disk; otherwise the release is
-// fetched and its sha256 checked, a failure coming back as *fetchError.
-func seedRelease(ctx context.Context, stores *Stores, opts BootstrapOptions, version string, st seedState, allowOlder bool) (seedOutcome, error) {
+// fetched and its sha256 checked, a failure coming back as *fetchError. The
+// counts are the prune after an updated seed's, nil when none ran.
+func seedRelease(ctx context.Context, stores *Stores, opts BootstrapOptions, version string, st seedState, allowOlder bool) (seedOutcome, *settings.CatalogPrune, error) {
 	cur := st.version()
 	if cur == version && !st.empty {
-		return seedUnchanged, nil
+		return seedUnchanged, nil, nil
 	}
 	if !st.empty && cur != "" {
 		switch cmp, ok := compareVersions(version, cur); {
@@ -91,7 +92,7 @@ func seedRelease(ctx context.Context, stores *Stores, opts BootstrapOptions, ver
 		case cmp < 0 && !allowOlder:
 			slog.Warn("catalog: pinned version older than the seeded one; keeping it",
 				"version", version, "seeded", cur)
-			return seedSkippedOlder, nil
+			return seedSkippedOlder, nil, nil
 		case cmp < 0:
 			slog.Warn("catalog: seeding a version older than the seeded one (RELAY_CATALOG_ALLOW_DOWNGRADE)",
 				"version", version, "seeded", cur)
@@ -99,25 +100,27 @@ func seedRelease(ctx context.Context, stores *Stores, opts BootstrapOptions, ver
 	}
 
 	if v := seed.DirVersion(opts.AutoSeedDir); v != "" && v == version {
-		if err := seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local"); err != nil {
-			return seedUnchanged, err
+		pruned, err := seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local")
+		if err != nil {
+			return seedUnchanged, nil, err
 		}
-		return seedUpdated, nil
+		return seedUpdated, pruned, nil
 	}
 
 	tmp, err := os.MkdirTemp("", "relay-catalog-*")
 	if err != nil {
-		return seedUnchanged, fmt.Errorf("catalog fetch tmpdir: %w", err)
+		return seedUnchanged, nil, fmt.Errorf("catalog fetch tmpdir: %w", err)
 	}
 	defer os.RemoveAll(tmp)
 	dataDir, err := seed.FetchCatalog(ctx, opts.CatalogURL, version, tmp)
 	if err != nil {
-		return seedUnchanged, &fetchError{err: err}
+		return seedUnchanged, nil, &fetchError{err: err}
 	}
-	if err := seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched"); err != nil {
-		return seedUnchanged, err
+	pruned, err := seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched")
+	if err != nil {
+		return seedUnchanged, nil, err
 	}
-	return seedUpdated, nil
+	return seedUpdated, pruned, nil
 }
 
 // compareVersions orders two release tags by semver (-1: a is older than b);
@@ -130,29 +133,36 @@ func compareVersions(a, b string) (int, bool) {
 }
 
 // seedAndMark runs the seed from dataDir and records version in the
-// catalog-source marker. Rows the release no longer ships are detached; a
-// failed seed writes no marker, so the next attempt retries.
-func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version, prev, source string) error {
+// catalog-source marker. Rows the release no longer ships are detached, then
+// the prune deletes the detached rows nothing holds, after the seed's writes
+// so a catalog row it updated no longer counts as a reference. A failed seed
+// writes no marker, so the next attempt retries.
+func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version, prev, source string) (*settings.CatalogPrune, error) {
 	res, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: dataDir, Secrets: stores.secrets(),
 		CatalogKindsOnly: true, DetachDropped: true,
 	})
 	if err != nil {
-		return fmt.Errorf("seed catalog %s: %w", version, err)
+		return nil, fmt.Errorf("seed catalog %s: %w", version, err)
 	}
-	if err := writeCatalogSource(ctx, stores, version); err != nil {
-		return err
+	pruned := pruneAfterSeed(ctx, stores, opts.Prune, version)
+	if err := writeCatalogSource(ctx, stores, version, pruned); err != nil {
+		return nil, err
 	}
-	slog.Info("catalog: seeded version",
-		"version", version, "previous", prev, "source", source,
+	attrs := []any{"version", version, "previous", prev, "source", source,
 		"models", res.Models, "bindings", res.HostBindings, "pricings", res.Pricings,
-		"skipped_dirty", res.Skipped, "detached", res.Detached, "reattached", res.Reattached)
-	return nil
+		"skipped_dirty", res.Skipped, "detached", res.Detached, "reattached", res.Reattached}
+	if pruned != nil {
+		attrs = append(attrs, "pruned", pruned.Pruned, "kept_detached", pruned.KeptDetached)
+	}
+	slog.Info("catalog: seeded version", attrs...)
+	return pruned, nil
 }
 
-// writeCatalogSource records a completed seed of version. The last check's
-// time is kept; its error is cleared, since this seed succeeded.
-func writeCatalogSource(ctx context.Context, stores *Stores, version string) error {
+// writeCatalogSource records a completed seed of version and its prune's
+// counts (nil: none ran). The last check's time is kept; its error is
+// cleared, since this seed succeeded.
+func writeCatalogSource(ctx context.Context, stores *Stores, version string, pruned *settings.CatalogPrune) error {
 	cur, err := readCatalogSource(ctx, stores)
 	if err != nil {
 		return err
@@ -161,6 +171,7 @@ func writeCatalogSource(ctx context.Context, stores *Stores, version string) err
 	next.Version = version
 	next.SeededAt = time.Now().UTC().Format(time.RFC3339)
 	next.LastError = ""
+	next.Prune = pruned
 	return upsertCatalogSource(ctx, stores, &next)
 }
 

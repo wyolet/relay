@@ -282,14 +282,26 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR rate_limits.resource_vers
 -- name: DeleteProvider :exec
 DELETE FROM providers WHERE id = $1;
 
+-- name: DeleteProviderAtVersion :execrows
+DELETE FROM providers WHERE id = $1 AND resource_version = $2;
+
 -- name: DeletePolicy :exec
 DELETE FROM policies WHERE id = $1;
+
+-- name: DeletePolicyAtVersion :execrows
+DELETE FROM policies WHERE id = $1 AND resource_version = $2;
 
 -- name: DeleteModel :exec
 DELETE FROM models WHERE id = $1;
 
+-- name: DeleteModelAtVersion :execrows
+DELETE FROM models WHERE id = $1 AND resource_version = $2;
+
 -- name: DeleteRateLimit :exec
 DELETE FROM rate_limits WHERE id = $1;
+
+-- name: DeleteRateLimitAtVersion :execrows
+DELETE FROM rate_limits WHERE id = $1 AND resource_version = $2;
 
 -- name: ListRelayKeys :many
 SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys ORDER BY name;
@@ -354,6 +366,9 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR hosts.resource_version = 
 -- name: DeleteHost :exec
 DELETE FROM hosts WHERE id = $1;
 
+-- name: DeleteHostAtVersion :execrows
+DELETE FROM hosts WHERE id = $1 AND resource_version = $2;
+
 -- ── pricing (migration 0010) ─────────────────────────────────────────────────
 
 -- name: ListPricings :many
@@ -373,6 +388,9 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR pricings.resource_version
 
 -- name: DeletePricing :exec
 DELETE FROM pricings WHERE id = $1;
+
+-- name: DeletePricingAtVersion :execrows
+DELETE FROM pricings WHERE id = $1 AND resource_version = $2;
 
 -- name: ListPricingModels :many
 SELECT pricing_id, model_id, position FROM pricing_models ORDER BY pricing_id, position;
@@ -407,6 +425,20 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR host_bindings.resource_ve
 
 -- name: DeleteHostBinding :exec
 DELETE FROM host_bindings WHERE id = $1;
+
+-- name: DeleteHostBindingAtVersion :execrows
+DELETE FROM host_bindings WHERE id = $1 AND resource_version = $2;
+
+-- name: AnyCatalogDetached :one
+-- Whether a catalog release left any row detached; the follower asks on
+-- every poll before it runs a prune.
+SELECT EXISTS (SELECT 1 FROM host_bindings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM pricings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM models WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM policies WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM rate_limits WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM hosts WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM providers WHERE metadata->>'catalogDetachedAt' IS NOT NULL);
 
 -- name: GetProvider :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers WHERE id = $1;

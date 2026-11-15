@@ -96,6 +96,11 @@ type BootstrapOptions struct {
 
 	// SystemRateLimits are the system-owned rate limits the binary looks up by name. Every hydrate creates the ones with no row and leaves existing rows alone.
 	SystemRateLimits []*ratelimit.RateLimit
+
+	// Prune deletes the detached rows nothing holds: with Prune.Auto after
+	// every versioned reseed and on a follower's checks, and on demand
+	// through PruneDetached.
+	Prune PruneOptions
 }
 
 // Stores bundles the eight entity stores constructed by Bootstrap. Exposed
@@ -327,7 +332,7 @@ func seedCatalog(ctx context.Context, stores *Stores, opts BootstrapOptions) err
 	// A tree with a .version file (baked image) makes the seeded version known; record it
 	// so a later matching version pin no-ops.
 	if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
-		return writeCatalogSource(ctx, stores, v)
+		return writeCatalogSource(ctx, stores, v, nil)
 	}
 	return nil
 }
@@ -356,7 +361,7 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 		version = resolved
 	}
 
-	_, err = seedRelease(ctx, stores, opts, version, st, opts.AllowDowngrade)
+	_, _, err = seedRelease(ctx, stores, opts, version, st, opts.AllowDowngrade)
 	var fetchErr *fetchError
 	if errors.As(err, &fetchErr) {
 		if !st.empty {
@@ -406,7 +411,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 		return fmt.Errorf("fallback seed: %w", err)
 	}
 	if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
-		return writeCatalogSource(ctx, stores, v)
+		return writeCatalogSource(ctx, stores, v, nil)
 	}
 	return nil
 }

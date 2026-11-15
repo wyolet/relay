@@ -33,6 +33,25 @@ func (q *Queries) AllowLegacySecretWrite(ctx context.Context) error {
 	return err
 }
 
+const anyCatalogDetached = `-- name: AnyCatalogDetached :one
+SELECT EXISTS (SELECT 1 FROM host_bindings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM pricings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM models WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM policies WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM rate_limits WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM hosts WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM providers WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+`
+
+// Whether a catalog release left any row detached; the follower asks on
+// every poll before it runs a prune.
+func (q *Queries) AnyCatalogDetached(ctx context.Context) (pgtype.Bool, error) {
+	row := q.db.QueryRow(ctx, anyCatalogDetached)
+	var column_1 pgtype.Bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countLegacySecretValues = `-- name: CountLegacySecretValues :one
 SELECT count(*) FROM secret_values WHERE dek_id IS NULL
 `
@@ -179,6 +198,23 @@ func (q *Queries) DeleteHost(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteHostAtVersion = `-- name: DeleteHostAtVersion :execrows
+DELETE FROM hosts WHERE id = $1 AND resource_version = $2
+`
+
+type DeleteHostAtVersionParams struct {
+	ID              string `db:"id" json:"id"`
+	ResourceVersion int64  `db:"resource_version" json:"resource_version"`
+}
+
+func (q *Queries) DeleteHostAtVersion(ctx context.Context, arg DeleteHostAtVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteHostAtVersion, arg.ID, arg.ResourceVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteHostBinding = `-- name: DeleteHostBinding :exec
 DELETE FROM host_bindings WHERE id = $1
 `
@@ -188,6 +224,23 @@ func (q *Queries) DeleteHostBinding(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteHostBindingAtVersion = `-- name: DeleteHostBindingAtVersion :execrows
+DELETE FROM host_bindings WHERE id = $1 AND resource_version = $2
+`
+
+type DeleteHostBindingAtVersionParams struct {
+	ID              string `db:"id" json:"id"`
+	ResourceVersion int64  `db:"resource_version" json:"resource_version"`
+}
+
+func (q *Queries) DeleteHostBindingAtVersion(ctx context.Context, arg DeleteHostBindingAtVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteHostBindingAtVersion, arg.ID, arg.ResourceVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteModel = `-- name: DeleteModel :exec
 DELETE FROM models WHERE id = $1
 `
@@ -195,6 +248,23 @@ DELETE FROM models WHERE id = $1
 func (q *Queries) DeleteModel(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, deleteModel, id)
 	return err
+}
+
+const deleteModelAtVersion = `-- name: DeleteModelAtVersion :execrows
+DELETE FROM models WHERE id = $1 AND resource_version = $2
+`
+
+type DeleteModelAtVersionParams struct {
+	ID              string `db:"id" json:"id"`
+	ResourceVersion int64  `db:"resource_version" json:"resource_version"`
+}
+
+func (q *Queries) DeleteModelAtVersion(ctx context.Context, arg DeleteModelAtVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteModelAtVersion, arg.ID, arg.ResourceVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteOverlay = `-- name: DeleteOverlay :execrows
@@ -221,6 +291,23 @@ DELETE FROM policies WHERE id = $1
 func (q *Queries) DeletePolicy(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, deletePolicy, id)
 	return err
+}
+
+const deletePolicyAtVersion = `-- name: DeletePolicyAtVersion :execrows
+DELETE FROM policies WHERE id = $1 AND resource_version = $2
+`
+
+type DeletePolicyAtVersionParams struct {
+	ID              string `db:"id" json:"id"`
+	ResourceVersion int64  `db:"resource_version" json:"resource_version"`
+}
+
+func (q *Queries) DeletePolicyAtVersion(ctx context.Context, arg DeletePolicyAtVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePolicyAtVersion, arg.ID, arg.ResourceVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deletePolicyBinding = `-- name: DeletePolicyBinding :exec
@@ -304,6 +391,23 @@ func (q *Queries) DeletePricing(ctx context.Context, id string) error {
 	return err
 }
 
+const deletePricingAtVersion = `-- name: DeletePricingAtVersion :execrows
+DELETE FROM pricings WHERE id = $1 AND resource_version = $2
+`
+
+type DeletePricingAtVersionParams struct {
+	ID              string `db:"id" json:"id"`
+	ResourceVersion int64  `db:"resource_version" json:"resource_version"`
+}
+
+func (q *Queries) DeletePricingAtVersion(ctx context.Context, arg DeletePricingAtVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePricingAtVersion, arg.ID, arg.ResourceVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deletePricingModels = `-- name: DeletePricingModels :exec
 DELETE FROM pricing_models WHERE pricing_id = $1
 `
@@ -322,6 +426,23 @@ func (q *Queries) DeleteProvider(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteProviderAtVersion = `-- name: DeleteProviderAtVersion :execrows
+DELETE FROM providers WHERE id = $1 AND resource_version = $2
+`
+
+type DeleteProviderAtVersionParams struct {
+	ID              string `db:"id" json:"id"`
+	ResourceVersion int64  `db:"resource_version" json:"resource_version"`
+}
+
+func (q *Queries) DeleteProviderAtVersion(ctx context.Context, arg DeleteProviderAtVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProviderAtVersion, arg.ID, arg.ResourceVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteRateLimit = `-- name: DeleteRateLimit :exec
 DELETE FROM rate_limits WHERE id = $1
 `
@@ -329,6 +450,23 @@ DELETE FROM rate_limits WHERE id = $1
 func (q *Queries) DeleteRateLimit(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, deleteRateLimit, id)
 	return err
+}
+
+const deleteRateLimitAtVersion = `-- name: DeleteRateLimitAtVersion :execrows
+DELETE FROM rate_limits WHERE id = $1 AND resource_version = $2
+`
+
+type DeleteRateLimitAtVersionParams struct {
+	ID              string `db:"id" json:"id"`
+	ResourceVersion int64  `db:"resource_version" json:"resource_version"`
+}
+
+func (q *Queries) DeleteRateLimitAtVersion(ctx context.Context, arg DeleteRateLimitAtVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRateLimitAtVersion, arg.ID, arg.ResourceVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteRelayKey = `-- name: DeleteRelayKey :exec

@@ -28,12 +28,13 @@ var subcommands = map[string]func(args []string){
 			os.Exit(1)
 		}
 	},
-	"apply":  func(args []string) { runCLI("apply", runApply, args) },
-	"export": func(args []string) { runCLI("export", runExport, args) },
-	"keygen": func(args []string) { runCLI("keygen", runKeygen, args) },
-	"token":  func(args []string) { runCLI("token", runToken, args) },
-	"auth":   func(args []string) { runCLI("auth", runAuth, args) },
-	"secret": func(args []string) { runCLI("secret", runSecret, args) },
+	"apply":   func(args []string) { runCLI("apply", runApply, args) },
+	"export":  func(args []string) { runCLI("export", runExport, args) },
+	"keygen":  func(args []string) { runCLI("keygen", runKeygen, args) },
+	"token":   func(args []string) { runCLI("token", runToken, args) },
+	"auth":    func(args []string) { runCLI("auth", runAuth, args) },
+	"secret":  func(args []string) { runCLI("secret", runSecret, args) },
+	"catalog": func(args []string) { runCLI("catalog", runCatalog, args) },
 }
 
 func runSubcommand() bool {

@@ -80,6 +80,17 @@ func (c *Controller) Emitter() *Emitter { return c.emitter }
 // delegates to whichever backend reader is currently live.
 func (c *Controller) Reader() Reader { return c.reader }
 
+// ReaderReady reports whether the live reader is the backend the current
+// settings name. Before the first reconcile the Reader answers every read
+// empty, and until a settings change is reconciled it answers from the old
+// backend, often an empty one at boot: neither is an answer about traffic.
+func (c *Controller) ReaderReady() bool {
+	cfg := c.current()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.has && c.applied == cfg
+}
+
 // Subscribe registers the settings-change callback (cheap, non-blocking —
 // signals the kick channel; the rebuild runs on Run's goroutine).
 func (c *Controller) Subscribe() {
