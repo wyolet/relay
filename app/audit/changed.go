@@ -24,6 +24,8 @@ var serverOwnedPaths = map[string]bool{
 	"metadata.dirty":     true,
 
 	"metadata.resourceVersion": true,
+
+	"status.lastUsedAt": true,
 }
 
 // AnyField is the field list for a whole-row write (create, delete), where

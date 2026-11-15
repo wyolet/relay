@@ -51,7 +51,6 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/lastused"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
@@ -294,7 +293,6 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		AuditReader:   auditStore,
 		TokenSigner:   signer,
 		TokenDenylist: revoked,
-		LastUsed:      lastused.NewStore(q),
 	}
 	// Mirror prod: control API under /api so SPA routes aren't shadowed, SCIM at the root.
 	ctrlRouter.Route("/api", func(r chi.Router) { control.Mount(r, ctrlDeps) })

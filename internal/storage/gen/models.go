@@ -131,11 +131,6 @@ type HostBinding struct {
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
-type HostKeyLastUsed struct {
-	HostKeyID  string             `db:"host_key_id" json:"host_key_id"`
-	LastUsedAt pgtype.Timestamptz `db:"last_used_at" json:"last_used_at"`
-}
-
 type Model struct {
 	Name            string             `db:"name" json:"name"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
@@ -298,11 +293,7 @@ type RelayKey struct {
 	PreviousKeyHash pgtype.Text        `db:"previous_key_hash" json:"previous_key_hash"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 	AccountID       pgtype.Text        `db:"account_id" json:"account_id"`
-}
-
-type RelayKeyLastUsed struct {
-	KeyID      string             `db:"key_id" json:"key_id"`
-	LastUsedAt pgtype.Timestamptz `db:"last_used_at" json:"last_used_at"`
+	LastUsedAt      pgtype.Timestamptz `db:"last_used_at" json:"last_used_at"`
 }
 
 type Role struct {
@@ -355,6 +346,7 @@ type Secret struct {
 	ValueKeyVersion pgtype.Int4        `db:"value_key_version" json:"value_key_version"`
 	Status          []byte             `db:"status" json:"status"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	LastUsedAt      pgtype.Timestamptz `db:"last_used_at" json:"last_used_at"`
 }
 
 type SecretDataKey struct {

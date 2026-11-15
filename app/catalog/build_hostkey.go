@@ -37,5 +37,7 @@ func sanitizeHostKey(k *hostkey.HostKey, hosts, projects idSet) (*hostkey.HostKe
 		return nil, false
 	}
 	clean := *k
+	// Runtime state, not catalog state: it changes without a notify, so a snapshot copy would only be stale.
+	clean.Status.LastUsedAt = nil
 	return &clean, true
 }

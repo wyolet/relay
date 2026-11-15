@@ -39,7 +39,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	idStore *identity.Store, usersStore *user.Store, tokenSigner *control.TokenSigner, tokenVerifier *inference.TokenVerifier,
 	kvStore kv.Store, limiter *pkgratelimit.Limiter, sessMgr *session.Manager, licenseSvc *license.Service, cookieSecure bool,
 	usageReader usagelog.Reader, auditEmitter *audit.Emitter, auditStore *audit.Store, payloadReader *payloadReaderResolver,
-	selector *keypool.Selector, hostHealth *hosthealth.Recorder, lastUsed control.LastUsedReader, revoked *revocation.List, specs *adapter.Registry,
+	selector *keypool.Selector, hostHealth *hosthealth.Recorder, revoked *revocation.List, specs *adapter.Registry,
 	planHolder *plan.Holder, planView func() *engine.View, counters control.CounterReader,
 	catalogSync func(context.Context) (appcatalog.CheckResult, error),
 	catalogPrune func(context.Context, time.Duration, bool) (catalogprune.Report, error)) (*http.Server, <-chan error) {
@@ -92,7 +92,6 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		Selector:       selector,
 		Adapters:       specs,
 		HostHealth:     hostHealth,
-		LastUsed:       lastUsed,
 		PlanView:       planView,
 		Counters:       counters,
 		PublicURL:      cfg.PublicURL,

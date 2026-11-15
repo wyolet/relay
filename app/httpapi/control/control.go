@@ -149,9 +149,6 @@ type Deps struct {
 	// the overlay (Status stays absent → UI shows "unknown").
 	HostHealth HostHealthReader
 
-	// LastUsed reads when relay keys and host keys last served a request, for their reads. nil leaves lastUsedAt out.
-	LastUsed LastUsedReader
-
 	// PlanView returns the plan engine's current view: plan issues, the caller's accounts and their limits are read from it. nil answers the issues read with an empty list and the account reads 503.
 	PlanView func() *engine.View
 
@@ -183,13 +180,6 @@ type CounterReader interface {
 type HostHealthReader interface {
 	Read(ctx context.Context, hostID string) (host.Status, bool)
 	ReadAll(ctx context.Context) map[string]host.Status
-}
-
-// LastUsedReader reads last-used times by id; an id never used has no entry.
-// Implemented by app/lastused.Store.
-type LastUsedReader interface {
-	KeysLastUsed(ctx context.Context, ids []string) (map[string]time.Time, error)
-	HostKeysLastUsed(ctx context.Context, ids []string) (map[string]time.Time, error)
 }
 
 // Mount installs the control-plane huma API on r and registers all

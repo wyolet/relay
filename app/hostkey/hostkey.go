@@ -48,9 +48,6 @@ type HostKey struct {
 	// stored and not loaded from YAML. Lists every Policy whose pools reach
 	// this HostKey, so the admin UI can show where a key is in use.
 	Policies []PolicyRef `json:"policies,omitempty" yaml:"-" readOnly:"true" doc:"Policies whose pools reach this key: listing it, or drawing on its account or a share of it. Derived on read; ignored on write."`
-
-	// Derived: filled on control API reads from the last-used table, never stored with the key.
-	LastUsedAt *time.Time `json:"lastUsedAt,omitempty" yaml:"-" readOnly:"true" doc:"When relay last sent a request with this key, to the minute; updated about once a minute. Absent when it has not sent one. Ignored on write."`
 }
 
 // AnonIDPrefix prefixes the synthetic anonymous key's id, KeyHash, and name so
@@ -280,6 +277,9 @@ type Status struct {
 	// repair it; the snapshot drops it so no request picks a valueless key.
 	// Load-time only — never written to the status column.
 	Unresolved *UnresolvedStatus `json:"unresolved,omitempty" yaml:"-" doc:"Set when the secret could not be read at load; the key is not routed until repaired."`
+
+	// LastUsedAt is read from its own column, never written to the status column.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty" yaml:"-" doc:"When relay last sent a request with this key, to the minute; updated about once a minute. Absent when it has not sent one."`
 }
 
 // UnresolvedStatus explains why a key's value could not be resolved.

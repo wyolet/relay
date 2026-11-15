@@ -1104,7 +1104,7 @@ func (q *Queries) GetRateLimit(ctx context.Context, id string) (GetRateLimitRow,
 }
 
 const getRelayKey = `-- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys WHERE id = $1
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id, last_used_at FROM relay_keys WHERE id = $1
 `
 
 type GetRelayKeyRow struct {
@@ -1121,6 +1121,7 @@ type GetRelayKeyRow struct {
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 	AccountID       pgtype.Text        `db:"account_id" json:"account_id"`
+	LastUsedAt      pgtype.Timestamptz `db:"last_used_at" json:"last_used_at"`
 }
 
 func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, error) {
@@ -1140,12 +1141,13 @@ func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, e
 		&i.UpdatedAt,
 		&i.ResourceVersion,
 		&i.AccountID,
+		&i.LastUsedAt,
 	)
 	return i, err
 }
 
 const getSecret = `-- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets WHERE id = $1
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version, last_used_at FROM secrets WHERE id = $1
 `
 
 type GetSecretRow struct {
@@ -1163,6 +1165,7 @@ type GetSecretRow struct {
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	LastUsedAt      pgtype.Timestamptz `db:"last_used_at" json:"last_used_at"`
 }
 
 func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error) {
@@ -1183,6 +1186,7 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResourceVersion,
+		&i.LastUsedAt,
 	)
 	return i, err
 }
@@ -1971,30 +1975,6 @@ func (q *Queries) ListHostBindings(ctx context.Context) ([]HostBinding, error) {
 	return items, nil
 }
 
-const listHostKeysLastUsed = `-- name: ListHostKeysLastUsed :many
-SELECT host_key_id, last_used_at FROM host_key_last_used WHERE host_key_id = ANY($1::text[])
-`
-
-func (q *Queries) ListHostKeysLastUsed(ctx context.Context, ids []string) ([]HostKeyLastUsed, error) {
-	rows, err := q.db.Query(ctx, listHostKeysLastUsed, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []HostKeyLastUsed
-	for rows.Next() {
-		var i HostKeyLastUsed
-		if err := rows.Scan(&i.HostKeyID, &i.LastUsedAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listHosts = `-- name: ListHosts :many
 
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM hosts ORDER BY name
@@ -2528,7 +2508,7 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 }
 
 const listRelayKeys = `-- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys ORDER BY name
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id, last_used_at FROM relay_keys ORDER BY name
 `
 
 type ListRelayKeysRow struct {
@@ -2545,6 +2525,7 @@ type ListRelayKeysRow struct {
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 	AccountID       pgtype.Text        `db:"account_id" json:"account_id"`
+	LastUsedAt      pgtype.Timestamptz `db:"last_used_at" json:"last_used_at"`
 }
 
 func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error) {
@@ -2570,31 +2551,8 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 			&i.UpdatedAt,
 			&i.ResourceVersion,
 			&i.AccountID,
+			&i.LastUsedAt,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listRelayKeysLastUsed = `-- name: ListRelayKeysLastUsed :many
-SELECT key_id, last_used_at FROM relay_key_last_used WHERE key_id = ANY($1::text[])
-`
-
-func (q *Queries) ListRelayKeysLastUsed(ctx context.Context, ids []string) ([]RelayKeyLastUsed, error) {
-	rows, err := q.db.Query(ctx, listRelayKeysLastUsed, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []RelayKeyLastUsed
-	for rows.Next() {
-		var i RelayKeyLastUsed
-		if err := rows.Scan(&i.KeyID, &i.LastUsedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2733,7 +2691,7 @@ func (q *Queries) ListSecretValues(ctx context.Context, arg ListSecretValuesPara
 }
 
 const listSecrets = `-- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets ORDER BY name
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version, last_used_at FROM secrets ORDER BY name
 `
 
 type ListSecretsRow struct {
@@ -2751,6 +2709,7 @@ type ListSecretsRow struct {
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	LastUsedAt      pgtype.Timestamptz `db:"last_used_at" json:"last_used_at"`
 }
 
 func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
@@ -2777,6 +2736,7 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResourceVersion,
+			&i.LastUsedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3280,12 +3240,11 @@ func (q *Queries) SetUserPersonalAccount(ctx context.Context, arg SetUserPersona
 }
 
 const touchHostKeysLastUsed = `-- name: TouchHostKeysLastUsed :exec
-INSERT INTO host_key_last_used AS t (host_key_id, last_used_at)
-SELECT s.id, u.used_at
+UPDATE secrets AS s
+   SET last_used_at = GREATEST(COALESCE(s.last_used_at, u.used_at), u.used_at)
   FROM (SELECT unnest($1::text[]) AS id, unnest($2::timestamptz[]) AS used_at) u
-  JOIN secrets s ON s.id = u.id
-ON CONFLICT (host_key_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at
-WHERE t.last_used_at < EXCLUDED.last_used_at
+ WHERE s.id = u.id
+   AND (s.last_used_at IS NULL OR s.last_used_at < u.used_at)
 `
 
 type TouchHostKeysLastUsedParams struct {
@@ -3299,12 +3258,11 @@ func (q *Queries) TouchHostKeysLastUsed(ctx context.Context, arg TouchHostKeysLa
 }
 
 const touchRelayKeysLastUsed = `-- name: TouchRelayKeysLastUsed :exec
-INSERT INTO relay_key_last_used AS t (key_id, last_used_at)
-SELECT k.id, u.used_at
+UPDATE relay_keys AS k
+   SET last_used_at = GREATEST(COALESCE(k.last_used_at, u.used_at), u.used_at)
   FROM (SELECT unnest($1::text[]) AS id, unnest($2::timestamptz[]) AS used_at) u
-  JOIN relay_keys k ON k.id = u.id
-ON CONFLICT (key_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at
-WHERE t.last_used_at < EXCLUDED.last_used_at
+ WHERE k.id = u.id
+   AND (k.last_used_at IS NULL OR k.last_used_at < u.used_at)
 `
 
 type TouchRelayKeysLastUsedParams struct {
@@ -3312,8 +3270,7 @@ type TouchRelayKeysLastUsedParams struct {
 	UsedAt []pgtype.Timestamptz `db:"used_at" json:"used_at"`
 }
 
-// The join skips ids deleted since they were used. Rows only move forward, so
-// pods flushing at once keep the later time.
+// Ids deleted since they were used match no row. Times only move forward, so pods flushing at once keep the later one; a row already as late is skipped and writes no tuple. The triggers ignore a change to last_used_at alone.
 func (q *Queries) TouchRelayKeysLastUsed(ctx context.Context, arg TouchRelayKeysLastUsedParams) error {
 	_, err := q.db.Exec(ctx, touchRelayKeysLastUsed, arg.Ids, arg.UsedAt)
 	return err

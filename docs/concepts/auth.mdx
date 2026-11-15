@@ -112,9 +112,9 @@ A stored value is encrypted under a data key of the host key's owner, and the da
 
 ## When a key was last used
 
-Reads of relay keys and host keys (`GET /api/keys`, `GET /api/host-keys` and a single row of each) carry `lastUsedAt`: when the key last served a request, to the minute. A key that has served none has no `lastUsedAt`. It does not depend on usage logging.
+Reads of relay keys and host keys (`GET /api/keys`, `GET /api/host-keys` and a single row of each) carry `status.lastUsedAt`: when the key last served a request, to the minute. A key that has served none has no `status.lastUsedAt`. It is server-managed: a write never sets or clears it. It does not depend on usage logging.
 
-Each relay process notes the keys of every finished request in memory and writes them to Postgres about once a minute, and once more on shutdown, so a time can lag by up to a minute. A relay key counts on each request it authenticated, including ones Relay refused for a limit or a route; requests shed while the process is at capacity do not count. A host key counts when Relay tried an upstream call with it, whatever the upstream answered; after a failover, the key tried last counts. Inference tokens have no row and show no time. `RELAY_LAST_USED=off` stops recording and leaves `lastUsedAt` out of reads.
+Each relay process notes the keys of every finished request in memory and writes them to Postgres about once a minute, and once more on shutdown, so a time can lag by up to a minute. A relay key counts on each request it authenticated, including ones Relay refused for a limit or a route; requests shed while the process is at capacity do not count. A host key counts when Relay tried an upstream call with it, whatever the upstream answered; after a failover, the key tried last counts. Inference tokens have no row and show no time. `RELAY_LAST_USED=off` stops recording; reads keep the last time recorded.
 
 ## The control plane
 

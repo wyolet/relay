@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/lastused"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
@@ -13,12 +12,12 @@ import (
 )
 
 // buildLastUsed records which relay keys and host keys serve, as a lifecycle
-// collector, and flushes the times to Postgres from one goroutine per pod. It
-// returns the reader the key reads fill lastUsedAt from, and a stop that
-// waits for the final flush. RELAY_LAST_USED=off records and reads nothing.
-func buildLastUsed(ctx context.Context, cfg *config.Config, st *storagemod.Storage, lifecycleReg *lifecycle.Registry) (control.LastUsedReader, func()) {
+// collector, and flushes the times onto their rows from one goroutine per pod.
+// It returns a stop that waits for the final flush. RELAY_LAST_USED=off
+// records nothing.
+func buildLastUsed(ctx context.Context, cfg *config.Config, st *storagemod.Storage, lifecycleReg *lifecycle.Registry) func() {
 	if !cfg.LastUsed {
-		return nil, func() {}
+		return func() {}
 	}
 	store := lastused.NewStore(gen.New(st.Pool()))
 	rec := lastused.NewRecorder(lastused.DefaultMaxEntries)
@@ -31,7 +30,7 @@ func buildLastUsed(ctx context.Context, cfg *config.Config, st *storagemod.Stora
 		flusher.Run(runCtx)
 	}()
 	slog.Debug("lastused: collector wired", "flush_interval", lastused.DefaultFlushInterval)
-	return store, func() {
+	return func() {
 		cancel()
 		<-done
 	}
