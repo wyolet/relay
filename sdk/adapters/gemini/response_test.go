@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -48,6 +49,8 @@ func TestFinishReason_ToCanonical(t *testing.T) {
 	}{
 		{"STOP", false, "completed/stop/"},
 		{"STOP", true, "completed/tool_calls/"},
+		{"", true, "completed/tool_calls/"},
+		{"UNEXPECTED_TOOL_CALL", true, "incomplete/other/gemini:UNEXPECTED_TOOL_CALL"},
 		{"MAX_TOKENS", false, "incomplete/length/max_output_tokens"},
 		{"MAX_TOKENS", true, "incomplete/length/max_output_tokens"},
 		{"SAFETY", true, "incomplete/content_filter/content_filter"},
@@ -80,7 +83,7 @@ func TestFinishReason_ToCanonical(t *testing.T) {
 				t.Errorf("summary finish %q (%v), want %q", sum.FinishReason, err, resp.FinishReason)
 			}
 			// Streamed, the part arrives a frame before the finish.
-			s := toCanonical(t, `{"candidates":[{"content":`+content+`,"index":0}]}`, `{"candidates":[{"finishReason":"`+c.reason+`","index":0}]}`)
+			s := toCanonical(t, `{"candidates":[{"content":`+content+`,"index":0}]}`, `{"candidates":[{"finishReason":"`+c.reason+`","index":0}],"usageMetadata":{"promptTokenCount":1}}`)
 			if s.done == nil {
 				t.Fatalf("stream has no completion: %v", s.events)
 			}
@@ -111,6 +114,10 @@ func TestFinishReason_FromCanonical(t *testing.T) {
 		{"other without details", v1.StatusIncomplete, v1.FinishReasonOther, "", "OTHER"},
 		{"failed without reason", v1.StatusFailed, "", "", "OTHER"},
 		{"incomplete without reason", v1.StatusIncomplete, "", "max_output_tokens", "OTHER"},
+		{"completed without reason", v1.StatusCompleted, "", "", "STOP"},
+		{"no status or reason", "", "", "", "STOP"},
+		{"truncated tool call", v1.StatusIncomplete, v1.FinishReasonToolCalls, "max_output_tokens", "MAX_TOKENS"},
+		{"own prefix without a reason", v1.StatusIncomplete, v1.FinishReasonOther, "gemini:", "OTHER"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -143,6 +150,47 @@ func TestFinishReason_MalformedFunctionCallRoundTrips(t *testing.T) {
 	}
 	if got := wireFinish(t, out); got != "MALFORMED_FUNCTION_CALL" {
 		t.Errorf("finishReason %s, want MALFORMED_FUNCTION_CALL", got)
+	}
+}
+
+func TestParseResponse_AbsentAndNullMembers(t *testing.T) {
+	resp := parseResponse(t, `{"candidates":[{"content":{"role":"model","parts":[{"text":""},{"functionCall":{"id":"c1","name":"f"}}]},"finishReason":"STOP","safetyRatings":null}],"promptFeedback":null}`)
+	assertJSON(t, resp.Output, `[{"type":"function_call","id":"fc_0","call_id":"c1","name":"f","arguments":"{}","status":"completed"}]`)
+	if resp.Extensions != nil {
+		t.Errorf("extensions %v, want nil", resp.Extensions)
+	}
+}
+
+func TestSerializeResponse_Body(t *testing.T) {
+	text := []v1.Item{&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "hi"}}}}
+	summary := []v1.SummaryText{{Text: "s"}}
+	feedback := func(pf string) map[string]json.RawMessage {
+		return map[string]json.RawMessage{extPromptFeedback: json.RawMessage(pf)}
+	}
+	const hi = `{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP","index":0}]`
+	cases := []struct {
+		name string
+		resp v1.Response
+		want string
+	}{
+		{"no id, model or usage", v1.Response{Output: text}, hi + `}`},
+		{"usage without input or reasoning", v1.Response{Output: text, Usage: usage.Tokens{"output": 5}}, hi + `,"usageMetadata":{"candidatesTokenCount":5}}`},
+		{"blocked prompt with output keeps the candidate", v1.Response{Output: text, Extensions: feedback(`{"blockReason":"SAFETY"}`)}, hi + `,"promptFeedback":{"blockReason":"SAFETY"}}`},
+		{"unblocked prompt without output keeps the candidate", v1.Response{Extensions: feedback(`{"safetyRatings":[]}`)}, `{"candidates":[{"content":{"role":"model","parts":null},"finishReason":"STOP","index":0}],"promptFeedback":{"safetyRatings":[]}}`},
+		{
+			"call without arguments; reasoning sends its content, else its first summary, else nothing",
+			v1.Response{Output: []v1.Item{&v1.FunctionCall{CallID: "f", Name: "f"}, &v1.Reasoning{Content: "c", Summary: summary}, &v1.Reasoning{Summary: summary}, &v1.Reasoning{}}},
+			`{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"f","args":{}}},{"text":"c","thought":true},{"text":"s","thought":true}]},"finishReason":"STOP","index":0}]}`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := tr.SerializeResponse(&c.resp, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSON(t, out, c.want)
+		})
 	}
 }
 
