@@ -82,6 +82,19 @@ var responseCases = []struct {
 		}),
 	},
 	{
+		name: "redacted thinking keeps its data",
+		wire: respBody(`"content":[{"type":"thinking","thinking":"plan","signature":"SIG"},{"type":"redacted_thinking","data":"ENC"},{"type":"text","text":"done"}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			plan := signedThinking("plan", "SIG")
+			plan.ID, plan.Status = "rs_0", v1.StatusCompleted
+			r.Output = []v1.Item{
+				plan,
+				&v1.Reasoning{ID: "rs_1", Status: v1.StatusCompleted, ProviderData: json.RawMessage(`{"data":"ENC","type":"redacted_thinking"}`)},
+				outputText("msg_2", "done"),
+			}
+		}),
+	},
+	{
 		name: "unsigned thinking",
 		wire: respBody(`"content":[{"type":"thinking","thinking":"plan"}],"stop_reason":"end_turn"`),
 		resp: response(func(r *v1.Response) {
@@ -91,7 +104,7 @@ var responseCases = []struct {
 	{
 		name: "blocks with no canonical item take no output index",
 		dir:  parseOnly,
-		wire: respBody(`"content":[{"type":"thinking","thinking":""},{"type":"redacted_thinking","data":"x"},{"type":"server_tool_use","id":"s1","name":"web_search"},{"type":"future"},{"type":"text","text":"x"}],"stop_reason":"end_turn"`),
+		wire: respBody(`"content":[{"type":"thinking","thinking":""},{"type":"server_tool_use","id":"s1","name":"web_search"},{"type":"future"},{"type":"text","text":"x"}],"stop_reason":"end_turn"`),
 		resp: response(func(r *v1.Response) { r.Output = []v1.Item{outputText("msg_0", "x")} }),
 	},
 	{
@@ -110,6 +123,7 @@ var responseCases = []struct {
 	},
 	{
 		name: "url citations",
+		dir:  parseOnly,
 		wire: respBody(`"content":[{"type":"text","text":"cited","citations":[{"type":"url_citation","url":"https://x","title":"T","start_index":1,"end_index":5}]}],"stop_reason":"end_turn"`),
 		resp: response(func(r *v1.Response) {
 			msg := outputText("msg_0", "cited")
@@ -119,15 +133,36 @@ var responseCases = []struct {
 	},
 	{
 		name: "web search and document citations",
-		dir:  parseOnly,
-		wire: respBody(`"content":[{"type":"text","text":"cited","citations":[{"type":"web_search_result_location","url":"https://x","title":"T","cited_text":"c","encrypted_index":"E"},{"type":"page_location","cited_text":"c","document_index":1,"start_page_number":2,"end_page_number":3}]}],"stop_reason":"end_turn"`),
+		wire: respBody(`"content":[{"type":"text","text":"cited","citations":[{"type":"web_search_result_location","url":"https://x","title":"T","cited_text":"c","encrypted_index":"E"},{"type":"page_location","cited_text":"c","document_index":1,"start_page_number":2,"end_page_number":3},{"type":"char_location","cited_text":"c","document_index":0,"start_char_index":0,"end_char_index":1},{"type":"content_block_location","cited_text":"c","document_index":2,"start_block_index":0,"end_block_index":1},{"type":"search_result_location","cited_text":"c","source":"s","title":"S","search_result_index":0,"start_block_index":0,"end_block_index":1}]}],"stop_reason":"end_turn"`),
 		resp: response(func(r *v1.Response) {
 			msg := outputText("msg_0", "cited")
 			msg.Content[0].(*v1.OutputTextPart).Annotations = []v1.Annotation{
-				&v1.URLCitationAnnotation{URL: "https://x", Title: "T"},
+				&v1.URLCitationAnnotation{URL: "https://x", Title: "T", ProviderData: json.RawMessage(`{"type":"web_search_result_location","url":"https://x","title":"T","cited_text":"c","encrypted_index":"E"}`)},
 				&v1.RawAnnotation{Type: "page_location", JSON: json.RawMessage(`{"type":"page_location","cited_text":"c","document_index":1,"start_page_number":2,"end_page_number":3}`)},
+				&v1.RawAnnotation{Type: "char_location", JSON: json.RawMessage(`{"type":"char_location","cited_text":"c","document_index":0,"start_char_index":0,"end_char_index":1}`)},
+				&v1.RawAnnotation{Type: "content_block_location", JSON: json.RawMessage(`{"type":"content_block_location","cited_text":"c","document_index":2,"start_block_index":0,"end_block_index":1}`)},
+				&v1.RawAnnotation{Type: "search_result_location", JSON: json.RawMessage(`{"type":"search_result_location","cited_text":"c","source":"s","title":"S","search_result_index":0,"start_block_index":0,"end_block_index":1}`)},
 			}
 			r.Output = []v1.Item{msg}
+		}),
+	},
+	{
+		// Anthropic has no citation type for these: a web_search_result_location needs the encrypted_index only Anthropic issues.
+		name: "citations from other vendors are left out",
+		dir:  serializeOnly,
+		wire: respBody(`"content":[{"type":"text","text":"cited","citations":[{"type":"char_location","cited_text":"c","document_index":0,"start_char_index":0,"end_char_index":1}]},{"type":"text","text":"bare"}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			cited := outputText("msg_0", "cited")
+			cited.Content[0].(*v1.OutputTextPart).Annotations = []v1.Annotation{
+				&v1.URLCitationAnnotation{URL: "https://x", Title: "T", StartIndex: 1, EndIndex: 5},
+				&v1.URLCitationAnnotation{URL: "https://y", ProviderData: json.RawMessage(`{"encrypted_content":"other vendor"}`)},
+				&v1.TextCitationAnnotation{StartIndex: 0, EndIndex: 1},
+				&v1.RawAnnotation{Type: "container_file_citation", JSON: json.RawMessage(`{"type":"container_file_citation","file_id":"f"}`)},
+				&v1.RawAnnotation{Type: "char_location", JSON: json.RawMessage(`{"type":"char_location","cited_text":"c","document_index":0,"start_char_index":0,"end_char_index":1}`)},
+			}
+			bare := outputText("msg_1", "bare")
+			bare.Content[0].(*v1.OutputTextPart).Annotations = []v1.Annotation{&v1.TextCitationAnnotation{StartIndex: 0, EndIndex: 1}}
+			r.Output = []v1.Item{cited, bare}
 		}),
 	},
 	{

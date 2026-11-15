@@ -385,6 +385,15 @@ var requestCases = []struct {
 		)),
 	},
 	{
+		name: "redacted thinking replays its data in place",
+		wire: body(`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"SIG"},{"type":"redacted_thinking","data":"ENC"},{"type":"tool_use","id":"t1","name":"f","input":{}}]}]`),
+		req: request(input(
+			signedThinking("plan", "SIG"),
+			&v1.Reasoning{ProviderData: json.RawMessage(`{"data":"ENC","type":"redacted_thinking"}`)},
+			&v1.FunctionCall{ID: "t1", CallID: "t1", Name: "f", Arguments: `{}`},
+		)),
+	},
+	{
 		// An unsigned thinking block is rejected upstream, so another vendor's reasoning is left out.
 		name: "unsigned reasoning is not replayed",
 		dir:  serializeOnly,

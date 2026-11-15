@@ -99,6 +99,24 @@ func TestSerializeRequest_Contents(t *testing.T) {
 			contents: `[{"role":"model","parts":[{"functionCall":{"id":"toolu_01ABC","name":"get_weather","args":{"city":"Paris"}}}]},
 				{"role":"user","parts":[{"functionResponse":{"id":"toolu_01ABC","name":"get_weather","response":{"temp":21}}}]}]`,
 		},
+		{
+			// Gemini rejects a part with no data field, so a signature-only part keeps its empty text.
+			name: "thought signatures ride the parts they came on",
+			items: []v1.Item{
+				&v1.Reasoning{Content: "plan", ProviderData: thoughtSignatureJSON("s1")},
+				&v1.Reasoning{ProviderData: thoughtSignatureJSON("s2")},
+				&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "a"}, &v1.OutputTextPart{Text: "b"}}, ProviderData: thoughtSignatureJSON("s3")},
+				&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "c"}}, ProviderData: json.RawMessage(`{"emptyTextPart":true,"thoughtSignature":"s4"}`)},
+				&v1.Reasoning{ProviderData: json.RawMessage(`{"emptyTextPart":true,"thoughtSignature":"s5"}`)},
+				&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "d"}}, ProviderData: json.RawMessage(`{"type":"thinking","signature":"other vendor"}`)},
+			},
+			contents: `[{"role":"model","parts":[{"text":"plan","thought":true,"thoughtSignature":"s1"}]},
+				{"role":"model","parts":[{"text":"","thought":true,"thoughtSignature":"s2"}]},
+				{"role":"model","parts":[{"text":"a"},{"text":"b","thoughtSignature":"s3"}]},
+				{"role":"model","parts":[{"text":"c"},{"text":"","thoughtSignature":"s4"}]},
+				{"role":"model","parts":[{"text":"","thoughtSignature":"s5"}]},
+				{"role":"model","parts":[{"text":"d"}]}]`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

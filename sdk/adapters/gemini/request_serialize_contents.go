@@ -109,7 +109,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 	for _, item := range items {
 		switch v := item.(type) {
 		case *v1.Message:
-			// canonical: Message.ID/Status/ProviderData dropped — Gemini contents carry no item id, status, or opaque payload.
+			// canonical: Message.ID/Status dropped — Gemini contents carry no item id or status; ProviderData returns only as a model turn's thoughtSignature.
 			// canonical: ItemCacheConfig.Anchor dropped — Gemini caches implicitly; it has no breakpoint.
 			if v.Role == v1.RoleSystem || v.Role == v1.RoleDeveloper {
 				var sb strings.Builder
@@ -162,7 +162,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 				if err != nil {
 					return nil, "", err
 				}
-				contents = append(contents, geminiContent{Role: "model", Parts: parts})
+				contents = append(contents, geminiContent{Role: "model", Parts: signItemParts(parts, 0, v.ProviderData)})
 			}
 
 		case *v1.FunctionCall:
@@ -184,17 +184,9 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 			flushFCOs()
 			// canonical: Reasoning.ID/Status dropped — a thought part carries no id or status.
 			// canonical: Reasoning.Summary dropped when Content is set — a thought part carries one text.
-			text := v.Content
-			if text == "" && len(v.Summary) > 0 {
-				text = v.Summary[0].Text
-			}
-			if text != "" {
+			if parts := reasoningParts(v); len(parts) > 0 {
 				seenConversation = true
-				p := geminiPart{Text: text, Thought: true}
-				if sig := thoughtSignatureFrom(v.ProviderData); sig != "" {
-					p.ThoughtSignature = sig
-				}
-				contents = append(contents, geminiContent{Role: "model", Parts: []geminiPart{p}})
+				contents = append(contents, geminiContent{Role: "model", Parts: parts})
 			}
 		}
 	}

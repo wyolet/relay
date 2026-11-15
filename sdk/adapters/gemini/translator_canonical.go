@@ -38,25 +38,88 @@ func geminiWireCallID(callID, name string) string {
 }
 
 // thoughtSignatureJSON encodes a thoughtSignature value into the provider_data
-// JSON shape used on v1.FunctionCall and v1.Reasoning items.
+// JSON shape used on v1.FunctionCall, v1.Reasoning and v1.Message items.
 func thoughtSignatureJSON(sig string) json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"thoughtSignature": sig})
+	return b
+}
+
+// emptyPartSignatureJSON is the provider_data of a message whose signature came on a part of its own with empty text; a Message carries no empty text parts, so the flag rebuilds that part.
+func emptyPartSignatureJSON(sig string) json.RawMessage {
+	b, _ := json.Marshal(struct {
+		EmptyTextPart    bool   `json:"emptyTextPart"`
+		ThoughtSignature string `json:"thoughtSignature"`
+	}{true, sig})
 	return b
 }
 
 // thoughtSignatureFrom extracts the thoughtSignature from a provider_data blob,
 // returning "" if absent or malformed.
 func thoughtSignatureFrom(pd json.RawMessage) string {
+	sig, _ := itemSignatureFrom(pd)
+	return sig
+}
+
+// itemSignatureFrom extracts the thoughtSignature and whether it rode a part of its own with empty text.
+func itemSignatureFrom(pd json.RawMessage) (sig string, emptyPart bool) {
 	if len(pd) == 0 {
-		return ""
+		return "", false
 	}
 	var v struct {
 		ThoughtSignature string `json:"thoughtSignature"`
+		EmptyTextPart    bool   `json:"emptyTextPart"`
 	}
 	if err := json.Unmarshal(pd, &v); err != nil {
-		return ""
+		return "", false
 	}
-	return v.ThoughtSignature
+	return v.ThoughtSignature, v.EmptyTextPart
+}
+
+// signLastItem attaches the signature of a non-thought part with empty text to the last of items when that is an unsigned message or reasoning, and reports whether it did. Otherwise the caller keeps the signature on a reasoning item of its own, which other vendors drop.
+func signLastItem(items []v1.Item, sig string) bool {
+	if len(items) == 0 {
+		return false
+	}
+	switch it := items[len(items)-1].(type) {
+	case *v1.Message:
+		if len(it.ProviderData) == 0 {
+			it.ProviderData = emptyPartSignatureJSON(sig)
+			return true
+		}
+	case *v1.Reasoning:
+		if len(it.ProviderData) == 0 {
+			it.ProviderData = emptyPartSignatureJSON(sig)
+			return true
+		}
+	}
+	return false
+}
+
+// reasoningParts renders a reasoning item: its thought part, then its signature where it came.
+func reasoningParts(r *v1.Reasoning) []geminiPart {
+	text := r.Content
+	if text == "" && len(r.Summary) > 0 {
+		text = r.Summary[0].Text
+	}
+	sig, emptyPart := itemSignatureFrom(r.ProviderData)
+	var parts []geminiPart
+	if text != "" || sig != "" && !emptyPart {
+		parts = append(parts, geminiPart{Text: text, Thought: true})
+	}
+	return signItemParts(parts, 0, r.ProviderData)
+}
+
+// signItemParts puts an item's signature back where it came: on its last part (the item's parts are parts[start:]), or on a trailing part with empty text.
+func signItemParts(parts []geminiPart, start int, pd json.RawMessage) []geminiPart {
+	sig, emptyPart := itemSignatureFrom(pd)
+	switch {
+	case sig == "":
+	case emptyPart || len(parts) == start:
+		parts = append(parts, geminiPart{ThoughtSignature: sig})
+	default:
+		parts[len(parts)-1].ThoughtSignature = sig
+	}
+	return parts
 }
 
 // resolveModelOpts picks the ModelOpts for the given model name following the

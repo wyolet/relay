@@ -23,6 +23,13 @@ func TestUnmarshalPart(t *testing.T) {
 		{"input_file by id and data", `{"type":"input_file","file_id":"file_1","file_data":"aGk="}`, &FilePart{FileID: "file_1", FileData: "aGk="}},
 		{"output_text", `{"type":"output_text","text":"the answer is 42"}`, &OutputTextPart{Text: "the answer is 42"}},
 		{
+			"url_citation with provider data",
+			`{"type":"output_text","text":"x","annotations":[{"type":"url_citation","start_index":0,"end_index":0,"url":"https://x","provider_data":{"type":"web_search_result_location","encrypted_index":"E"}}]}`,
+			&OutputTextPart{Text: "x", Annotations: []Annotation{
+				&URLCitationAnnotation{URL: "https://x", ProviderData: json.RawMessage(`{"type":"web_search_result_location","encrypted_index":"E"}`)},
+			}},
+		},
+		{
 			"output_text with annotations of each kind",
 			`{"type":"output_text","text":"see source","annotations":[` +
 				`{"type":"url_citation","start_index":4,"end_index":10,"url":"https://example.com","title":"Example"},` +

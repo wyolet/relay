@@ -95,13 +95,13 @@ func unquote(lit []byte) string {
 
 // contentBlock holds every field any layered probe reads from a content block.
 type contentBlock struct {
-	typ, text, id, name, thinking, signature, toolUseID string
-	input, content                                      []byte // raw, nil when absent
-	source                                              *blockSource
-	cacheControl                                        *wireCacheControl
+	typ, text, id, name, thinking, signature, toolUseID, data string
+	input, content                                            []byte // raw, nil when absent
+	source                                                    *blockSource
+	cacheControl                                              *wireCacheControl
 }
 
-var contentBlockFields = [...]string{"type", "text", "id", "name", "thinking", "signature", "tool_use_id", "input", "content", "source", "cache_control"}
+var contentBlockFields = [...]string{"type", "text", "id", "name", "thinking", "signature", "tool_use_id", "data", "input", "content", "source", "cache_control"}
 
 func readContentBlock(raw []byte) (contentBlock, bool) {
 	var v [len(contentBlockFields)][]byte
@@ -109,15 +109,15 @@ func readContentBlock(raw []byte) (contentBlock, bool) {
 	if !readFields(raw, contentBlockFields[:], v[:]) {
 		return b, false
 	}
-	for i, dst := range [...]*string{&b.typ, &b.text, &b.id, &b.name, &b.thinking, &b.signature, &b.toolUseID} {
+	for i, dst := range [...]*string{&b.typ, &b.text, &b.id, &b.name, &b.thinking, &b.signature, &b.toolUseID, &b.data} {
 		s, ok := stringField(v[i])
 		if !ok {
 			return b, false
 		}
 		*dst = s
 	}
-	b.input, b.content = v[7], v[8]
-	return b, structField(v[9], &b.source) && structField(v[10], &b.cacheControl)
+	b.input, b.content = v[8], v[9]
+	return b, structField(v[10], &b.source) && structField(v[11], &b.cacheControl)
 }
 
 func readContentBlocks(raw []byte) ([]contentBlock, bool) {
