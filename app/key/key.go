@@ -41,8 +41,12 @@ type Key struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
 
-	// Derived: filled on control API reads from the last-used table, never stored with the key.
-	LastUsedAt *time.Time `json:"lastUsedAt,omitempty" yaml:"-" readOnly:"true" doc:"When the key last served a request, to the minute; updated about once a minute. Absent when it has not served one. Ignored on write."`
+	Status ObservedStatus `json:"status,omitzero" yaml:"-" readOnly:"true" doc:"Observed state of the key. Server-managed; ignored on write."`
+}
+
+// ObservedStatus is state the server writes; the store's upsert never writes it. Not named Status: the OpenAPI name KeyStatus belongs to the secret keys.
+type ObservedStatus struct {
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty" yaml:"-" doc:"When the key last served a request, to the minute; updated about once a minute. Absent when it has not served one."`
 }
 
 // Spec carries the auth material and gating flags. KeyHash is the sha256

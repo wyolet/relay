@@ -225,8 +225,8 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		meta.OwnerUser,
 		listScanResolver(d.Stores.HostKey, kmeta),
 		guardHostKey(d),
-		enrichHostKeyRead(d),
-		enrichHostKeysRead(d),
+		enrichHostKeyPolicies(d),
+		enrichHostKeyPoliciesAll(d),
 		d.refuseInUse,
 		mergeHostKeyPreserveValue,
 		d.Catalog,
@@ -314,15 +314,13 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		meta.OwnerProject,
 		listScanResolver(d.Stores.Key, rkmeta),
 		guardKeyAccount(d),
-		enrichKeyRead(d),
-		enrichKeysRead(d),
+		enrichKey(d),
+		enrichKeys(d),
 		d.refuseInUse,
 		// Credential material is server-managed: PUT can neither wipe nor
 		// overwrite it. Rotation goes through POST /keys/by-id/{id}/rotate.
-		// An omitted accountId keeps the key's lane. An echoed lastUsedAt is
-		// no edit.
+		// An omitted accountId keeps the key's lane.
 		func(existing, incoming *key.Key) {
-			incoming.LastUsedAt = nil
 			incoming.Spec.KeyHash = existing.Spec.KeyHash
 			incoming.Spec.Prefix = existing.Spec.Prefix
 			incoming.Spec.PreviousKeyHash = existing.Spec.PreviousKeyHash

@@ -5,7 +5,7 @@ SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_
 SELECT id, name, display_name, metadata, spec, models, created_at, updated_at, resource_version FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets ORDER BY name;
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version, last_used_at FROM secrets ORDER BY name;
 
 -- name: ListStoredSecretsForRotation :many
 SELECT id, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE value_kind = 'stored' ORDER BY id;
@@ -304,7 +304,7 @@ DELETE FROM rate_limits WHERE id = $1;
 DELETE FROM rate_limits WHERE id = $1 AND resource_version = $2;
 
 -- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys ORDER BY name;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id, last_used_at FROM relay_keys ORDER BY name;
 
 -- name: UpsertRelayKey :execrows
 INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, account_id, metadata, spec, updated_at)
@@ -348,28 +348,19 @@ UPDATE relay_keys
 DELETE FROM relay_keys WHERE id = $1;
 
 -- name: TouchRelayKeysLastUsed :exec
--- The join skips ids deleted since they were used. Rows only move forward, so
--- pods flushing at once keep the later time.
-INSERT INTO relay_key_last_used AS t (key_id, last_used_at)
-SELECT k.id, u.used_at
+-- Ids deleted since they were used match no row. Times only move forward, so pods flushing at once keep the later one; a row already as late is skipped and writes no tuple. The triggers ignore a change to last_used_at alone.
+UPDATE relay_keys AS k
+   SET last_used_at = GREATEST(COALESCE(k.last_used_at, u.used_at), u.used_at)
   FROM (SELECT unnest(@ids::text[]) AS id, unnest(@used_at::timestamptz[]) AS used_at) u
-  JOIN relay_keys k ON k.id = u.id
-ON CONFLICT (key_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at
-WHERE t.last_used_at < EXCLUDED.last_used_at;
-
--- name: ListRelayKeysLastUsed :many
-SELECT key_id, last_used_at FROM relay_key_last_used WHERE key_id = ANY(@ids::text[]);
+ WHERE k.id = u.id
+   AND (k.last_used_at IS NULL OR k.last_used_at < u.used_at);
 
 -- name: TouchHostKeysLastUsed :exec
-INSERT INTO host_key_last_used AS t (host_key_id, last_used_at)
-SELECT s.id, u.used_at
+UPDATE secrets AS s
+   SET last_used_at = GREATEST(COALESCE(s.last_used_at, u.used_at), u.used_at)
   FROM (SELECT unnest(@ids::text[]) AS id, unnest(@used_at::timestamptz[]) AS used_at) u
-  JOIN secrets s ON s.id = u.id
-ON CONFLICT (host_key_id) DO UPDATE SET last_used_at = EXCLUDED.last_used_at
-WHERE t.last_used_at < EXCLUDED.last_used_at;
-
--- name: ListHostKeysLastUsed :many
-SELECT host_key_id, last_used_at FROM host_key_last_used WHERE host_key_id = ANY(@ids::text[]);
+ WHERE s.id = u.id
+   AND (s.last_used_at IS NULL OR s.last_used_at < u.used_at);
 
 -- ── app/ arch (migration 0009) ───────────────────────────────────────────────
 
@@ -474,7 +465,7 @@ SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM models WHERE id = $1;
 
 -- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version, last_used_at FROM secrets WHERE id = $1;
 
 -- name: GetRateLimit :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM rate_limits WHERE id = $1;
@@ -489,7 +480,7 @@ UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pricings WHERE id = $1;
 
 -- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys WHERE id = $1;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id, last_used_at FROM relay_keys WHERE id = $1;
 
 -- name: GetPricingModels :many
 SELECT pricing_id, model_id, position FROM pricing_models WHERE pricing_id = $1 ORDER BY position;

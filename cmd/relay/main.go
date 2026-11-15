@@ -144,7 +144,7 @@ func main() {
 	defer payloadCtl.Close()
 
 	tokenCalibrator := buildTokenCalibrator(kvStore, postFlightKV, lifecycleReg)
-	lastUsed, stopLastUsed := buildLastUsed(listenerCtx, cfg, st, lifecycleReg)
+	stopLastUsed := buildLastUsed(listenerCtx, cfg, st, lifecycleReg)
 	defer stopLastUsed()
 	admission := registerAdmission(listenerCtx, cfg, lifecycleReg)
 	registerMetrics(lifecycleReg, usageCtl, payloadCtl)
@@ -181,7 +181,7 @@ func main() {
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlSrv, ctrlErr = startControl(cfg, st, cat, stores, idStore, usersStore, tokenSigner, tokenVerifier,
 			kvStore, limiter, sessMgr, licenseSvc, cookieSecure, usageReader, auditEmitter, auditStore, payloadReader,
-			selector, hostHealth, lastUsed, revoked, specRegistry, plans.plans, plans.engine.View, counting, catalogSync(catalogFollower),
+			selector, hostHealth, revoked, specRegistry, plans.plans, plans.engine.View, counting, catalogSync(catalogFollower),
 			catalogPrune(stores, bootOpts))
 	}
 

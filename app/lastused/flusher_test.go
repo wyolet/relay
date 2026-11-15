@@ -10,7 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// fakeWriter records each call's entries and keeps the later time per id, as the tables do.
+// fakeWriter records each call's entries and keeps the later time per id, as the stored rows do.
 type fakeWriter struct {
 	mu                 sync.Mutex
 	keyCalls, hkCalls  [][]Entry

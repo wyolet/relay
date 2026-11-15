@@ -212,6 +212,10 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 			return nil, fmt.Errorf("status: %w", err)
 		}
 	}
+	if r.LastUsedAt.Valid {
+		at := r.LastUsedAt.Time.UTC()
+		k.Status.LastUsedAt = &at
+	}
 
 	var ref secret.Ref
 	switch r.ValueKind {

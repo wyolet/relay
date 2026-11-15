@@ -1,8 +1,9 @@
 // Package lastused records when each relay key and host key last served a
 // request, independent of usage logging. A lifecycle Collector notes the ids
 // of every finished request in memory, to the minute; a Flusher writes them
-// to Postgres about once a minute in one statement per kind. The tables carry
-// no catalog trigger, so the writes rebuild no pod's snapshot.
+// onto the key rows about once a minute in one statement per kind. The rows'
+// triggers ignore a change to last_used_at alone, so the writes rebuild no
+// pod's snapshot and bump no resource version.
 //
 // Out of scope: inference tokens, which have no stored row to attach a time
 // to, and the request path itself, which never reads these times.
