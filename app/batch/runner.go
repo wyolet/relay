@@ -126,11 +126,12 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 
 	// Same-shape only (guarded above), so the body stays inbound-shaped and
 	// the inbound spec's ParamPaths address it — mirrors runBytePass.
-	hops, renames := inference.KeepSameRenames(hops, inbound)
-	wireBody, _ := inference.UpstreamBody(req, route.UpstreamModel, route.Model, inboundSpec.ParamPaths, renames)
+	wireBody, _ := inference.UpstreamBody(req, route.UpstreamModel, route.Model, inboundSpec.ParamPaths)
 
 	result, err := rn.Pipeline.Run(ctx, &pipeline.Request{
 		Body:          wireBody,
+		HopBody:       inference.HopBody,
+		BodyShape:     inbound,
 		Headers:       http.Header{},
 		Adapter:       upstreamAdapter,
 		Model:         route.Model,
@@ -144,6 +145,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 		return 0, nil, err
 	}
 	defer result.Body.Close()
+	inference.CountRenameDrops(route.Model.Meta.Name, result.BodyDropped)
 	out, rerr := io.ReadAll(result.Body)
 	if rerr != nil {
 		return result.Status, nil, fmt.Errorf("batch: read response: %w", rerr)

@@ -2,7 +2,6 @@ package inference
 
 import (
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/wyolet/relay/app/plan"
@@ -74,17 +73,21 @@ func hopRenames(h *plan.RouteHop, shape adapters.Name) []host.ParamRename {
 	return h.Host.Spec.ParamRenames(shape)
 }
 
-// KeepSameRenames narrows hops to those whose host renames a body in shape as the first hop's does, since one body is built for every hop, and returns those renames. hops must not be empty.
-func KeepSameRenames(hops []plan.RouteHop, shape adapters.Name) ([]plan.RouteHop, []host.ParamRename) {
-	renames := hopRenames(&hops[0], shape)
-	return keepHops(hops, func(h *plan.RouteHop) bool { return slices.Equal(hopRenames(h, shape), renames) }), renames
+// HopBody is pipeline.Request.HopBody for every inference path: body renamed by hop's host for shape, with the keys dropped because the caller also sent their new name; body itself, untouched and without allocating, when the host renames nothing in shape.
+func HopBody(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []string) {
+	renames := hopRenames(hop, shape)
+	if len(renames) == 0 {
+		return body, nil
+	}
+	return renameBodyParams(body, renames)
 }
 
-// renameMembers appends to edits the move of each renamed member present in the object to its new key, reading a member an earlier edit set from that edit. When the new key is already set the old one is only removed; those keys are returned.
-func (o *jsonObject) renameMembers(edits []memberEdit, renames []host.ParamRename) ([]memberEdit, []string) {
+// renameMembers returns the edits moving each renamed member present in the object to its new key. When the new key is already set the old one is only removed; those keys are returned too.
+func (o *jsonObject) renameMembers(renames []host.ParamRename) ([]memberEdit, []string) {
 	if !o.isObject {
-		return edits, nil
+		return nil, nil
 	}
+	var edits []memberEdit
 	var superseded []string
 	for _, r := range renames {
 		var value []byte
@@ -122,7 +125,7 @@ func renameBodyParams(body []byte, renames []host.ParamRename) ([]byte, []string
 	if err != nil {
 		return body, nil
 	}
-	edits, superseded := obj.renameMembers(nil, renames)
+	edits, superseded := obj.renameMembers(renames)
 	if len(edits) == 0 {
 		return body, nil
 	}

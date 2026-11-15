@@ -296,7 +296,6 @@ func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifec
 func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec) {
 	ctx := r.Context()
 
-	hops, renames := KeepSameRenames(hops, in.Inbound)
 	wireBody, usageRequested := in.Body, false
 	req := in.Request
 	if req == nil {
@@ -316,11 +315,6 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 			edits, dropped = req.stripParams(edits, u, inboundSpec.ParamPaths)
 			surfaceDroppedParams(w, route.Model.Meta.Name, dropped, metrics.DropUnsupportedByModel)
 		}
-		if len(renames) > 0 {
-			var superseded []string
-			edits, superseded = req.obj.renameMembers(edits, renames)
-			surfaceDroppedParams(w, route.Model.Meta.Name, superseded, metrics.DropSupersededByRename)
-		}
 		wireBody = req.upstreamBody(route.UpstreamModel, edits)
 	}
 
@@ -329,7 +323,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	if lc != nil {
 		lc.Translator = upstreamV1
 	}
-	result, err := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, lc))
+	result, err := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, in.Inbound, lc))
 	if err != nil {
 		mapRunErr(w, inboundSpec, err)
 		return
@@ -337,6 +331,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	defer result.Body.Close()
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
+	surfaceDroppedParams(w, route.Model.Meta.Name, result.BodyDropped, metrics.DropSupersededByRename)
 	w.WriteHeader(result.Status)
 	// Byte-pass is same-shape / vendor-native — relay_usage is canonical-only,
 	// so nothing is injected here; the upstream body streams through verbatim.
@@ -452,24 +447,19 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", err.Error())
 		return
 	}
-	hops, renames := KeepSameRenames(hops, hops[0].Binding.Spec.Adapter)
-	if len(renames) > 0 {
-		var superseded []string
-		wireBody, superseded = renameBodyParams(wireBody, renames)
-		surfaceDroppedParams(w, route.Model.Meta.Name, superseded, metrics.DropSupersededByRename)
-	}
 
 	lc := lifecycle.FromContext(ctx)
 	applyRouteIdentity(lc, route, hops, PrincipalFrom(ctx))
 	if lc != nil {
 		lc.Translator = upstreamV1
 	}
-	result, pErr := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, lc))
+	result, pErr := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, hops[0].Binding.Spec.Adapter, lc))
 	if pErr != nil {
 		mapRunErr(w, d.Specs.Spec(in.Inbound), pErr)
 		return
 	}
 	defer result.Body.Close()
+	surfaceDroppedParams(w, route.Model.Meta.Name, result.BodyDropped, metrics.DropSupersededByRename)
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
 

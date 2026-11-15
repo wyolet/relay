@@ -3,6 +3,7 @@ package inference
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -13,13 +14,10 @@ import (
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/httpheader"
-	"github.com/wyolet/relay/pkg/meta"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 var ccPaths = map[string]string{"temperature": "temperature", "top_p": "top_p"}
-
-var maxTokensRename = []host.ParamRename{{From: "max_tokens", To: "max_completion_tokens"}}
 
 // openAIMaxTokens is the rename an OpenAI host declares for Chat Completions.
 var openAIMaxTokens = map[adapters.Name]map[string]string{adapters.OpenAI: {"max_tokens": "max_completion_tokens"}}
@@ -51,75 +49,42 @@ func TestRenameBodyParams(t *testing.T) {
 	}
 }
 
-// A rename reads a member an earlier edit set or removed, so it composes with the strip and the stream-usage edit.
-func TestRenameMembersAfterEdits(t *testing.T) {
-	for _, tc := range []struct {
-		name, body string
-		edits      []memberEdit
-		want       string
-		superseded []string
-	}{
-		{"source removed by the strip", `{"max_tokens":5}`, []memberEdit{{key: "max_tokens"}}, `{}`, nil},
-		{"target removed by the strip", `{"max_tokens":5,"max_completion_tokens":9}`, []memberEdit{{key: "max_completion_tokens"}}, `{"max_completion_tokens":5}`, nil},
-		{"target added by an edit wins", `{"max_tokens":5}`, []memberEdit{{key: "max_completion_tokens", value: []byte("7")}}, `{"max_completion_tokens":7}`, []string{"max_tokens"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			req, rej := parseRequest([]byte(tc.body), v1.RequestKeys{})
-			if rej != nil {
-				t.Fatal(rej)
-			}
-			edits, superseded := req.obj.renameMembers(tc.edits, maxTokensRename)
-			if got := req.obj.assemble(edits); string(got) != tc.want {
-				t.Errorf("body = %s, want %s", got, tc.want)
-			}
-			if diff := cmp.Diff(tc.superseded, superseded); diff != "" {
-				t.Errorf("superseded (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-// One body serves every hop, so failover keeps to the hops whose host renames it the same way; with no renames anywhere that costs nothing.
-func TestKeepSameRenames(t *testing.T) {
+// Each hop gets its own host's form of one base body, which stays as built; a host without renames for the shape gets the base itself, at no cost.
+func TestHopBody(t *testing.T) {
 	cc := &binding.Binding{Spec: binding.Spec{Adapter: adapters.OpenAI}}
-	renaming := &host.Host{Meta: meta.Metadata{Name: "renaming"}, Spec: host.Spec{RequestParamRenames: openAIMaxTokens}}
-	plain := &host.Host{Meta: meta.Metadata{Name: "plain"}}
-	hop := func(h *host.Host) plan.RouteHop {
-		return plan.RouteHop{Binding: cc, Host: h, ParamRenames: h.Spec.ParamRenames(cc.Spec.Adapter)}
+	hop := func(spec host.Spec) *plan.RouteHop {
+		return &plan.RouteHop{Binding: cc, Host: &host.Host{Spec: spec}, ParamRenames: spec.ParamRenames(cc.Spec.Adapter)}
 	}
-	names := func(hops []plan.RouteHop) []string {
-		var out []string
-		for _, h := range hops {
-			out = append(out, h.Host.Meta.Name)
-		}
-		return out
-	}
-	mixed := []plan.RouteHop{hop(renaming), hop(plain), hop(renaming)}
+	renaming := hop(host.Spec{RequestParamRenames: openAIMaxTokens})
+	plain := hop(host.Spec{})
+	otherShape := hop(host.Spec{RequestParamRenames: map[adapters.Name]map[string]string{adapters.OpenAIResponses: {"max_tokens": "x"}}})
+	const base = `{"model":"m","max_tokens":5}`
+	body := []byte(base)
 	for _, tc := range []struct {
-		name        string
-		hops        []plan.RouteHop
-		shape       adapters.Name
-		wantHops    []string
-		wantRenames []host.ParamRename
+		name  string
+		hop   *plan.RouteHop
+		shape adapters.Name
+		want  string
 	}{
-		{"first hop renames", mixed, adapters.OpenAI, []string{"renaming", "renaming"}, maxTokensRename},
-		{"first hop does not", []plan.RouteHop{hop(plain), hop(renaming), hop(plain)}, adapters.OpenAI, []string{"plain", "plain"}, nil},
-		{"another shape reads the host table", mixed, adapters.OpenAIResponses, []string{"renaming", "plain", "renaming"}, nil},
+		{"renaming host", renaming, adapters.OpenAI, `{"model":"m","max_completion_tokens":5}`},
+		{"plain host", plain, adapters.OpenAI, base},
+		{"renaming host, other shape", renaming, adapters.OpenAIResponses, base},
+		{"table for the shape sent, not the binding's", otherShape, adapters.OpenAIResponses, `{"model":"m","x":5}`},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			hops, renames := KeepSameRenames(tc.hops, tc.shape)
-			if diff := cmp.Diff(tc.wantHops, names(hops)); diff != "" {
-				t.Errorf("hops (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.wantRenames, renames); diff != "" {
-				t.Errorf("renames (-want +got):\n%s", diff)
-			}
-		})
+		if got, _ := HopBody(tc.hop, tc.shape, body); string(got) != tc.want {
+			t.Errorf("%s: body = %s, want %s", tc.name, got, tc.want)
+		}
+		if string(body) != base {
+			t.Fatalf("%s: base body modified to %s", tc.name, body)
+		}
 	}
-
-	plainHops := []plan.RouteHop{hop(plain), hop(plain)}
-	if n := testing.AllocsPerRun(100, func() { KeepSameRenames(plainHops, adapters.OpenAI) }); n != 0 && !raceInstrumented {
-		t.Errorf("KeepSameRenames without renames allocates %v times", n)
+	if _, dropped := HopBody(renaming, adapters.OpenAI, []byte(`{"max_tokens":5,"max_completion_tokens":9}`)); !slices.Equal(dropped, []string{"max_tokens"}) {
+		t.Errorf("dropped = %v, want [max_tokens]", dropped)
+	}
+	for _, h := range []*plan.RouteHop{plain, otherShape} {
+		if n := testing.AllocsPerRun(100, func() { HopBody(h, adapters.OpenAI, body) }); n != 0 && !raceInstrumented {
+			t.Errorf("HopBody for a host without renames for the shape allocates %v times", n)
+		}
 	}
 }
 
