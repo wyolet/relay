@@ -134,11 +134,12 @@ func TestIntegration_UpdateMovesOwner(t *testing.T) {
 		t.Fatalf("moving a rate limit a project-A policy uses = %d, want 409 naming the policy: %s", code, raw)
 	}
 
+	// A policy is never catalog data, so system on input names the organization.
 	if code, raw := put(nil, pol, "moving", `,"owner":{"kind":"system"}`); code != http.StatusOK {
 		t.Fatalf("admin move to system = %d, want 200: %s", code, raw)
 	}
-	if kind, _ := ownerOf(pol); kind != "system" {
-		t.Fatalf("owner after admin move = %s, want system", kind)
+	if kind, _ := ownerOf(pol); kind != "organization" {
+		t.Fatalf("owner after admin move = %s, want organization", kind)
 	}
 
 	if !auditRecordsOwnerChange(st, pol) {
