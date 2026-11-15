@@ -3,8 +3,9 @@
 // detached (meta.CatalogDetachedAt); a prune deletes a detached row that is
 // not operator-edited, carries no overlay, is referenced by nothing but other
 // detached rows deleted with it, and, for a model or a host binding, served
-// no request inside the idle window. Every other detached row stays, and the
-// next prune judges it again.
+// no request inside the idle window. A model an operator's policy names in
+// spec.models also stays. Every other detached row stays, and the next prune
+// judges it again.
 //
 // What references a row is the caller's answer (the control API's delete
 // blockers and dropped links), so a prune and an admin delete agree on what
@@ -112,6 +113,9 @@ func Run(ctx context.Context, s Stores, opts Options) (Report, error) {
 	tables := s.tables()
 	cands, err := loadCandidates(ctx, tables, s.Overlays)
 	if err != nil {
+		return Report{}, err
+	}
+	if err := markNamedModels(ctx, s, cands); err != nil {
 		return Report{}, err
 	}
 	since := now().Add(-opts.Idle)

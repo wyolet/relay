@@ -31,7 +31,7 @@ type Decision struct {
 	ID         string    `json:"id"         doc:"Id of the row."`
 	DetachedAt time.Time `json:"detachedAt" doc:"When a catalog release stopped shipping the row."`
 	Decision   string    `json:"decision"   enum:"prune,keep" doc:"prune: the row is deleted (or would be, in a dry run). keep: it stays detached and is judged again on the next prune."`
-	Reason     string    `json:"reason,omitempty" doc:"Why the row stays: edited, overlay, referenced by <kind> <name> (kept when that row stays detached too), traffic since <time>, or usage unknown: <why>."`
+	Reason     string    `json:"reason,omitempty" doc:"Why the row stays: edited, overlay, named by policy <name>, referenced by <kind> <name> (kept when that row stays detached too), traffic since <time>, or usage unknown: <why>."`
 
 	// Owner and version are what the delete and its audit row need; Deleted
 	// is set once the row is gone, which a run that fails part-way needs said.
@@ -48,6 +48,8 @@ type candidate struct {
 	version        string
 	dirty          bool
 	overlay        bool
+	// namedBy are the operator's policies naming this model in spec.models.
+	namedBy []Ref
 	// traffic is the usage query of a kind with a traffic guard (models and
 	// host bindings), and usage its answer.
 	traffic *usage.EventQuery
@@ -110,14 +112,16 @@ func decide(cands []*candidate) []Decision {
 }
 
 // ownReason is why a row stays whatever the other candidates decide: an
-// operator edit, an overlay, traffic or an unanswered usage check, or a
-// reference from a row no prune would remove.
+// operator edit, an overlay, an operator's policy naming it, traffic or an
+// unanswered usage check, or a reference from a row no prune would remove.
 func ownReason(c *candidate, cands map[string]*candidate) string {
 	switch {
 	case c.dirty:
 		return "edited"
 	case c.overlay:
 		return "overlay"
+	case len(c.namedBy) > 0:
+		return describeRefs("named by", c.namedBy, "")
 	}
 	if u := c.usage; u != nil {
 		switch {
@@ -144,6 +148,11 @@ const maxNamedRefs = 3
 
 // referencedBy names the referencing rows, each followed by suffix.
 func referencedBy(refs []Ref, suffix string) string {
+	return describeRefs("referenced by", refs, suffix)
+}
+
+// describeRefs is verb and the rows, each followed by suffix.
+func describeRefs(verb string, refs []Ref, suffix string) string {
 	sorted := append([]Ref(nil), refs...)
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].Kind != sorted[j].Kind {
@@ -155,7 +164,7 @@ func referencedBy(refs []Ref, suffix string) string {
 	for _, r := range sorted[:min(len(sorted), maxNamedRefs)] {
 		names = append(names, r.Kind+" "+r.Name+suffix)
 	}
-	s := "referenced by " + strings.Join(names, ", ")
+	s := verb + " " + strings.Join(names, ", ")
 	if more := len(sorted) - maxNamedRefs; more > 0 {
 		s += fmt.Sprintf(" and %d more", more)
 	}

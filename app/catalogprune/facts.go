@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/meta"
+	"github.com/wyolet/relay/pkg/modelref"
 	"github.com/wyolet/relay/pkg/usage"
 )
 
@@ -38,6 +39,57 @@ func loadCandidates(ctx context.Context, tables map[string]table, ov Overlays) (
 	return out, nil
 }
 
+// markNamedModels records on each model candidate the operator's policies
+// naming it exactly in spec.models ("provider/model", with or without a
+// host). A policy counts when a user, team or project owns it, or when it was
+// edited. A clean catalog policy doesn't: the release that dropped the model
+// updates it.
+func markNamedModels(ctx context.Context, s Stores, cands []*candidate) error {
+	var models []*candidate
+	for _, c := range cands {
+		if c.kind == "model" && c.owner.Kind == meta.OwnerProvider {
+			models = append(models, c)
+		}
+	}
+	if len(models) == 0 {
+		return nil
+	}
+	policies, err := s.Policies.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list policies: %w", err)
+	}
+	providers, err := s.Providers.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list providers: %w", err)
+	}
+	providerName := make(map[string]string, len(providers))
+	for _, p := range providers {
+		providerName[p.Meta.ID] = p.Meta.Name
+	}
+	type modelKey struct{ provider, model string }
+	named := map[modelKey][]Ref{}
+	for _, p := range policies {
+		if !p.Meta.Owner.Tenant() && !p.Meta.Dirty {
+			continue
+		}
+		for _, raw := range p.Spec.Models {
+			ref, err := modelref.Parse(raw)
+			if err != nil || ref.ProviderWildcard || ref.ModelWildcard {
+				continue
+			}
+			k := modelKey{ref.Provider, ref.Model}
+			if n := named[k]; len(n) > 0 && n[len(n)-1].ID == p.Meta.ID {
+				continue
+			}
+			named[k] = append(named[k], Ref{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name})
+		}
+	}
+	for _, c := range models {
+		c.namedBy = named[modelKey{providerName[c.owner.ID], c.name}]
+	}
+	return nil
+}
+
 // gatherFacts answers the usage check and then the references of every row an
 // earlier fact doesn't already keep, cheapest first. It returns why usage was
 // unknown, empty when the store answered every check. After one failed usage
@@ -49,7 +101,7 @@ func gatherFacts(ctx context.Context, cands []*candidate, opts Options, since ti
 	}
 	unknown := ""
 	for _, c := range cands {
-		if c.dirty || c.overlay {
+		if c.dirty || c.overlay || len(c.namedBy) > 0 {
 			continue
 		}
 		if c.traffic != nil {

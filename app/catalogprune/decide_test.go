@@ -39,6 +39,11 @@ func TestDecide(t *testing.T) {
 			map[string]outcome{"tier-0": {Keep, "edited"}}},
 		{"overlay", []*candidate{overlaid(cand("model", "m"))},
 			map[string]outcome{"m": {Keep, "overlay"}}},
+		{"named by an operator's policy", []*candidate{func() *candidate {
+			c := withUsage(cand("model", "m"), time.Time{}, "")
+			c.namedBy = []Ref{ref("policy", "team-default")}
+			return c
+		}()}, map[string]outcome{"m": {Keep, "named by policy team-default"}}},
 		{"referenced by a row no prune removes", []*candidate{cand("rate-limit", "rl", ref("policy", "team-default"))},
 			map[string]outcome{"rl": {Keep, "referenced by policy team-default"}}},
 		{"names three referencing rows and counts the rest", []*candidate{cand("host", "h",

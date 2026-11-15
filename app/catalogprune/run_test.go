@@ -248,6 +248,46 @@ func TestRunDeletesChildrenBeforeTheirParent(t *testing.T) {
 	}
 }
 
+// A model an operator's policy names exactly stays; a provider-wide grant, a
+// clean catalog policy, or a ref to another provider's model of the same name
+// doesn't hold it.
+func TestRunKeepsModelsAnOperatorPolicyNames(t *testing.T) {
+	f := newFixture()
+	acme := &provider.Provider{Meta: rowMeta("acme", false)}
+	f.providers.rows = []*provider.Provider{acme}
+	byAcme := meta.Owner{Kind: meta.OwnerProvider, ID: acme.Meta.ID}
+	for _, n := range []string{"m1", "m2", "m3", "m4", "m5"} {
+		m := &model.Model{Meta: rowMeta(n, true)}
+		m.Meta.Owner = byAcme
+		f.models.rows = append(f.models.rows, m)
+	}
+	team := meta.Owner{Kind: meta.OwnerTeam, ID: "t1"}
+	edited := rowMeta("acme-tier-edited", false)
+	edited.Owner, edited.Dirty = meta.Owner{Kind: meta.OwnerHost, ID: "id-acme-host"}, true
+	clean := rowMeta("acme-tier-clean", false)
+	clean.Owner = meta.Owner{Kind: meta.OwnerHost, ID: "id-acme-host"}
+	f.policies.rows = []*policy.Policy{
+		{Meta: meta.Metadata{ID: "id-team-default", Name: "team-default", Owner: team}, Spec: policy.Spec{Models: []string{"acme/m1", "acme/m1@acme-host", "acme"}}},
+		{Meta: edited, Spec: policy.Spec{Models: []string{"acme/m4@acme-host"}}},
+		{Meta: clean, Spec: policy.Spec{Models: []string{"acme/m3"}}},
+		{Meta: meta.Metadata{ID: "id-other", Name: "other-grant", Owner: meta.Owner{Kind: meta.OwnerProject, ID: "p1"}}, Spec: policy.Spec{Models: []string{"other/m5"}}},
+	}
+	rep := f.run(t, true)
+	want := map[string]outcome{
+		"model/m1": {Keep, "named by policy team-default"},
+		"model/m2": {Prune, ""},
+		"model/m3": {Prune, ""},
+		"model/m4": {Keep, "named by policy acme-tier-edited"},
+		"model/m5": {Prune, ""},
+	}
+	if diff := cmp.Diff(want, outcomes(rep)); diff != "" {
+		t.Fatalf("decisions (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"m2", "m3", "m5"}, f.models.deleted); diff != "" {
+		t.Fatalf("deleted (-want +got):\n%s", diff)
+	}
+}
+
 // A row written between the decision and its delete stays, and so does a row
 // something started referencing meanwhile.
 func TestRunKeepsRowsThatChangeDuringTheRun(t *testing.T) {
