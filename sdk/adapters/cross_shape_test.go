@@ -54,7 +54,7 @@ func TestCrossShapeRequest(t *testing.T) {
 			name: "chat options reach Gemini under a different upstream name",
 			from: "openai-chat", to: "gemini", upstream: "up",
 			body: `{"model":"alias","messages":[{"role":"user","content":"hi"}],"temperature":0.5,"max_tokens":256,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":` + answerSchema + `,"strict":true}}}`,
-			want: `{` + geminiHiTurn + `,"generationConfig":{"temperature":0.5,"maxOutputTokens":256,"responseMimeType":"application/json","responseSchema":` + answerSchema + `}}`,
+			want: `{` + geminiHiTurn + `,"generationConfig":{"temperature":0.5,"maxOutputTokens":256,"responseMimeType":"application/json","responseJsonSchema":` + answerSchema + `}}`,
 		},
 		{
 			name: "chat json_schema reaches Messages as output_config.format, with no tool",
