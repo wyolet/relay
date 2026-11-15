@@ -30,6 +30,7 @@ func holdN(t *testing.T, a *Admission, n int) []*lifecycle.Context {
 	return held
 }
 
+// A window is overloaded when the scheduler p99 is past the target over enough samples, or the process is at cpuBusyShare whatever the scheduler says. From the breachWindows-th such window in a row the limit drops; a healthy one resets the count and grows it.
 func TestAdjustLimit(t *testing.T) {
 	overloaded, healthy := 20*time.Millisecond, time.Millisecond
 	for _, tc := range []struct {
@@ -38,30 +39,35 @@ func TestAdjustLimit(t *testing.T) {
 		inflight    int
 		p99         time.Duration
 		samples     uint64
+		cpu         float64
 		breaches    int
 		want        int64
+		wantBreach  int
 	}{
-		{"overloaded drops to 90% of in flight", 2048, 2048, 1000, overloaded, 500, breachWindows - 1, 900},
-		{"overloaded drops to 90% of the limit when it is lower", 2048, 500, 800, overloaded, 500, breachWindows - 1, 450},
-		{"overloaded stops at the floor", 2048, 2048, 10, overloaded, 500, breachWindows - 1, adaptiveFloor},
-		{"floor never exceeds the hard cap", 10, 10, 5, overloaded, 500, breachWindows - 1, 10},
-		{"too few samples count as healthy", 2048, 900, 900, time.Second, minSchedSamples - 1, 0, 990},
-		{"p99 at the target is healthy", 2048, 900, 0, testTarget, 500, 0, 990},
-		{"healthy grows by a tenth", 2048, 900, 0, healthy, 500, 0, 990},
-		{"healthy grows by at least the minimum step", 2048, 64, 0, healthy, 500, 0, 64 + adaptiveMinStep},
-		{"a breach shorter than breachWindows holds the limit", 2048, 900, 900, overloaded, 500, breachWindows - 2, 900},
-		{"a healthy window resets the breach and grows", 2048, 900, 0, healthy, 500, breachWindows - 1, 990},
-		{"healthy stops at the hard cap", 2048, 2040, 0, healthy, 500, 0, 2048},
+		{"overloaded drops to 90% of in flight", 2048, 2048, 1000, overloaded, 500, 0, breachWindows - 1, 900, breachWindows},
+		{"overloaded drops to 90% of the limit when it is lower", 2048, 500, 800, overloaded, 500, 0, breachWindows - 1, 450, breachWindows},
+		{"overloaded stops at the floor", 2048, 2048, 10, overloaded, 500, 0, breachWindows - 1, adaptiveFloor, breachWindows},
+		{"floor never exceeds the hard cap", 10, 10, 5, overloaded, 500, 0, breachWindows - 1, 10, breachWindows},
+		{"overload keeps dropping past breachWindows", 2048, 900, 1000, overloaded, 500, 0, breachWindows + 4, 810, breachWindows + 5},
+		{"too few samples count as healthy", 2048, 900, 900, time.Second, minSchedSamples - 1, 0, 0, 990, 0},
+		{"enough samples at the minimum count", 2048, 900, 900, overloaded, minSchedSamples, 0, breachWindows - 1, 810, breachWindows},
+		{"p99 at the target is healthy", 2048, 900, 0, testTarget, 500, 0, 0, 990, 0},
+		{"healthy grows by a tenth", 2048, 900, 0, healthy, 500, 0, 0, 990, 0},
+		{"healthy grows by at least the minimum step", 2048, 64, 0, healthy, 500, 0, 0, 64 + adaptiveMinStep, 0},
+		{"a breach shorter than breachWindows holds the limit", 2048, 900, 900, overloaded, 500, 0, breachWindows - 2, 900, breachWindows - 1},
+		{"a healthy window resets the breach and grows", 2048, 900, 0, healthy, 500, 0, breachWindows - 1, 990, 0},
+		{"healthy stops at the hard cap", 2048, 2040, 0, healthy, 500, 0, 0, 2048, 0},
+		{"a busy CPU is overload with a calm scheduler", 2048, 2048, 1000, 0, 0, cpuBusyShare, breachWindows - 1, 900, breachWindows},
+		{"a CPU below busy is healthy", 2048, 1000, 1000, 0, 0, cpuBusyShare - 0.05, breachWindows - 1, 1100, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := NewAdmission(int(tc.hard))
-			a.limit.Store(tc.hard)
 			holdN(t, a, tc.inflight)
 			a.limit.Store(tc.limit)
 			a.breaches = tc.breaches
-			a.adjustLimit(Load{SchedP99: tc.p99, Samples: tc.samples}, testTarget)
-			if got := a.limit.Load(); got != tc.want {
-				t.Fatalf("limit = %d, want %d", got, tc.want)
+			a.adjustLimit(Load{SchedP99: tc.p99, Samples: tc.samples, CPUShare: tc.cpu}, testTarget)
+			if got := a.limit.Load(); got != tc.want || a.breaches != tc.wantBreach {
+				t.Fatalf("limit = %d after %d breaches, want %d after %d", got, a.breaches, tc.want, tc.wantBreach)
 			}
 			if got := testutil.ToFloat64(metrics.InflightAdaptiveLimit); got != float64(tc.want) {
 				t.Fatalf("adaptive limit gauge = %v, want %d", got, tc.want)
@@ -194,28 +200,6 @@ func TestRuntimeSchedLatency(t *testing.T) {
 	}
 	if _, again := sched(); again >= first {
 		t.Fatalf("second read counted %d samples, want fewer than the first read's %d", again, first)
-	}
-}
-
-// CPU share at or past cpuBusyShare is overload even when the scheduler looks calm; below it, a calm scheduler is healthy.
-func TestAdjustLimit_CPUShare(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		share float64
-		want  int64
-	}{
-		{"busy", cpuBusyShare, 900},
-		{"below busy", cpuBusyShare - 0.05, 2048},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a := NewAdmission(2048)
-			holdN(t, a, 1000)
-			a.breaches = breachWindows - 1
-			a.adjustLimit(Load{CPUShare: tc.share}, testTarget)
-			if got := a.limit.Load(); got != tc.want {
-				t.Fatalf("limit = %d, want %d", got, tc.want)
-			}
-		})
 	}
 }
 

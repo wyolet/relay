@@ -3,11 +3,11 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -87,7 +87,7 @@ func (a reservationTestAdapter) Call(ctx context.Context, _ string, _ *string, _
 	if a.call != nil {
 		return a.call(ctx)
 	}
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
+	return ok200(), nil
 }
 
 func (a reservationTestAdapter) ExtractTokens([]byte) pkgusage.Tokens {
@@ -254,54 +254,26 @@ func TestRunSuccessCommitsReservationsOnPostFlightOnce(t *testing.T) {
 	}
 }
 
+// A call error is the caller's (no retry), the host's (a dial-phase failure: re-dial, never a key failure) or the key's network failure.
 func TestClassifyCallErrors(t *testing.T) {
 	t.Parallel()
-
-	cases := []struct {
+	for _, tc := range []struct {
 		name      string
 		err       error
 		wantRetry bool
 		wantKind  keypool.FailureKind
-		checkKind bool
 	}{
-		{
-			name:      "caller cancellation does not retry or classify a key failure",
-			err:       context.Canceled,
-			wantRetry: false,
-		},
-		{
-			name:      "caller deadline does not retry or classify a key failure",
-			err:       context.DeadlineExceeded,
-			wantRetry: false,
-		},
-		{
-			name:      "dial failure is host-unreachable and retryable",
-			err:       &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED},
-			wantRetry: true,
-			wantKind:  keypool.FailureUpstreamUnreachable,
-			checkKind: true,
-		},
-		{
-			name:      "generic call error is retryable network failure",
-			err:       errors.New("read failed"),
-			wantRetry: true,
-			wantKind:  keypool.FailureNetwork,
-			checkKind: true,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			retry, kind, retryAfter := classify(reservationTestAdapter{}, nil, tc.err)
-			if retry != tc.wantRetry {
-				t.Fatalf("retry = %v, want %v", retry, tc.wantRetry)
-			}
-			if tc.checkKind && kind != tc.wantKind {
-				t.Fatalf("kind = %v, want %v", kind, tc.wantKind)
-			}
-			if retryAfter != 0 {
-				t.Fatalf("retryAfter = %v, want 0", retryAfter)
-			}
-		})
+		{"caller cancelled", context.Canceled, false, keypool.FailureNetwork},
+		{"caller deadline", fmt.Errorf("call: %w", context.DeadlineExceeded), false, keypool.FailureNetwork},
+		{"connection refused", &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}, true, keypool.FailureUpstreamUnreachable},
+		{"wrapped dial failure", fmt.Errorf("post: %w", &net.OpError{Op: "dial", Err: syscall.EHOSTUNREACH}), true, keypool.FailureUpstreamUnreachable},
+		{"name not resolved", &net.DNSError{Err: "no such host", Name: "upstream.invalid", IsNotFound: true}, true, keypool.FailureUpstreamUnreachable},
+		{"read after connect", &net.OpError{Op: "read", Err: syscall.ECONNRESET}, true, keypool.FailureNetwork},
+		{"other call error", errors.New("read failed"), true, keypool.FailureNetwork},
+	} {
+		retry, kind, retryAfter := classify(reservationTestAdapter{}, nil, tc.err)
+		if retry != tc.wantRetry || kind != tc.wantKind || retryAfter != 0 {
+			t.Errorf("%s: classify = %v, %v, %v; want %v, %v, 0", tc.name, retry, kind, retryAfter, tc.wantRetry, tc.wantKind)
+		}
 	}
 }

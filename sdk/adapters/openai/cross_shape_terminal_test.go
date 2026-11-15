@@ -1,8 +1,6 @@
 package openai_test
 
-// Cross-shape terminal-status tests. Each serializer must NOT emit a success
-// signal when the canonical response carries a non-success status with an
-// empty or other finish_reason (rule 11: no silent drops).
+// Cross-shape terminal status: no serializer may emit a success signal for a canonical response that ended in failure, truncation or an unknown reason (rule 11).
 
 import (
 	"encoding/json"
@@ -14,8 +12,6 @@ import (
 	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
-
-// --- helpers ---
 
 func xsSSE(event, data string) []byte {
 	if event == "" {
@@ -53,182 +49,6 @@ func xsPipe(t *testing.T, toCanon, fromCanon func([]byte) ([]byte, error), frame
 	return canon, wire
 }
 
-// responsesFailedStreamFrames is a Responses stream ending in response.failed.
-var responsesFailedStreamFrames = [][]byte{
-	xsSSE("response.created", `{"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}`),
-	xsSSE("response.failed", `{"type":"response.failed","sequence_number":3,"response":{"id":"resp_1","object":"response","created_at":1,"status":"failed","model":"m","output":[],"error":{"code":"server_error","message":"The model produced invalid output"}}}`),
-}
-
-// anthropicUnknownStopFrames is an Anthropic stream ending with an unrecognised stop_reason.
-var anthropicUnknownStopFrames = [][]byte{
-	xsSSE("message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}`),
-	xsSSE("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
-	xsSSE("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`),
-	xsSSE("content_block_stop", `{"type":"content_block_stop","index":0}`),
-	xsSSE("message_delta", `{"type":"message_delta","delta":{"stop_reason":"model_context_window_exceeded","stop_sequence":null},"usage":{"output_tokens":5}}`),
-	xsSSE("message_stop", `{"type":"message_stop"}`),
-}
-
-// --- CC stream tests ---
-
-// Anthropic stream with unknown stop_reason → cross-shape to CC must not emit finish_reason=stop.
-func TestCrossShape_AnthropicUnknownStop_CCStream_NotStop(t *testing.T) {
-	_, wire := xsPipe(t, anthropic.AnthropicTranslator{}.NewToCanonicalStream(), openai.CCTranslator{}.NewFromCanonicalStream(), anthropicUnknownStopFrames...)
-	t.Logf("CC wire:\n%s", wire)
-	if strings.Contains(string(wire), `"finish_reason":"stop"`) {
-		t.Fatalf("Anthropic unknown stop_reason must not produce CC finish_reason=stop; got:\n%s", wire)
-	}
-}
-
-// Responses response.failed stream → cross-shape to CC must not emit finish_reason=stop.
-func TestCrossShape_ResponsesFailed_CCStream_NotStop(t *testing.T) {
-	_, wire := xsPipe(t, openai.ResponsesTranslator{}.NewToCanonicalStream(), openai.CCTranslator{}.NewFromCanonicalStream(), responsesFailedStreamFrames...)
-	t.Logf("CC wire:\n%s", wire)
-	if strings.Contains(string(wire), `"finish_reason":"stop"`) {
-		t.Fatalf("response.failed must not produce CC finish_reason=stop; got:\n%s", wire)
-	}
-}
-
-// --- CC buffered test ---
-
-// Anthropic unknown stop_reason → cross-shape buffered to CC must not emit finish_reason=stop.
-func TestCrossShape_AnthropicUnknownStop_CCBuffered_NotStop(t *testing.T) {
-	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"partial"}],"stop_reason":"model_context_window_exceeded","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":5}}`)
-	resp, err := anthropic.AnthropicTranslator{}.ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Status != v1.StatusIncomplete || resp.FinishReason != v1.FinishReasonOther {
-		t.Fatalf("precondition: expected incomplete/other, got %q/%q", resp.Status, resp.FinishReason)
-	}
-	cc, err := openai.CCTranslator{}.SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("CC wire: %s", cc)
-	var r struct {
-		Choices []struct {
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(cc, &r); err != nil {
-		t.Fatal(err)
-	}
-	if len(r.Choices) > 0 && r.Choices[0].FinishReason == "stop" {
-		t.Fatalf("Anthropic unknown stop_reason (status=incomplete, finish=other) must not produce CC finish_reason=stop; got %q", r.Choices[0].FinishReason)
-	}
-}
-
-// --- Anthropic stream tests ---
-
-// Anthropic stream with unknown stop_reason → cross-shape to Anthropic must not produce end_turn.
-// (Same-vendor round-trip uses the raw reason; cross-vendor must surface a non-success signal.)
-func TestCrossShape_AnthropicUnknownStop_AnthropicStream_NotEndTurn(t *testing.T) {
-	// NOTE: same-vendor Anthropic→Anthropic correctly carries the raw reason;
-	// this test checks the cross-vendor case via a direct canonical response.
-	resp := &v1.Response{
-		ID:                "r1",
-		Status:            v1.StatusIncomplete,
-		FinishReason:      "",
-		IncompleteDetails: &v1.IncompleteDetails{Reason: "anthropic:model_context_window_exceeded"},
-	}
-	out, err := anthropic.AnthropicTranslator{}.SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Anthropic wire: %s", out)
-	// Anthropic serializer uses incomplete.Reason to reconstruct the raw stop_reason
-	// for same-vendor round-trips — this should yield the raw vendor reason, not end_turn.
-	if !strings.Contains(string(out), `"stop_reason":"model_context_window_exceeded"`) {
-		t.Fatalf("Anthropic with incomplete/\"\" and vendor-prefixed reason must carry the raw stop_reason; got:\n%s", out)
-	}
-}
-
-// Responses response.failed stream → cross-shape to Anthropic stream must not produce stop_reason=end_turn.
-func TestCrossShape_ResponsesFailed_AnthropicStream_NotEndTurn(t *testing.T) {
-	_, wire := xsPipe(t, openai.ResponsesTranslator{}.NewToCanonicalStream(), anthropic.AnthropicTranslator{}.NewFromCanonicalStream(), responsesFailedStreamFrames...)
-	t.Logf("Anthropic wire:\n%s", wire)
-	if strings.Contains(string(wire), `"stop_reason":"end_turn"`) {
-		t.Fatalf("response.failed must not produce Anthropic stop_reason=end_turn; got:\n%s", wire)
-	}
-}
-
-// Responses response.failed buffered → cross-shape to Anthropic must not emit end_turn.
-func TestCrossShape_ResponsesFailed_AnthropicBuffered_NotEndTurn(t *testing.T) {
-	body := []byte(`{"id":"resp_1","object":"response","created_at":1,"status":"failed","model":"m","output":[],"error":{"code":"server_error","message":"The model produced invalid output"}}`)
-	resp, err := openai.ResponsesTranslator{}.ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Status != v1.StatusFailed {
-		t.Fatalf("precondition: expected failed, got %q", resp.Status)
-	}
-	out, err := anthropic.AnthropicTranslator{}.SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Anthropic wire: %s", out)
-	if strings.Contains(string(out), `"stop_reason":"end_turn"`) {
-		t.Fatalf("status=failed with empty finish_reason must not produce Anthropic stop_reason=end_turn; got:\n%s", out)
-	}
-}
-
-// --- Gemini stream tests ---
-
-// Responses response.failed stream → cross-shape to Gemini stream must not emit finishReason=STOP.
-func TestCrossShape_ResponsesFailed_GeminiStream_NotStop(t *testing.T) {
-	_, wire := xsPipe(t, openai.ResponsesTranslator{}.NewToCanonicalStream(), gemini.GeminiTranslator{}.NewFromCanonicalStream(), responsesFailedStreamFrames...)
-	t.Logf("Gemini wire:\n%s", wire)
-	if strings.Contains(string(wire), `"finishReason":"STOP"`) {
-		t.Fatalf("response.failed must not produce Gemini finishReason=STOP; got:\n%s", wire)
-	}
-}
-
-// Anthropic unknown stop_reason stream → cross-shape to Gemini stream must not emit finishReason=STOP.
-func TestCrossShape_AnthropicUnknownStop_GeminiStream_NotStop(t *testing.T) {
-	_, wire := xsPipe(t, anthropic.AnthropicTranslator{}.NewToCanonicalStream(), gemini.GeminiTranslator{}.NewFromCanonicalStream(), anthropicUnknownStopFrames...)
-	t.Logf("Gemini wire:\n%s", wire)
-	if strings.Contains(string(wire), `"finishReason":"STOP"`) {
-		t.Fatalf("Anthropic unknown stop_reason (status=incomplete) must not produce Gemini finishReason=STOP; got:\n%s", wire)
-	}
-}
-
-// Responses response.failed buffered → cross-shape to Gemini must not emit finishReason=STOP.
-func TestCrossShape_ResponsesFailed_GeminiBuffered_NotStop(t *testing.T) {
-	body := []byte(`{"id":"resp_1","object":"response","created_at":1,"status":"failed","model":"m","output":[],"error":{"code":"server_error","message":"The model produced invalid output"}}`)
-	resp, err := openai.ResponsesTranslator{}.ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := gemini.GeminiTranslator{}.SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Gemini wire: %s", out)
-	if strings.Contains(string(out), `"finishReason":"STOP"`) {
-		t.Fatalf("status=failed with empty finish_reason must not produce Gemini finishReason=STOP; got:\n%s", out)
-	}
-}
-
-// Anthropic unknown stop_reason buffered → cross-shape to Gemini must not emit finishReason=STOP.
-func TestCrossShape_AnthropicUnknownStop_GeminiBuffered_NotStop(t *testing.T) {
-	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"partial"}],"stop_reason":"model_context_window_exceeded","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":5}}`)
-	resp, err := anthropic.AnthropicTranslator{}.ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := gemini.GeminiTranslator{}.SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Gemini wire: %s", out)
-	if strings.Contains(string(out), `"finishReason":"STOP"`) {
-		t.Fatalf("Anthropic unknown stop_reason (status=incomplete, finish=other) must not produce Gemini finishReason=STOP; got:\n%s", out)
-	}
-}
-
-// --- unknown finish reason matrix ---
-
 // unknownFinishWire is one wire shape's unknown-reason fixtures and the field
 // its terminal reason is read from.
 type unknownFinishWire struct {
@@ -261,8 +81,13 @@ func unknownFinishWires() []unknownFinishWire {
 				xsSSE("", `{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"new_reason"}]}`),
 				xsSSE("", `[DONE]`),
 			},
-			raw:  "openai:new_reason",
-			read: func(m map[string]any) string { return str(first(m["choices"])["finish_reason"]) },
+			raw: "openai:new_reason",
+			read: func(m map[string]any) string {
+				if e, ok := m["error"].(map[string]any); ok {
+					return "error/" + str(e["code"])
+				}
+				return str(first(m["choices"])["finish_reason"])
+			},
 		},
 		{
 			name: "responses",
@@ -400,34 +225,94 @@ func TestUnknownFinishReason_Stream(t *testing.T) {
 	}
 }
 
-// A canonical caller may send other without a raw reason; no wire may read it
-// as success.
-func TestOtherFinishReason_WithoutDetails(t *testing.T) {
-	want := map[string]string{"cc": "content_filter", "responses": "incomplete/", "anthropic": "refusal", "gemini": "OTHER"}
-	resp := &v1.Response{ID: "r1", Model: "m", Status: v1.StatusIncomplete, FinishReason: v1.FinishReasonOther}
-	created, _ := json.Marshal(v1.GenerationCreatedEvent{ID: "r1", Model: "m"})
-	completed, _ := json.Marshal(v1.GenerationCompletedEvent{ID: "r1", Status: v1.StatusIncomplete, FinishReason: v1.FinishReasonOther})
+// A canonical caller may end a response without a finish reason, or with other and no raw reason; no wire may read it as success.
+func TestTerminalWithoutFinishReason(t *testing.T) {
+	cases := []struct {
+		name   string
+		status v1.Status
+		finish v1.FinishReason
+		inc    *v1.IncompleteDetails
+		want   map[string]string
+	}{
+		{"other without details", v1.StatusIncomplete, v1.FinishReasonOther, nil,
+			map[string]string{"cc": "content_filter", "responses": "incomplete/", "anthropic": "refusal", "gemini": "OTHER"}},
+		{"Anthropic pause_turn", v1.StatusIncomplete, "", &v1.IncompleteDetails{Reason: "pause_turn"},
+			map[string]string{"cc": "content_filter", "responses": "incomplete/pause_turn", "anthropic": "pause_turn", "gemini": "OTHER"}},
+		{"failed", v1.StatusFailed, "", nil,
+			map[string]string{"cc": "content_filter", "responses": "failed/", "anthropic": "refusal", "gemini": "OTHER"}},
+	}
+	created := xsSSE(v1.EventGenerationCreated, `{"id":"r1","model":"m"}`)
+	for _, tc := range cases {
+		resp := &v1.Response{ID: "r1", Model: "m", Status: tc.status, FinishReason: tc.finish, IncompleteDetails: tc.inc}
+		completed, _ := json.Marshal(v1.GenerationCompletedEvent{ID: "r1", Status: tc.status, FinishReason: tc.finish, IncompleteDetails: tc.inc})
+		for _, w := range unknownFinishWires() {
+			t.Run(tc.name+"/"+w.name, func(t *testing.T) {
+				out, err := w.tr.SerializeResponse(resp, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := lastWireReason(w, [][]byte{out}); got != tc.want[w.name] {
+					t.Errorf("buffered reason = %q, want %q\n%s", got, tc.want[w.name], out)
+				}
+				_, wire := xsPipe(t, func(b []byte) ([]byte, error) { return b, nil }, w.tr.NewFromCanonicalStream(), created, xsSSE(v1.EventGenerationCompleted, string(completed)))
+				if got := lastWireReason(w, xsSplit(wire)); got != tc.want[w.name] {
+					t.Errorf("stream reason = %q, want %q\n%s", got, tc.want[w.name], wire)
+				}
+			})
+		}
+	}
+}
+
+var (
+	responsesFailedBody   = `{"id":"resp_1","object":"response","created_at":1,"status":"failed","model":"m","output":[],"error":{"code":"server_error","message":"The model produced invalid output"}}`
+	responsesFailedStream = [][]byte{
+		xsSSE("response.created", `{"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}`),
+		xsSSE("response.failed", `{"type":"response.failed","sequence_number":1,"response":`+responsesFailedBody+`}`),
+	}
+)
+
+// A Responses upstream that failed reaches every wire as a failure, buffered and streamed.
+func TestResponsesFailed_CrossShape(t *testing.T) {
+	want := map[string][2]string{ // buffered, stream
+		"cc":        {"error/server_error", "error/server_error"},
+		"responses": {"failed/", "failed/"},
+		"anthropic": {"refusal", ""},
+		"gemini":    {"OTHER", ""},
+	}
+	resp, err := openai.ResponsesTranslator{}.ParseResponse([]byte(responsesFailedBody))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, w := range unknownFinishWires() {
 		t.Run(w.name, func(t *testing.T) {
 			out, err := w.tr.SerializeResponse(resp, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := lastWireReason(w, [][]byte{out}); got != want[w.name] {
-				t.Errorf("buffered reason = %q, want %q\n%s", got, want[w.name], out)
+			if got := lastWireReason(w, [][]byte{out}); got != want[w.name][0] {
+				t.Errorf("buffered reason = %q, want %q\n%s", got, want[w.name][0], out)
 			}
-			fromCanon := w.tr.NewFromCanonicalStream()
-			var wire []byte
-			for _, f := range [][]byte{xsSSE(v1.EventGenerationCreated, string(created)), xsSSE(v1.EventGenerationCompleted, string(completed))} {
-				b, err := fromCanon(f)
-				if err != nil {
-					t.Fatal(err)
-				}
-				wire = append(wire, b...)
-			}
-			if got := lastWireReason(w, xsSplit(wire)); got != want[w.name] {
-				t.Errorf("stream reason = %q, want %q\n%s", got, want[w.name], wire)
+			_, wire := xsPipe(t, openai.ResponsesTranslator{}.NewToCanonicalStream(), w.tr.NewFromCanonicalStream(), responsesFailedStream...)
+			if got := lastWireReason(w, xsSplit(wire)); got != want[w.name][1] {
+				t.Errorf("stream reason = %q, want %q\n%s", got, want[w.name][1], wire)
 			}
 		})
+	}
+}
+
+func TestResponsesFailed_StreamEndsInResponseFailed(t *testing.T) {
+	_, wire := xsPipe(t, openai.ResponsesTranslator{}.NewToCanonicalStream(), openai.ResponsesTranslator{}.NewFromCanonicalStream(), responsesFailedStream...)
+	frames := xsSplit(wire)
+	event, data, _ := v1.ParseSSEChunk(frames[len(frames)-1])
+	var terminal struct {
+		Response struct {
+			Error *struct{ Code string }
+		}
+	}
+	if err := json.Unmarshal(data, &terminal); err != nil {
+		t.Fatal(err)
+	}
+	if event != "response.failed" || terminal.Response.Error == nil || terminal.Response.Error.Code != "server_error" {
+		t.Errorf("terminal event %s, want response.failed carrying the upstream error:\n%s", event, data)
 	}
 }

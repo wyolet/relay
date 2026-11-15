@@ -3,7 +3,6 @@ package inference
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/pkg/httpheader"
 )
 
 func serveReadiness(h http.Handler) *httptest.ResponseRecorder {
@@ -27,21 +27,9 @@ func TestReadinessMiddleware_NotReadyRefuses(t *testing.T) {
 	if called {
 		t.Fatal("next handler ran before the catalog was ready")
 	}
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status %d, want 503", w.Code)
-	}
-	for k, want := range map[string]string{"Retry-After": "5", "Connection": "close", HeaderOrigin: "relay"} {
-		if got := w.Header().Get(k); got != want {
-			t.Errorf("%s = %q, want %q", k, got, want)
-		}
-	}
-	var env httpapi.APIError
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("decode body %q: %v", w.Body.String(), err)
-	}
-	if env.Err.Type != "server_error" || env.Err.Code != "catalog_unavailable" {
-		t.Errorf("error type/code = %q/%q, want server_error/catalog_unavailable", env.Err.Type, env.Err.Code)
-	}
+	wantAnswer(t, w, http.StatusServiceUnavailable,
+		httpapi.APIErrorBody{Type: "server_error", Code: "catalog_unavailable", Message: "catalog is still loading; retry shortly"},
+		map[string]string{"Retry-After": "5", "Connection": "close", HeaderOrigin: "relay", httpheader.HeaderShouldRetry: "true"})
 }
 
 // A restart under load refuses thousands of requests a second; they must not each log.

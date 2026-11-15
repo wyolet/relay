@@ -1,125 +1,101 @@
 package rolebinding
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/pkg/meta"
 )
 
+const (
+	teamID = "01a19bc3-0000-7000-8000-000000000001"
+	userID = "01a19bc3-0000-7000-8000-000000000002"
+)
+
 func fix(scope meta.Owner, subjects ...Subject) *RoleBinding {
 	b := &RoleBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "platform-admins"},
-		Spec: Spec{RoleID: meta.NewID(), Scope: scope, Subjects: subjects},
+		Meta: meta.Metadata{ID: userID, Name: "platform-admins"},
+		Spec: Spec{RoleID: teamID, Scope: scope, Subjects: subjects},
 	}
 	b.StampOwner()
 	return b
 }
 
-func groupSubject(name string) Subject { return Subject{Kind: SubjectGroup, Name: name} }
-func userSubject(id string) Subject    { return Subject{Kind: SubjectUser, ID: id} }
-
-func TestValidate(t *testing.T) {
-	teamID := meta.NewID()
-	for _, tc := range []struct {
-		name string
-		b    *RoleBinding
-		want string // "" = valid
-	}{
-		{
-			name: "global scope, group subject",
-			b:    fix(meta.Owner{Kind: meta.OwnerSystem}, groupSubject("platform-eng")),
-		},
-		{
-			name: "team scope, user subject",
-			b:    fix(meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, userSubject(meta.NewID())),
-		},
-		{
-			name: "global scope with an id",
-			b:    fix(meta.Owner{Kind: meta.OwnerSystem, ID: teamID}, groupSubject("platform-eng")),
-			want: "global scope carries no id",
-		},
-		{
-			name: "team scope without an id",
-			b:    fix(meta.Owner{Kind: meta.OwnerTeam}, groupSubject("platform-eng")),
-			want: "requires an id",
-		},
-		{
-			name: "user scope kind",
-			b:    fix(meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}, groupSubject("platform-eng")),
-			want: "scope.kind must be system, team, or project",
-		},
-		{
-			name: "host scope kind",
-			b:    fix(meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()}, groupSubject("platform-eng")),
-			want: "scope.kind must be system, team, or project",
-		},
-		{
-			name: "owner drifted from scope",
-			b: func() *RoleBinding {
-				b := fix(meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, groupSubject("platform-eng"))
-				b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
-				return b
-			}(),
-			want: "does not mirror scope",
-		},
-		{
-			name: "group subject carrying an id",
-			b: fix(meta.Owner{Kind: meta.OwnerSystem},
-				Subject{Kind: SubjectGroup, Name: "platform-eng", ID: meta.NewID()}),
-			want: "group subject names a group",
-		},
-		{
-			name: "user subject carrying a name",
-			b: fix(meta.Owner{Kind: meta.OwnerSystem},
-				Subject{Kind: SubjectUser, ID: meta.NewID(), Name: "alice"}),
-			want: "carries an id, not a name",
-		},
-		{
-			name: "service account subject without an id",
-			b:    fix(meta.Owner{Kind: meta.OwnerSystem}, Subject{Kind: SubjectServiceAccount}),
-			want: "carries an id, not a name",
-		},
-		{
-			name: "duplicate subjects",
-			b:    fix(meta.Owner{Kind: meta.OwnerSystem}, groupSubject("platform-eng"), groupSubject("platform-eng")),
-			want: "duplicate subject",
-		},
-		{
-			name: "no subjects",
-			b:    fix(meta.Owner{Kind: meta.OwnerSystem}),
-			want: "Subjects",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.b.Validate()
-			switch {
-			case tc.want == "" && err != nil:
-				t.Fatalf("Validate() = %v, want nil", err)
-			case tc.want != "" && err == nil:
-				t.Fatalf("Validate() = nil, want error mentioning %q", tc.want)
-			case tc.want != "" && !strings.Contains(err.Error(), tc.want):
-				t.Fatalf("Validate() = %v, want error mentioning %q", err, tc.want)
-			}
-		})
-	}
-}
-
 func TestSubjectKey(t *testing.T) {
 	for _, tc := range []struct {
-		name string
 		sub  Subject
 		want string
 	}{
-		{name: "user", sub: Subject{Kind: SubjectUser, ID: "u-1"}, want: "user:u-1"},
-		{name: "group", sub: Subject{Kind: SubjectGroup, Name: "platform-eng"}, want: "group:platform-eng"},
-		{name: "service account", sub: Subject{Kind: SubjectServiceAccount, ID: "sa-1"}, want: "serviceaccount:sa-1"},
-		{name: "virtual group", sub: Subject{Kind: SubjectGroup, Name: "system:authenticated"}, want: "group:system:authenticated"},
+		{Subject{Kind: SubjectUser, ID: "u-1"}, "user:u-1"},
+		{Subject{Kind: SubjectGroup, Name: "platform-eng"}, "group:platform-eng"},
+		{Subject{Kind: SubjectServiceAccount, ID: "sa-1"}, "serviceaccount:sa-1"},
+		{Subject{Kind: SubjectGroup, Name: "system:authenticated"}, "group:system:authenticated"},
+		// A group is keyed by its name and the others by id, whatever else the subject carries.
+		{Subject{Kind: SubjectGroup, Name: "eng", ID: "ignored"}, "group:eng"},
+		{Subject{Kind: SubjectUser, ID: "u-1", Name: "ignored"}, "user:u-1"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.sub.Key(); got != tc.want {
-				t.Fatalf("Key() = %q, want %q", got, tc.want)
-			}
-		})
+		if got := tc.sub.Key(); got != tc.want {
+			t.Errorf("%+v: Key() = %q, want %q", tc.sub, got, tc.want)
+		}
+	}
+}
+
+func TestIsEnabled(t *testing.T) {
+	off, on := false, true
+	for _, tc := range []struct {
+		enabled *bool
+		want    bool
+	}{{nil, true}, {&on, true}, {&off, false}} {
+		if got := (&RoleBinding{Spec: Spec{Enabled: tc.enabled}}).IsEnabled(); got != tc.want {
+			t.Errorf("IsEnabled with %v = %v, want %v", tc.enabled, got, tc.want)
+		}
+	}
+}
+
+func TestValidate(t *testing.T) {
+	system := meta.Owner{Kind: meta.OwnerSystem}
+	team := meta.Owner{Kind: meta.OwnerTeam, ID: teamID}
+	group := Subject{Kind: SubjectGroup, Name: "platform-eng"}
+	user := Subject{Kind: SubjectUser, ID: userID}
+	edited := func(edit func(*RoleBinding)) *RoleBinding {
+		b := fix(team, group)
+		edit(b)
+		return b
+	}
+	for _, tc := range []struct {
+		name string
+		b    *RoleBinding
+		want string
+	}{
+		{"global scope, group subject", fix(system, group), ""},
+		{"team scope, user subject", fix(team, user), ""},
+		{"project scope, mixed subjects", fix(meta.Owner{Kind: meta.OwnerProject, ID: teamID}, user, group, Subject{Kind: SubjectServiceAccount, ID: teamID}), ""},
+		{"a user and a service account of one id", fix(system, user, Subject{Kind: SubjectServiceAccount, ID: userID}), ""},
+		{"global scope with an id", fix(meta.Owner{Kind: meta.OwnerSystem, ID: teamID}, group), `rolebinding "platform-admins": global scope carries no id`},
+		{"team scope without an id", fix(meta.Owner{Kind: meta.OwnerTeam}, group), `rolebinding "platform-admins": scope.kind "team" requires an id`},
+		{"project scope without an id", fix(meta.Owner{Kind: meta.OwnerProject}, group), `rolebinding "platform-admins": scope.kind "project" requires an id`},
+		{"user scope kind", fix(meta.Owner{Kind: meta.OwnerUser, ID: userID}, group), `rolebinding "platform-admins": scope.kind must be system, team, or project, got "user"`},
+		{"host scope kind", fix(meta.Owner{Kind: meta.OwnerHost, ID: userID}, group), `rolebinding "platform-admins": scope.kind must be system, team, or project, got "host"`},
+		{"no scope", fix(meta.Owner{}, group), "Key: 'RoleBinding.Spec.Scope' Error:Field validation for 'Scope' failed on the 'required' tag"},
+		{"owner id drifted from scope", edited(func(b *RoleBinding) { b.Meta.Owner.ID = userID }), `rolebinding "platform-admins": owner team/01a19bc3-0000-7000-8000-000000000002 does not mirror scope team/01a19bc3-0000-7000-8000-000000000001`},
+		{"owner kind drifted from scope", edited(func(b *RoleBinding) { b.Meta.Owner.Kind = meta.OwnerProject }), `rolebinding "platform-admins": owner project/01a19bc3-0000-7000-8000-000000000001 does not mirror scope team/01a19bc3-0000-7000-8000-000000000001`},
+		{"role id not an id", edited(func(b *RoleBinding) { b.Spec.RoleID = "admin" }), "Key: 'RoleBinding.Spec.RoleID' Error:Field validation for 'RoleID' failed on the 'uuid' tag"},
+		{"no role id", edited(func(b *RoleBinding) { b.Spec.RoleID = "" }), "Key: 'RoleBinding.Spec.RoleID' Error:Field validation for 'RoleID' failed on the 'required' tag"},
+		{"group subject carrying an id", fix(system, Subject{Kind: SubjectGroup, Name: "platform-eng", ID: userID}), `"platform-admins": group subject names a group, it carries no id`},
+		{"group subject without a name", fix(system, Subject{Kind: SubjectGroup}), `"platform-admins": group subject names a group, it carries no id`},
+		{"user subject carrying a name", fix(system, Subject{Kind: SubjectUser, ID: userID, Name: "alice"}), `"platform-admins": user subject carries an id, not a name`},
+		{"user subject whose id is no uuid", fix(system, Subject{Kind: SubjectUser, ID: "alice"}), "Key: 'RoleBinding.Spec.Subjects[0].ID' Error:Field validation for 'ID' failed on the 'uuid' tag"},
+		{"service account subject without an id", fix(system, Subject{Kind: SubjectServiceAccount}), `"platform-admins": serviceaccount subject carries an id, not a name`},
+		{"unknown subject kind", fix(system, Subject{Kind: "team", ID: teamID}), "Key: 'RoleBinding.Spec.Subjects[0].Kind' Error:Field validation for 'Kind' failed on the 'oneof' tag"},
+		{"duplicate group", fix(system, group, user, group), `"platform-admins": duplicate subject "group:platform-eng"`},
+		{"duplicate user", fix(system, user, user), `"platform-admins": duplicate subject "user:01a19bc3-0000-7000-8000-000000000002"`},
+		{"no subjects", fix(system), "Key: 'RoleBinding.Spec.Subjects' Error:Field validation for 'Subjects' failed on the 'required' tag"},
+	} {
+		got := ""
+		if err := tc.b.Validate(); err != nil {
+			got = err.Error()
+		}
+		if got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %s", tc.name, got, tc.want)
+		}
 	}
 }

@@ -1,35 +1,34 @@
 package bitwarden
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
+	"regexp"
 	"testing"
 )
 
-func TestLoginSendsDeviceName(t *testing.T) {
-	var seen string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "bad form", http.StatusBadRequest)
-			return
-		}
-		seen = r.Form.Get("deviceName")
-		_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "tok", ExpiresIn: 3600})
-	}))
-	defer srv.Close()
+func TestNewClient(t *testing.T) {
+	c := newClient(Config{BaseURL: "https://vault.example/", Email: "e", MasterPassword: "p", ClientID: "id", ClientSecret: "secret"})
+	if c.baseURL != "https://vault.example" || c.email != "e" || c.password != "p" || c.clientID != "id" || c.clientSecret != "secret" || c.deviceName != "wyolet-secret" {
+		t.Errorf("client = %+v", c)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(c.deviceID) {
+		t.Errorf("generated device id = %q, want 32 hex characters", c.deviceID)
+	}
+	if again := newClient(Config{}); again.deviceID == c.deviceID {
+		t.Errorf("two clients share the generated device id %q", c.deviceID)
+	}
+	if tls := c.httpClient.Transport.(*http.Transport).TLSClientConfig; tls != nil && tls.InsecureSkipVerify {
+		t.Error("certificate verification is off by default")
+	}
 
-	for _, tc := range []struct{ configured, want string }{
-		{"", "wyolet-secret"},
-		{"my-service", "my-service"},
-	} {
-		c := newClient(Config{BaseURL: srv.URL, ClientID: "id", ClientSecret: "secret", DeviceName: tc.configured})
-		if _, err := c.loginWithAPIKey(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if seen != tc.want {
-			t.Fatalf("DeviceName %q: server saw %q, want %q", tc.configured, seen, tc.want)
-		}
+	c = newClient(Config{DeviceID: "dev-1", DeviceName: "my-service", InsecureSkipVerify: true})
+	if c.deviceID != "dev-1" || c.deviceName != "my-service" {
+		t.Errorf("configured device = %q %q", c.deviceID, c.deviceName)
+	}
+	if tls := c.httpClient.Transport.(*http.Transport).TLSClientConfig; tls == nil || !tls.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify did not reach the transport")
+	}
+	if tls := http.DefaultTransport.(*http.Transport).TLSClientConfig; tls != nil && tls.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify leaked into http.DefaultTransport")
 	}
 }

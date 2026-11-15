@@ -47,7 +47,7 @@ func TestCanIAllowedExitsZero(t *testing.T) {
 	out := captureStdout(t, func() {
 		err = runAuth([]string{"can-i", "keys.get", "keys/k1", "--as", "alice", "--url", srv.URL})
 	})
-	if code := exitCode(t, err); code != 0 {
+	if code := exitCode(err); code != 0 {
 		t.Fatalf("exit %d, want 0", code)
 	}
 	if !strings.HasPrefix(out, "yes: role binding alice-dev grants developer at project ml to user alice") {
@@ -70,7 +70,7 @@ func TestCanIDeniedExitsOne(t *testing.T) {
 	out := captureStdout(t, func() {
 		err = runAuth([]string{"can-i", "--url", srv.URL, "delete", "keys", "--as", "sa:ci", "--owner", "project/ml"})
 	})
-	if code := exitCode(t, err); code != exitDenied {
+	if code := exitCode(err); code != exitDenied {
 		t.Fatalf("exit %d, want %d", code, exitDenied)
 	}
 	if !strings.Contains(out, "no: no rule or role binding grants keys.delete on key k1") || !strings.Contains(out, "is disabled") {
@@ -95,7 +95,7 @@ func TestCanIFailuresExitTwo(t *testing.T) {
 		{"whoami"},
 		{},
 	} {
-		if code := exitCode(t, runAuth(args)); code != exitFailed {
+		if code := exitCode(runAuth(args)); code != exitFailed {
 			t.Fatalf("%v: exit %d, want %d", args, code, exitFailed)
 		}
 	}

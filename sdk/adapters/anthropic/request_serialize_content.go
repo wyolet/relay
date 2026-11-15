@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/wyolet/relay/sdk/internal/dataurl"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -57,7 +58,7 @@ func canonicalPartToAnthropicBlock(p v1.Part) (map[string]any, error) {
 		return map[string]any{"type": "text", "text": v.Text}, nil
 	case *v1.ImagePart:
 		// canonical: ImagePart.Detail dropped — Anthropic image blocks take no detail level.
-		return canonicalImageURLToAnthropicBlock(v.ImageURL), nil
+		return canonicalImageURLToAnthropicBlock(v.ImageURL)
 	case *v1.FilePart:
 		if v.FileData != "" {
 			mt := "application/pdf"
@@ -90,23 +91,21 @@ func canonicalPartToAnthropicBlock(p v1.Part) (map[string]any, error) {
 }
 
 // canonicalImageURLToAnthropicBlock converts a canonical image URL to an Anthropic image block.
-func canonicalImageURLToAnthropicBlock(url string) map[string]any {
+func canonicalImageURLToAnthropicBlock(url string) (map[string]any, error) {
+	// A url source takes no data: URI, so every data URL goes as base64.
 	if strings.HasPrefix(url, "data:") {
-		rest := url[5:]
-		semi := strings.Index(rest, ";")
-		comma := strings.Index(rest, ",")
-		if semi >= 0 && comma > semi {
-			mt := rest[:semi]
-			data := rest[comma+1:]
-			return map[string]any{
-				"type": "image",
-				"source": map[string]any{
-					"type":       "base64",
-					"media_type": mt,
-					"data":       data,
-				},
-			}
+		mt, data, err := dataurl.Base64(url)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic serialize_request: %w: image: %w", v1.ErrUnsupportedRequest, err)
 		}
+		return map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": mt,
+				"data":       data,
+			},
+		}, nil
 	}
 	return map[string]any{
 		"type": "image",
@@ -114,5 +113,5 @@ func canonicalImageURLToAnthropicBlock(url string) map[string]any {
 			"type": "url",
 			"url":  url,
 		},
-	}
+	}, nil
 }

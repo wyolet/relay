@@ -63,6 +63,8 @@ func responsesAnnotationToCanonical(a ResponsesAnnotation) v1.Annotation {
 			return nil
 		}
 		return &v1.RawAnnotation{Type: "file_citation", JSON: b}
+	case *ResponsesRawAnnotation:
+		return &v1.RawAnnotation{Type: v.Type, JSON: v.JSON}
 	default:
 		return nil
 	}

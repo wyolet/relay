@@ -4,12 +4,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // testResolver is a fixed-set Resolver for unit tests.
@@ -37,6 +43,51 @@ var testRev = manifest.MapReverseResolver{
 	Accounts:   map[string]string{"acc-mmm": "acme-anthropic"},
 }
 
+// parseDocs parses a manifest holding exactly n documents.
+func parseDocs(t *testing.T, yaml string, n int) []manifest.Document {
+	t.Helper()
+	docs, err := manifest.Parse(strings.NewReader(yaml))
+	if err != nil || len(docs) != n {
+		t.Fatalf("Parse = %d docs, %v; want %d", len(docs), err, n)
+	}
+	return docs
+}
+
+func parseOne(t *testing.T, yaml string) manifest.Document {
+	t.Helper()
+	return parseDocs(t, yaml, 1)[0]
+}
+
+// translated fails the test unless a To<Kind> call returned exactly want, and hands the row on.
+func translated[R any](t *testing.T, what string, want R) func(R, error) R {
+	t.Helper()
+	return func(row R, err error) R {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if diff := cmp.Diff(want, row); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", what, diff)
+		}
+		return row
+	}
+}
+
+// exported fails the test unless a From<Kind> export is exactly the document want.
+func exported[D any](t *testing.T, what string, want, got D) {
+	t.Helper()
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s (-document +export):\n%s", what, diff)
+	}
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 const policyYAML = `
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
@@ -56,37 +107,15 @@ spec:
     - ref: monthly
 `
 
-func TestParse_Policy(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(policyYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
+// Model refs stay verbatim, links resolve to ids, and shared defaults to true; the export translates back to the same row.
+func TestPolicy(t *testing.T) {
+	doc := parseOne(t, policyYAML)
+	if doc.Kind() != "Policy" || doc.Policy.Metadata.Name != "cheap-tier" {
+		t.Fatalf("parsed a %s named %q, want the Policy cheap-tier", doc.Kind(), doc.Policy.Metadata.Name)
 	}
-	if len(docs) != 1 {
-		t.Fatalf("want 1 doc, got %d", len(docs))
-	}
-	if docs[0].Policy == nil {
-		t.Fatal("want Policy doc, got nil")
-	}
-	p := docs[0].Policy
-	if p.Metadata.Name != "cheap-tier" {
-		t.Errorf("name: got %q", p.Metadata.Name)
-	}
-	if len(p.Spec.Models) != 2 {
-		t.Errorf("models: want 2, got %d", len(p.Spec.Models))
-	}
-	if len(p.Spec.RateLimits) != 2 || p.Spec.RateLimits[1].Ref != "gpt-4o-tpm" {
-		t.Errorf("rateLimits: got %+v", p.Spec.RateLimits)
-	}
-}
-
-func TestToPolicy_HappyPath(t *testing.T) {
-	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
-	pol, err := manifest.ToPolicy(*docs[0].Policy, testResolver)
+	pol, err := manifest.ToPolicy(*doc.Policy, testResolver)
 	if err != nil {
 		t.Fatalf("ToPolicy: %v", err)
-	}
-	if pol.Spec.Models[0] != "openai/gpt-4o" {
-		t.Errorf("models[0]: want openai/gpt-4o (verbatim ref), got %q", pol.Spec.Models[0])
 	}
 	shared, each := true, false
 	want := policy.Spec{
@@ -95,75 +124,93 @@ func TestToPolicy_HappyPath(t *testing.T) {
 		RateLimits: []policy.RateLimitLink{{RateLimitID: "rl-iii", Shared: &shared}, {RateLimitID: "rl-jjj", Models: []string{"openai/gpt-4o"}, Shared: &each}},
 		Budgets:    []policy.BudgetLink{{BudgetID: "budget-lll", Shared: &shared}},
 	}
-	if !reflect.DeepEqual(pol.Spec, want) {
-		t.Errorf("spec = %+v\nwant   %+v", pol.Spec, want)
+	if diff := cmp.Diff(want, pol.Spec); diff != "" {
+		t.Errorf("ToPolicy spec (-want +got):\n%s", diff)
 	}
-}
-
-func TestToPolicy_MissingLink(t *testing.T) {
-	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
-	for _, drop := range []string{"pools", "rateLimits", "budgets"} {
-		r := testResolver
-		switch drop {
-		case "pools":
-			r.Pools = nil
-		case "rateLimits":
-			r.RateLimits = nil
-		case "budgets":
-			r.Budgets = nil
-		}
-		var notFound *manifest.RefNotFoundError
-		if _, err := manifest.ToPolicy(*docs[0].Policy, r); !errors.As(err, &notFound) {
-			t.Errorf("unresolvable %s: err = %v, want RefNotFoundError", drop, err)
-		}
-	}
-}
-
-// Export then apply must not lose a link: every one renders by name and
-// translates back to the same ids.
-func TestFromPolicy_RoundTrip(t *testing.T) {
-	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
-	pol, _ := manifest.ToPolicy(*docs[0].Policy, testResolver)
 	dto := manifest.FromPolicy(pol, testRev)
-	if dto.APIVersion != manifest.APIVersion {
-		t.Errorf("apiVersion = %q, want %q", dto.APIVersion, manifest.APIVersion)
-	}
 	back, err := manifest.ToPolicy(dto, testResolver)
-	if err != nil {
-		t.Fatalf("ToPolicy of the export: %v", err)
+	if err != nil || dto.APIVersion != manifest.APIVersion || dto.Kind != "Policy" {
+		t.Fatalf("export: apiVersion %q kind %q, ToPolicy of it: %v", dto.APIVersion, dto.Kind, err)
 	}
-	if !reflect.DeepEqual(back.Spec, pol.Spec) {
-		t.Errorf("round trip = %+v\nwant         %+v", back.Spec, pol.Spec)
+	if diff := cmp.Diff(pol, back); diff != "" {
+		t.Errorf("round trip (-row +back):\n%s", diff)
 	}
-}
 
-// A pre-v0.20 Policy is refused with a pointer to the new shape, and a
-// v1alpha3 one still carrying a removed field is refused by name: ignoring
-// either would drop a restriction the author meant.
-func TestParse_RefusesThePreviousPolicyShape(t *testing.T) {
-	for _, tc := range []struct{ name, doc, want string }{
-		{"old apiVersion", strings.Replace(policyYAML, manifest.APIVersion, manifest.PreviousAPIVersion, 1), "pre-v0.20 shape"},
-		{"removed field", policyYAML + "  hostKeys: [openai-key-1]\n", "spec.hostKeys"},
-		{"removed rate limit", policyYAML + "  rlBindings: []\n", "spec.rlBindings"},
+	for _, tc := range []struct {
+		name string
+		drop func(r *manifest.MapResolver)
+		want string
+	}{
+		{"pool", func(r *manifest.MapResolver) { r.Pools = nil }, `policy "cheap-tier": pool "bedrock-claude" not found`},
+		{"rate limit", func(r *manifest.MapResolver) { r.RateLimits = map[string]string{"cheap-tier-rpm": "rl-iii"} }, `policy "cheap-tier": rateLimits[1] rate limit "gpt-4o-tpm" not found`},
+		{"budget", func(r *manifest.MapResolver) { r.Budgets = nil }, `policy "cheap-tier": budgets[0] budget "monthly" not found`},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := manifest.Parse(strings.NewReader(tc.doc))
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("Parse = %v, want an error mentioning %q", err, tc.want)
-			}
-		})
+		r := testResolver
+		tc.drop(&r)
+		_, err := manifest.ToPolicy(*doc.Policy, r)
+		var notFound *manifest.RefNotFoundError
+		if got := errText(err); got != tc.want || !errors.As(err, &notFound) {
+			t.Errorf("unresolvable %s:\n got %q\nwant %s", tc.name, got, tc.want)
+		}
+	}
+
+	// Model refs are stored in the canonical form the control API stores, or apply would report an update on every run against a row the API just normalised.
+	mixed := manifest.PolicyDTO{
+		Metadata: manifest.WireMeta{Name: "p", Owner: manifest.WireOwner{Kind: meta.OwnerSystem}},
+		Spec: manifest.PolicySpec{
+			Models:     []string{"OpenAI/GPT-4o", "openai/gpt-4o", "Anthropic/claude-3.5"},
+			RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "gpt-4o-tpm", Models: []string{"OpenAI/GPT-4o"}}},
+		},
+	}
+	canon, err := manifest.ToPolicy(mixed, testResolver)
+	if err != nil {
+		t.Fatalf("ToPolicy: %v", err)
+	}
+	wantCanon := policy.Spec{
+		Models:     []string{"openai/gpt-4o", "anthropic/claude-3-5"},
+		RateLimits: []policy.RateLimitLink{{RateLimitID: "rl-jjj", Models: []string{"openai/gpt-4o"}, Shared: &shared}},
+	}
+	if diff := cmp.Diff(wantCanon, canon.Spec); diff != "" {
+		t.Errorf("canonical model refs (-want +got):\n%s", diff)
 	}
 }
 
-// Kinds v1alpha3 left unchanged still parse under the previous apiVersion.
-func TestParse_AcceptsUnchangedKindsUnderThePreviousAPIVersion(t *testing.T) {
-	doc := strings.Replace(rateLimitYAML, manifest.APIVersion, manifest.PreviousAPIVersion, 1)
-	if _, err := manifest.Parse(strings.NewReader(doc)); err != nil {
-		t.Fatalf("Parse: %v", err)
+const rateLimitYAML = `
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: RateLimit
+metadata:
+  name: cheap-tier-rpm
+spec:
+  rules:
+    - meter: requests
+      amount: 100
+      window: 1m
+      strategy: token-bucket
+`
+
+// A pre-v0.20 Policy is refused with a pointer to the new shape, and a v1alpha3 one still carrying a removed field is refused by name: ignoring either would drop a restriction the author meant. Kinds v1alpha3 left unchanged still parse under the previous apiVersion.
+func TestParseAPIVersions(t *testing.T) {
+	previous := func(doc string) string {
+		return strings.Replace(doc, manifest.APIVersion, manifest.PreviousAPIVersion, 1)
+	}
+	for _, tc := range []struct{ name, doc, want string }{
+		{"a rate limit under the current apiVersion", strings.Replace(rateLimitYAML, manifest.PreviousAPIVersion, manifest.APIVersion, 1), ""},
+		{"a rate limit under the previous apiVersion", rateLimitYAML, ""},
+		{"a policy under the previous apiVersion", previous(policyYAML), "wire: doc 0: Policy under relay.wyolet.dev/v1alpha2 is the pre-v0.20 shape; rewrite it as relay.wyolet.dev/v1alpha3 (hostKeys, rateLimit, rlBindings and keySelection are gone: link pools or credentials, rateLimits: [{ref, models}] and budgets)"},
+		{"a policy with a removed field", policyYAML + "  hostKeys: [openai-key-1]\n", "wire: doc 0 kind=Policy name=cheap-tier: Policy no longer has spec.hostKeys (use pools)"},
+		{"a policy with a removed rate-limit field", policyYAML + "  rlBindings: []\n", "wire: doc 0 kind=Policy name=cheap-tier: Policy no longer has spec.rlBindings (use rateLimits: [{ref: <name>, models: [...]}])"},
+		{"an unknown apiVersion", "apiVersion: other/v1\nkind: Provider\nmetadata:\n  name: foo\nspec: {}\n", `wire: doc 0: unsupported apiVersion "other/v1" (want "relay.wyolet.dev/v1alpha3")`},
+		{"an unknown kind", "apiVersion: " + manifest.APIVersion + "\nkind: Widget\nmetadata:\n  name: foo\n", `wire: doc 0 kind=Widget name=foo: unknown kind "Widget"`},
+	} {
+		_, err := manifest.Parse(strings.NewReader(tc.doc))
+		if got := errText(err); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %s", tc.name, got, tc.want)
+		}
 	}
 }
 
-const multiDocYAML = `
+func TestParseMultiDoc(t *testing.T) {
+	docs, err := manifest.Parse(strings.NewReader(`
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Provider
 metadata:
@@ -176,34 +223,12 @@ metadata:
   name: anthropic-direct
 spec:
   baseURL: https://api.anthropic.com
-`
-
-func TestParse_MultiDoc(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(multiDocYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
+`))
+	if err != nil || len(docs) != 2 {
+		t.Fatalf("Parse = %d docs, %v; want 2", len(docs), err)
 	}
-	if len(docs) != 2 {
-		t.Fatalf("want 2 docs, got %d", len(docs))
-	}
-	if docs[0].Provider == nil {
-		t.Error("doc[0]: want Provider")
-	}
-	if docs[1].Host == nil {
-		t.Error("doc[1]: want Host")
-	}
-}
-
-func TestParse_UnknownAPIVersion(t *testing.T) {
-	yaml := `apiVersion: other/v1
-kind: Provider
-metadata:
-  name: foo
-spec: {}
-`
-	_, err := manifest.Parse(strings.NewReader(yaml))
-	if err == nil {
-		t.Fatal("expected error for unknown apiVersion")
+	if docs[0].Kind() != "Provider" || docs[0].Provider.Metadata.Name != "anthropic" || docs[1].Kind() != "Host" || docs[1].Host.Spec.BaseURL != "https://api.anthropic.com" {
+		t.Errorf("docs = %s %+v, %s %+v; want the provider then the host", docs[0].Kind(), docs[0].Provider, docs[1].Kind(), docs[1].Host)
 	}
 }
 
@@ -222,106 +247,53 @@ spec:
   pointer: claude-3-5-sonnet
 `
 
-func TestToModel_HappyPath(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(modelYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	m, err := manifest.ToModel(*docs[0].Model, testResolver)
-	if err != nil {
-		t.Fatalf("ToModel: %v", err)
-	}
-	if m.Meta.Owner.ID != "provider-aaa" {
-		t.Errorf("owner.id: want provider-aaa, got %q", m.Meta.Owner.ID)
-	}
-	if len(m.Spec.Snapshots) != 1 || m.Spec.Snapshots[0].Name != "claude-3-5-sonnet" {
-		t.Errorf("snapshots: want 1 snapshot 'claude-3-5-sonnet', got %+v", m.Spec.Snapshots)
-	}
-}
-
-func TestModelProductLineRoundTrip(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(modelYAML + `  family: claude
-  productLine: sonnet
-`))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	m, err := manifest.ToModel(*docs[0].Model, testResolver)
-	if err != nil {
-		t.Fatalf("ToModel: %v", err)
-	}
-	if m.Spec.Family != "claude" || m.Spec.ProductLine != "sonnet" {
-		t.Fatalf("parsed family/productLine = %q/%q, want claude/sonnet", m.Spec.Family, m.Spec.ProductLine)
-	}
-	if got := manifest.FromModel(m, testRev).Spec.ProductLine; got != "sonnet" {
-		t.Errorf("rendered productLine = %q, want sonnet", got)
-	}
-}
-
-func TestModelDeprecationReplacementResolvesByName(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(modelYAML + `  deprecation:
-    status: deprecated
-    replacement: openai/gpt-4o
-`))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	d := *docs[0].Model
+// The owner and a deprecation's replacement are names in the document and ids in the row; neither translation mutates its input.
+func TestModel(t *testing.T) {
+	d := *parseOne(t, modelYAML+"  family: claude\n  productLine: sonnet\n  deprecation:\n    status: deprecated\n    replacement: openai/gpt-4o\n").Model
 	m, err := manifest.ToModel(d, testResolver)
 	if err != nil {
 		t.Fatalf("ToModel: %v", err)
 	}
-	if got := m.Spec.Deprecation.Replacement; got != "model-eee" {
-		t.Errorf("parsed replacement = %q, want model-eee", got)
+	want := &model.Model{
+		Meta: meta.Metadata{Name: "claude-3-5-sonnet", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "provider-aaa"}},
+		Spec: model.Spec{
+			Snapshots:   []model.Snapshot{{Name: "claude-3-5-sonnet", OriginalName: "claude-3-5-sonnet-20241022"}},
+			Pointer:     "claude-3-5-sonnet",
+			Family:      "claude",
+			ProductLine: "sonnet",
+			Deprecation: &model.Deprecation{Status: "deprecated", Replacement: "model-eee"},
+		},
 	}
-	if got := d.Spec.Deprecation.Replacement; got != "openai/gpt-4o" {
-		t.Errorf("ToModel mutated the document: replacement = %q", got)
+	if diff := cmp.Diff(want, m); diff != "" {
+		t.Errorf("ToModel (-want +got):\n%s", diff)
 	}
-	if got := manifest.FromModel(m, testRev).Spec.Deprecation.Replacement; got != "openai/gpt-4o" {
-		t.Errorf("rendered replacement = %q, want openai/gpt-4o", got)
+	if d.Spec.Deprecation.Replacement != "openai/gpt-4o" || d.Metadata.Owner.ID != "anthropic" {
+		t.Errorf("ToModel mutated the document: %+v", d)
 	}
-	if m.Spec.Deprecation.Replacement != "model-eee" {
-		t.Errorf("FromModel mutated the row")
+	back := manifest.FromModel(m, testRev)
+	if diff := cmp.Diff(d.Spec, back.Spec); diff != "" || back.Metadata.Owner.Name != "anthropic" || back.Metadata.Owner.Kind != meta.OwnerProvider {
+		t.Errorf("FromModel owner %+v, spec (-document +export):\n%s", back.Metadata.Owner, diff)
+	}
+	if m.Spec.Deprecation.Replacement != "model-eee" || m.Meta.Owner.ID != "provider-aaa" {
+		t.Errorf("FromModel mutated the row: %+v", m)
 	}
 
-	d.Spec.Deprecation.Replacement = "no-such-model"
+	d.Spec.Deprecation = &model.Deprecation{Status: "deprecated", Replacement: "no-such-model"}
 	_, err = manifest.ToModel(d, testResolver)
 	var notFound *manifest.RefNotFoundError
-	if !errors.As(err, &notFound) {
-		t.Fatalf("unknown replacement: err = %v, want RefNotFoundError", err)
+	if want := `model "claude-3-5-sonnet": deprecation.replacement: model "no-such-model" not found`; errText(err) != want || !errors.As(err, &notFound) {
+		t.Errorf("an unknown replacement: err = %v, want RefNotFoundError %s", err, want)
 	}
 }
 
-const rateLimitYAML = `
-apiVersion: relay.wyolet.dev/v1alpha2
-kind: RateLimit
-metadata:
-  name: cheap-tier-rpm
-spec:
-  rules:
-    - meter: requests
-      amount: 100
-      window: 1m
-      strategy: token-bucket
-`
-
-func TestToRateLimit_HappyPath(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(rateLimitYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if docs[0].RateLimit == nil {
-		t.Fatal("want RateLimit doc")
-	}
-	rl, err := manifest.ToRateLimit(*docs[0].RateLimit, testResolver)
+func TestToRateLimit(t *testing.T) {
+	rl, err := manifest.ToRateLimit(*parseOne(t, rateLimitYAML).RateLimit, testResolver)
 	if err != nil {
 		t.Fatalf("ToRateLimit: %v", err)
 	}
-	if len(rl.Spec.Rules) != 1 {
-		t.Fatalf("rules: want 1, got %d", len(rl.Spec.Rules))
-	}
-	if rl.Spec.Rules[0].Amount != 100 {
-		t.Errorf("amount: want 100, got %d", rl.Spec.Rules[0].Amount)
+	want := []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 100, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}
+	if diff := cmp.Diff(want, rl.Spec.Rules); diff != "" || rl.Meta.Name != "cheap-tier-rpm" {
+		t.Errorf("rate limit %q rules (-want +got):\n%s", rl.Meta.Name, diff)
 	}
 }
 
@@ -350,70 +322,52 @@ spec:
       serviceTier: priority
 `
 
-func TestToPricing_HappyPath(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(pricingYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if len(docs) != 1 || docs[0].Pricing == nil {
-		t.Fatalf("want 1 Pricing doc")
-	}
-	p, err := manifest.ToPricing(*docs[0].Pricing, testResolver)
+func TestPricing(t *testing.T) {
+	d := *parseOne(t, pricingYAML).Pricing
+	p, err := manifest.ToPricing(d, testResolver)
 	if err != nil {
 		t.Fatalf("ToPricing: %v", err)
 	}
-	if p.Meta.Owner.ID != "host-bbb" {
-		t.Errorf("owner.id: want host-bbb, got %q", p.Meta.Owner.ID)
+	want := &pricing.Pricing{
+		Meta: meta.Metadata{Name: "anthropic-direct-pricing", Owner: meta.Owner{Kind: meta.OwnerHost, ID: "host-bbb"}},
+		Spec: pricing.Spec{
+			Currency:       "USD",
+			TargetModelIDs: []string{"model-fff"},
+			Rates: []pricing.Rate{
+				{Meter: "tokens.input", Unit: "per_million", Amount: 3},
+				{Meter: "tokens.output", Unit: "per_million", Amount: 15},
+				{Meter: "tokens.input", Unit: "per_million", Amount: 6, ServiceTier: "priority"},
+			},
+		},
 	}
-	if p.Spec.Currency != "USD" {
-		t.Errorf("currency: want USD, got %q", p.Spec.Currency)
+	if diff := cmp.Diff(want, p); diff != "" {
+		t.Errorf("ToPricing (-want +got):\n%s", diff)
 	}
-	if len(p.Spec.TargetModelIDs) != 1 || p.Spec.TargetModelIDs[0] != "model-fff" {
-		t.Errorf("targetModelIDs: want [model-fff], got %v", p.Spec.TargetModelIDs)
-	}
-	if p.Spec.Rates[0].Meter != "tokens.input" {
-		t.Errorf("rates[0].meter: want tokens.input, got %q", p.Spec.Rates[0].Meter)
-	}
-	if p.Spec.Rates[0].Amount != 3.00 {
-		t.Errorf("rates[0].amount: want 3.00, got %f", p.Spec.Rates[0].Amount)
-	}
-	if p.Spec.Rates[2].ServiceTier != "priority" {
-		t.Errorf("rates[2].serviceTier: want priority, got %q", p.Spec.Rates[2].ServiceTier)
-	}
-	if back := manifest.FromPricing(p, testRev); back.Spec.Rates[2].ServiceTier != "priority" {
-		t.Errorf("FromPricing dropped serviceTier: %+v", back.Spec.Rates[2])
+	back := manifest.FromPricing(p, testRev)
+	if diff := cmp.Diff(d.Spec, back.Spec); diff != "" || back.Metadata.Owner.Name != "anthropic-direct" {
+		t.Errorf("FromPricing owner %+v, spec (-document +export):\n%s", back.Metadata.Owner, diff)
 	}
 }
 
 func TestLoadDirSkipsDrafts(t *testing.T) {
 	dir := t.TempDir()
-	body := func(name string) string {
-		return `apiVersion: relay.wyolet.dev/v1alpha2
-kind: Provider
-metadata: { name: ` + name + ` }
-`
-	}
-	mustWrite := func(p, b string) {
-		t.Helper()
+	for path, name := range map[string]string{
+		"providers/live/provider.yaml":               "live",
+		"drafts/providers/drafted-dir/provider.yaml": "drafted-dir",
+		"providers/live/extra.draft.yaml":            "drafted-file",
+		"providers/live/notes.txt":                   "not-yaml",
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p, []byte(b), 0o644); err != nil {
+		body := "apiVersion: relay.wyolet.dev/v1alpha2\nkind: Provider\nmetadata: { name: " + name + " }\n"
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	mustWrite(filepath.Join(dir, "providers", "live", "provider.yaml"), body("live"))
-	mustWrite(filepath.Join(dir, "drafts", "providers", "drafted-dir", "provider.yaml"), body("drafted-dir"))
-	mustWrite(filepath.Join(dir, "providers", "live", "extra.draft.yaml"), body("drafted-file"))
-
 	docs, err := manifest.LoadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(docs) != 1 {
-		t.Fatalf("got %d docs, want 1 (drafts/ + *.draft.yaml should be skipped)", len(docs))
-	}
-	if docs[0].Provider == nil || docs[0].Provider.Metadata.Name != "live" {
-		t.Fatalf("expected the live provider, got %+v", docs[0])
+	if err != nil || len(docs) != 1 || docs[0].Provider == nil || docs[0].Provider.Metadata.Name != "live" {
+		t.Fatalf("LoadDir = %+v, %v; want only the live provider (drafts/, *.draft.yaml and non-YAML skipped)", docs, err)
 	}
 }

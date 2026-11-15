@@ -118,6 +118,7 @@ func TestEditsRefuseUnsafeLayouts(t *testing.T) {
 	}
 	remove := func(path string) error { return Remove(path, "a") }
 	setCatalog := func(path string) error { return SetCatalog(path, "v2") }
+	setRoute := func(path string) error { return SetModelRoute(path, ic, "a", "r") }
 	routes := "[routes]\nr = { host = \"anthropic\" }\n"
 	cases := []struct {
 		name  string
@@ -125,9 +126,9 @@ func TestEditsRefuseUnsafeLayouts(t *testing.T) {
 		edits []func(string) error
 	}{
 		{"inline table", "catalog = \"v1\"\nmodels = { a = \"r\" }\n" + routes, []func(string) error{add, remove}},
-		{"multi-line entry", "catalog = \"v1\"\n" + routes + "[models]\na = { model = \"claude-opus-5-5\",\n  route = \"r\" }\n", []func(string) error{add, remove}},
-		{"sub-table entry", "catalog = \"v1\"\n" + routes + "[models.a]\nmodel = \"claude-opus-5-5\"\nroute = \"r\"\n", []func(string) error{add, remove}},
-		{"entry split by key", "catalog = \"v1\"\n" + routes + "[models]\na.model = \"claude-opus-5-5\"\na.route = \"r\"\n", []func(string) error{add, remove}},
+		{"multi-line entry", "catalog = \"v1\"\n" + routes + "[models]\na = { model = \"claude-opus-5-5\",\n  route = \"r\" }\n", []func(string) error{add, remove, setRoute}},
+		{"sub-table entry", "catalog = \"v1\"\n" + routes + "[models.a]\nmodel = \"claude-opus-5-5\"\nroute = \"r\"\n", []func(string) error{add, remove, setRoute}},
+		{"entry split by key", "catalog = \"v1\"\n" + routes + "[models]\na.model = \"claude-opus-5-5\"\na.route = \"r\"\n", []func(string) error{add, remove, setRoute}},
 		{"multi-line catalog", "catalog = \"\"\"\nv1\"\"\"\n" + routes + "[models]\na = \"r\"\n", []func(string) error{setCatalog}},
 	}
 	for _, tc := range cases {
@@ -142,5 +143,49 @@ func TestEditsRefuseUnsafeLayouts(t *testing.T) {
 				t.Fatalf("a refused edit changed the file:\n%s", got)
 			}
 		})
+	}
+}
+
+func TestSetModelRoute(t *testing.T) {
+	ic := fixtureIndex(t, fixtureCatalog("v0.1.10"))
+	commented := strings.Replace(sampleFile, `route = "claude-work" }`, `route = "claude-work" } # day job`, 1)
+	cases := []struct{ name, before, key, route, after string }{
+		{"short entry", sampleFile, "gpt-5-5", "relay",
+			strings.Replace(sampleFile, `"gpt-5-5"         = "codex"`, `"gpt-5-5"         = "relay"`, 1)},
+		{"inline entry with comment", commented, "opus-work", "claude-home",
+			strings.Replace(commented, `route = "claude-work" } # day job`, `route = "claude-home" } # day job`, 1)},
+		{"default model", sampleFile, "claude-opus-5-5", "claude-work",
+			strings.Replace(sampleFile, `"claude-opus-5-5" = "claude-home"`, `"claude-opus-5-5" = "claude-work"`, 1)},
+		{"inline entry route first", strings.Replace(sampleFile, `{ model = "claude-opus-5-5", route = "claude-work" }`, `{'route'='claude-work',model="claude-opus-5-5"}`, 1), "opus-work", "relay",
+			strings.Replace(sampleFile, `{ model = "claude-opus-5-5", route = "claude-work" }`, `{'route'="relay",model="claude-opus-5-5"}`, 1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeRoutes(t, tc.before)
+			if err := SetModelRoute(path, ic, tc.key, tc.route); err != nil {
+				t.Fatal(err)
+			}
+			if got := readFile(t, path); got != tc.after {
+				t.Fatalf("file:\n%s\nwant:\n%s", got, tc.after)
+			}
+		})
+	}
+}
+
+func TestSetModelRouteRejects(t *testing.T) {
+	ic := fixtureIndex(t, fixtureCatalog("v0.1.10"))
+	path := writeRoutes(t, sampleFile)
+	cases := map[string][2]string{
+		"unknown key":   {"no-such-key", "relay"},
+		"unknown route": {"gpt-5-5", "nope"},
+		"not on host":   {"gpt-5-5", "claude-home"},
+	}
+	for name, kr := range cases {
+		if err := SetModelRoute(path, ic, kr[0], kr[1]); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+	if got := readFile(t, path); got != sampleFile {
+		t.Fatalf("a rejected edit changed the file:\n%s", got)
 	}
 }

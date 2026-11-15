@@ -3,164 +3,124 @@ package v1
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestTextPartRoundTrip(t *testing.T) {
-	p := &TextPart{Text: "hello"}
-	b, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p2, err := unmarshalPart(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tp, ok := p2.(*TextPart)
-	if !ok {
-		t.Fatalf("expected *TextPart, got %T", p2)
-	}
-	if tp.Text != p.Text {
-		t.Errorf("text: got %q, want %q", tp.Text, p.Text)
-	}
-}
-
-func TestImagePartRoundTrip(t *testing.T) {
-	p := &ImagePart{ImageURL: "https://example.com/img.png", Detail: "high"}
-	b, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p2, err := unmarshalPart(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ip, ok := p2.(*ImagePart)
-	if !ok {
-		t.Fatalf("expected *ImagePart, got %T", p2)
-	}
-	if ip.ImageURL != p.ImageURL {
-		t.Errorf("image_url: got %q, want %q", ip.ImageURL, p.ImageURL)
-	}
-	if ip.Detail != p.Detail {
-		t.Errorf("detail: got %q, want %q", ip.Detail, p.Detail)
-	}
-}
-
-func TestFilePartRoundTrip(t *testing.T) {
-	p := &FilePart{
-		FileURL:   "https://example.com/doc.pdf",
-		Filename:  "doc.pdf",
-		MediaType: "application/pdf",
-	}
-	b, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p2, err := unmarshalPart(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fp, ok := p2.(*FilePart)
-	if !ok {
-		t.Fatalf("expected *FilePart, got %T", p2)
-	}
-	if fp.FileURL != p.FileURL {
-		t.Errorf("file_url mismatch")
-	}
-	if fp.Filename != p.Filename {
-		t.Errorf("filename mismatch")
-	}
-	if fp.MediaType != p.MediaType {
-		t.Errorf("media_type mismatch")
-	}
-}
-
-func TestOutputTextPartRoundTrip(t *testing.T) {
-	p := &OutputTextPart{Text: "the answer is 42"}
-	b, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p2, err := unmarshalPart(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	op, ok := p2.(*OutputTextPart)
-	if !ok {
-		t.Fatalf("expected *OutputTextPart, got %T", p2)
-	}
-	if op.Text != p.Text {
-		t.Errorf("text: got %q, want %q", op.Text, p.Text)
-	}
-}
-
-func TestOutputTextPartWithAnnotations(t *testing.T) {
-	p := &OutputTextPart{
-		Text: "see source",
-		Annotations: []Annotation{
-			&URLCitationAnnotation{
-				StartIndex: 4,
-				EndIndex:   10,
-				URL:        "https://example.com",
-				Title:      "Example",
-			},
-			&TextCitationAnnotation{
-				StartIndex: 0,
-				EndIndex:   3,
-			},
+func TestUnmarshalPart(t *testing.T) {
+	tests := []struct {
+		name string
+		wire string
+		want Part
+	}{
+		{"input_text", `{"type":"input_text","text":"hello"}`, &TextPart{Text: "hello"}},
+		{"input_text empty keeps the text member", `{"type":"input_text","text":""}`, &TextPart{}},
+		{"input_image", `{"type":"input_image","image_url":"https://example.com/img.png","detail":"high"}`,
+			&ImagePart{ImageURL: "https://example.com/img.png", Detail: "high"}},
+		{"input_image empty", `{"type":"input_image"}`, &ImagePart{}},
+		{"input_file by url", `{"type":"input_file","file_url":"https://example.com/doc.pdf","filename":"doc.pdf","media_type":"application/pdf"}`,
+			&FilePart{FileURL: "https://example.com/doc.pdf", Filename: "doc.pdf", MediaType: "application/pdf"}},
+		{"input_file by id and data", `{"type":"input_file","file_id":"file_1","file_data":"aGk="}`, &FilePart{FileID: "file_1", FileData: "aGk="}},
+		{"output_text", `{"type":"output_text","text":"the answer is 42"}`, &OutputTextPart{Text: "the answer is 42"}},
+		{
+			"url_citation with provider data",
+			`{"type":"output_text","text":"x","annotations":[{"type":"url_citation","start_index":0,"end_index":0,"url":"https://x","provider_data":{"type":"web_search_result_location","encrypted_index":"E"}}]}`,
+			&OutputTextPart{Text: "x", Annotations: []Annotation{
+				&URLCitationAnnotation{URL: "https://x", ProviderData: json.RawMessage(`{"type":"web_search_result_location","encrypted_index":"E"}`)},
+			}},
+		},
+		{
+			"output_text with annotations of each kind",
+			`{"type":"output_text","text":"see source","annotations":[` +
+				`{"type":"url_citation","start_index":4,"end_index":10,"url":"https://example.com","title":"Example"},` +
+				`{"type":"text_citation","start_index":0,"end_index":3},` +
+				`{"type":"custom_citation","extra":"data"}]}`,
+			&OutputTextPart{Text: "see source", Annotations: []Annotation{
+				&URLCitationAnnotation{StartIndex: 4, EndIndex: 10, URL: "https://example.com", Title: "Example"},
+				&TextCitationAnnotation{StartIndex: 0, EndIndex: 3},
+				&RawAnnotation{Type: "custom_citation", JSON: json.RawMessage(`{"type":"custom_citation","extra":"data"}`)},
+			}},
 		},
 	}
-	b, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p2, err := unmarshalPart(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	op := p2.(*OutputTextPart)
-	if len(op.Annotations) != 2 {
-		t.Fatalf("expected 2 annotations, got %d", len(op.Annotations))
-	}
-	if op.Annotations[0].AnnotationType() != "url_citation" {
-		t.Errorf("annotation[0] type: %s", op.Annotations[0].AnnotationType())
-	}
-	if op.Annotations[1].AnnotationType() != "text_citation" {
-		t.Errorf("annotation[1] type: %s", op.Annotations[1].AnnotationType())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := unmarshalPart([]byte(tc.wire))
+			if err != nil {
+				t.Fatalf("unmarshalPart: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("part (-want +got):\n%s", diff)
+			}
+			if got.PartType() != tc.want.PartType() {
+				t.Errorf("PartType = %q, want %q", got.PartType(), tc.want.PartType())
+			}
+			wantJSON(t, got, tc.wire)
+		})
 	}
 }
 
-func TestRawAnnotationPreservesUnknownType(t *testing.T) {
-	raw := []byte(`{"type":"custom_citation","extra":"data"}`)
-	a, err := unmarshalAnnotation(raw)
-	if err != nil {
-		t.Fatal(err)
+func TestUnmarshalPart_Errors(t *testing.T) {
+	tests := []struct{ name, wire, want string }{
+		{"not an object", `"x"`, "part: json: cannot unmarshal string…"},
+		{"missing type", `{"text":"x"}`, `unsupported part type ""`},
+		{"refusal is not a part", `{"type":"refusal","refusal":"no"}`, `unsupported part type "refusal"`},
+		{"input_text with numeric text", `{"type":"input_text","text":1}`, "input_text part: json: cannot unmarshal number…"},
+		{"input_image with numeric url", `{"type":"input_image","image_url":1}`, "input_image part: json: cannot unmarshal number…"},
+		{"input_file with numeric id", `{"type":"input_file","file_id":1}`, "input_file part: json: cannot unmarshal number…"},
+		{"output_text with numeric text", `{"type":"output_text","text":1}`, "output_text part: json: cannot unmarshal number…"},
+		{"output_text with a non-object annotation", `{"type":"output_text","annotations":[1]}`, "output_text part: annotation: json: cannot unmarshal number…"},
+		{"output_text with a malformed url_citation", `{"type":"output_text","annotations":[{"type":"url_citation","url":1}]}`, "output_text part: url_citation annotation: json: cannot unmarshal number…"},
+		{"output_text with a malformed text_citation", `{"type":"output_text","annotations":[{"type":"text_citation","start_index":"a"}]}`, "output_text part: text_citation annotation: json: cannot unmarshal string…"},
 	}
-	if a.AnnotationType() != "custom_citation" {
-		t.Errorf("type: %q", a.AnnotationType())
-	}
-	b, err := json.Marshal(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(b) != string(raw) {
-		t.Errorf("raw annotation not preserved: got %s, want %s", b, raw)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := unmarshalPart([]byte(tc.wire))
+			if err == nil {
+				t.Fatalf("unmarshalPart = %#v, want an error", got)
+			}
+			wantErr(t, err, tc.want)
+		})
 	}
 }
 
-func TestStringContentNormalization(t *testing.T) {
-	parts, err := unmarshalContent([]byte(`"hello"`))
-	if err != nil {
-		t.Fatal(err)
+func TestAnnotation_Type(t *testing.T) {
+	for want, a := range map[string]Annotation{
+		"url_citation":  &URLCitationAnnotation{},
+		"text_citation": &TextCitationAnnotation{},
+		"custom":        &RawAnnotation{Type: "custom"},
+	} {
+		if got := a.AnnotationType(); got != want {
+			t.Errorf("%T.AnnotationType() = %q, want %q", a, got, want)
+		}
 	}
-	if len(parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(parts))
+	// A RawAnnotation built without its source bytes still marshals its type.
+	wantJSON(t, &RawAnnotation{Type: "custom"}, `{"type":"custom"}`)
+}
+
+func TestUnmarshalContent(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []Part
+		err  string
+	}{
+		{name: "absent", raw: ``, want: nil},
+		{name: "string", raw: `"hello"`, want: []Part{&TextPart{Text: "hello"}}},
+		{name: "empty string is still one part", raw: `""`, want: []Part{&TextPart{}}},
+		{name: "null", raw: `null`, want: []Part{}},
+		{name: "array", raw: `[{"type":"input_text","text":"a"},{"type":"output_text","text":"b"}]`,
+			want: []Part{&TextPart{Text: "a"}, &OutputTextPart{Text: "b"}}},
+		{name: "unterminated string", raw: `"abc`, err: "content string: …"},
+		{name: "number", raw: `5`, err: "content array: json: cannot unmarshal number…"},
+		{name: "array with a bad part", raw: `[{"type":"input_text","text":"a"},{"type":"nope"}]`, err: `unsupported part type "nope"`},
 	}
-	tp, ok := parts[0].(*TextPart)
-	if !ok {
-		t.Fatalf("expected *TextPart, got %T", parts[0])
-	}
-	if tp.Text != "hello" {
-		t.Errorf("text: %q", tp.Text)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := unmarshalContent([]byte(tc.raw))
+			wantErr(t, err, tc.err)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("parts (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

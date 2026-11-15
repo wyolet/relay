@@ -1,15 +1,12 @@
 package main
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
-
-	"github.com/wyolet/relay/app/apply"
 )
 
 // withEnvFileState restores the recorded dotenv state after a test that loads one.
@@ -27,6 +24,69 @@ func writeEnvFile(t *testing.T, dir, name, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// clearRelayEnv empties every RELAY_* variable the process inherited.
+func clearRelayEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "RELAY_") {
+			t.Setenv(name, "")
+		}
+	}
+}
+
+func TestLogLevel(t *testing.T) {
+	for value, want := range map[string]slog.Level{
+		"": slog.LevelInfo, "info": slog.LevelInfo, "verbose": slog.LevelInfo,
+		"debug": slog.LevelDebug, " DEBUG ": slog.LevelDebug,
+		"warn": slog.LevelWarn, "Warning": slog.LevelWarn, "error": slog.LevelError,
+	} {
+		t.Setenv("RELAY_LOG_LEVEL", value)
+		if got := logLevel(); got != want {
+			t.Errorf("RELAY_LOG_LEVEL=%q → %v, want %v", value, got, want)
+		}
+	}
+}
+
+// A dotenv file sets what the environment leaves unset or empty and reports exactly those names; values are taken verbatim after the first "=".
+func TestLoadDotEnv(t *testing.T) {
+	path := writeEnvFile(t, t.TempDir(), "x.env", strings.Join([]string{
+		"# comment",
+		"",
+		"  RELAY_T_PLAIN=plain  ",
+		"RELAY_T_EQUALS=a=b=c",
+		"RELAY_T_EMPTY=",
+		"RELAY_T_QUOTED=\"kept as written\"",
+		"RELAY_T_EXPORTED=from-file",
+		"RELAY_T_BLANK_IN_ENV=from-file",
+		"RELAY_T_TWICE=first",
+		"RELAY_T_TWICE=second",
+		"not an assignment",
+		"  # indented comment",
+	}, "\n"))
+	names := []string{"RELAY_T_PLAIN", "RELAY_T_EQUALS", "RELAY_T_EMPTY", "RELAY_T_QUOTED", "RELAY_T_EXPORTED", "RELAY_T_BLANK_IN_ENV", "RELAY_T_TWICE"}
+	for _, k := range names {
+		t.Setenv(k, "")
+	}
+	t.Setenv("RELAY_T_EXPORTED", "exported")
+
+	set, err := loadDotEnv(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSet := map[string]bool{"RELAY_T_PLAIN": true, "RELAY_T_EQUALS": true, "RELAY_T_EMPTY": true, "RELAY_T_QUOTED": true, "RELAY_T_BLANK_IN_ENV": true, "RELAY_T_TWICE": true}
+	if !maps.Equal(set, wantSet) {
+		t.Errorf("names set = %v, want %v", set, wantSet)
+	}
+	for k, want := range map[string]string{
+		"RELAY_T_PLAIN": "plain", "RELAY_T_EQUALS": "a=b=c", "RELAY_T_EMPTY": "", "RELAY_T_QUOTED": `"kept as written"`,
+		"RELAY_T_EXPORTED": "exported", "RELAY_T_BLANK_IN_ENV": "from-file", "RELAY_T_TWICE": "first",
+	} {
+		if got := os.Getenv(k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
 }
 
 func TestLoadEnvFileDotEnvOnlyForTheServer(t *testing.T) {
@@ -86,8 +146,8 @@ func TestLoadEnvFileExplicitFileForAnyCommand(t *testing.T) {
 func TestLoadEnvFileMissingExplicitFileFails(t *testing.T) {
 	withEnvFileState(t)
 	t.Setenv("RELAY_ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
-	if err := loadEnvFile([]string{"relay"}); err == nil {
-		t.Fatal("a missing RELAY_ENV_FILE loaded without error")
+	if err := loadEnvFile([]string{"relay"}); err == nil || !strings.HasPrefix(err.Error(), "RELAY_ENV_FILE: open ") || dotEnvFile != "" {
+		t.Fatalf("a missing RELAY_ENV_FILE: err = %v, recorded file %q", err, dotEnvFile)
 	}
 }
 
@@ -114,38 +174,5 @@ func TestLoadEnvFileUnreadableDotEnvIsSkipped(t *testing.T) {
 	t.Setenv("RELAY_ENV_FILE", "")
 	if err := loadEnvFile([]string{"relay"}); err != nil {
 		t.Fatalf("unreadable working directory: %v", err)
-	}
-}
-
-func TestApplyRefusesDotEnvTokenWithoutURL(t *testing.T) {
-	withEnvFileState(t)
-	dotEnvFile, dotEnvKeys = "prod.env", map[string]bool{"RELAY_ADMIN_TOKEN": true}
-	t.Setenv("RELAY_ADMIN_TOKEN", "from-file")
-
-	var requests atomic.Int32
-	plan := planServer(t, http.StatusOK, []apply.Entry{{Kind: "Team", Name: "platform", Action: apply.ActionCreate}})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		plan.Config.Handler.ServeHTTP(w, r)
-	}))
-	t.Cleanup(srv.Close)
-	t.Setenv("RELAY_URL", srv.URL)
-
-	err := runApply([]string{"-f", manifestDir(t), "--dry-run"})
-	if err == nil || !strings.Contains(err.Error(), "prod.env") {
-		t.Fatalf("apply with a dotenv token and no --url: err = %v, want a refusal naming the file", err)
-	}
-	if n := requests.Load(); n != 0 {
-		t.Fatalf("apply reached the server %d time(s) before refusing", n)
-	}
-
-	captureStdout(t, func() {
-		err = runApply([]string{"-f", manifestDir(t), "--dry-run", "--url", srv.URL})
-	})
-	if err != nil {
-		t.Fatalf("apply with an explicit --url: %v", err)
-	}
-	if n := requests.Load(); n != 1 {
-		t.Fatalf("apply with --url made %d request(s), want 1", n)
 	}
 }

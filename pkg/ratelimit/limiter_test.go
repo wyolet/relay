@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/pkg/kv"
 )
-
-// ── helpers ───────────────────────────────────────────────────────────────────
 
 func newTestStore(t *testing.T) *kv.Mem {
 	t.Helper()
@@ -22,692 +22,290 @@ func newTestStore(t *testing.T) *kv.Mem {
 
 func newTestLimiter(t *testing.T, now *time.Time) *Limiter {
 	t.Helper()
-	s := newTestStore(t)
-	clock := func() time.Time { return *now }
-	return New(s, discardLog(), clock)
+	return New(newTestStore(t), discardLog(), func() time.Time { return *now })
 }
 
 func discardLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-// reqRule builds a requests/sliding-window Rule directly.
 func reqRule(key, name string, amount int64, window time.Duration) Rule {
-	return Rule{
-		Key:      key,
-		Name:     name,
-		Meter:    "requests",
-		Strategy: StrategySlidingWindow,
-		Amount:   amount,
-		Window:   window,
-	}
+	return Rule{Key: key, Name: name, Meter: "requests", Strategy: StrategySlidingWindow, Amount: amount, Window: window}
 }
 
 func conRule(key, name string, amount int64, window time.Duration) Rule {
-	return Rule{
-		Key:      key,
-		Name:     name,
-		Meter:    "concurrency",
-		Strategy: StrategySlidingWindow, // ignored for concurrency
-		Amount:   amount,
-		Window:   window,
-	}
+	return Rule{Key: key, Name: name, Meter: "concurrency", Strategy: StrategySlidingWindow, Amount: amount, Window: window}
 }
 
 func tokRule(key, name string, amount int64, window time.Duration) Rule {
-	return Rule{
-		Key:      key,
-		Name:     name,
-		Meter:    "tokens",
-		Strategy: StrategySlidingWindow,
-		Amount:   amount,
-		Window:   window,
+	return Rule{Key: key, Name: name, Meter: "tokens", Strategy: StrategySlidingWindow, Amount: amount, Window: window}
+}
+
+func mustReserve(t *testing.T, l *Limiter, scope string, rules []Rule) *Reservation {
+	t.Helper()
+	res, err := l.Reserve(context.Background(), scope, rules)
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	return res
+}
+
+func mustExceed(t *testing.T, l *Limiter, scope string, rules []Rule) *ExceededError {
+	t.Helper()
+	_, err := l.Reserve(context.Background(), scope, rules)
+	var ee *ExceededError
+	if !errors.As(err, &ee) || !errors.Is(err, ErrExceeded) {
+		t.Fatalf("Reserve: err = %v, want *ExceededError wrapping ErrExceeded", err)
+	}
+	return ee
+}
+
+func mustCommit(t *testing.T, l *Limiter, res *Reservation, obs Observations) {
+	t.Helper()
+	if err := l.Commit(context.Background(), res, obs); err != nil {
+		t.Fatalf("Commit: %v", err)
 	}
 }
 
-const testScope = "test-policy"
+// step is one instant of a strategy scenario. Its actions run in field order; used is the rule's Peek count once they are done.
+type step struct {
+	at     time.Duration // clock offset from the scenario start
+	grant  int           // reserves that must be granted, each committed at once
+	hold   int           // reserves that must be granted and stay open
+	settle int           // oldest open reservations committed
+	cancel int           // oldest open reservations committed as cancelled
+	retry  time.Duration // non-zero: one more reserve must be refused with exactly this retry-after
+	used   int64
+}
 
-// The behaviour Mem and Redis must share (request/concurrency/token caps,
-// idempotent commit, rollback on a later violation) is the contract suite in
-// store_contract_test.go; the tests here pin strategy and edge behaviour.
+// The start is minute- and hour-aligned, so offsets read as positions inside fixed and sliding windows.
+var scenarioStart = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// TestRequests_SlidingInterpolation: at half-window, old bucket weight = 0.5.
-func TestRequests_SlidingInterpolation(t *testing.T) {
-	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	now := base.Add(500 * time.Millisecond)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rules := []Rule{reqRule("Route:test-route:rl-requests", "requests", 10, time.Minute)}
-
-	// Fill 10 requests in the first bucket.
-	for i := 0; i < 10; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("fill reserve %d: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
+func TestReserveCommitPerStrategy(t *testing.T) {
+	const s, ms = time.Second, time.Millisecond
+	rule := func(meter string, strategy Strategy, amount int64, window time.Duration) Rule {
+		return Rule{Key: "rule", Name: "the rule", Meter: meter, Strategy: strategy, Amount: amount, Window: window}
 	}
-
-	// Advance to t=1min+30s: we're 30s into the second window.
-	// Previous bucket (10 reqs) has weight 0.5 → up to ~5 more allowed.
-	now = base.Add(time.Minute + 30*time.Second)
-	okCount := 0
-	for i := 0; i < 10; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			if !errors.Is(err, ErrExceeded) {
-				t.Fatalf("unexpected error: %v", err)
+	for _, tc := range []struct {
+		name  string
+		rule  Rule
+		steps []step
+	}{
+		{"token bucket refills at amount per window, capped at amount", rule("requests", StrategyTokenBucket, 10, time.Minute), []step{
+			{at: 0, grant: 10, retry: 6 * s, used: 10},
+			{at: 3 * s, retry: 3 * s, used: 10}, // half a token back: still 9.5 drawn
+			{at: 6 * s, used: 9},
+			{at: 6 * s, grant: 1, retry: 6 * s, used: 10},
+			{at: 36 * s, used: 5},
+			{at: 36 * s, grant: 5, retry: 6 * s, used: 10},
+			{at: 156 * s, used: 0},
+			{at: 156 * s, grant: 10, retry: 6 * s, used: 10},
+		}},
+		{"token bucket refunds cancelled reserves only", rule("requests", StrategyTokenBucket, 10, time.Minute), []step{
+			{hold: 10, retry: 6 * s, used: 10},
+			{settle: 4, used: 10},
+			{cancel: 6, used: 4},
+			{grant: 6, retry: 6 * s, used: 10},
+		}},
+		{"empty strategy is a token bucket", rule("requests", "", 1, time.Minute), []step{
+			{hold: 1, retry: 60 * s, used: 1},
+			{cancel: 1, used: 0},
+			{at: 30 * s, grant: 1, retry: 60 * s, used: 1},
+			{at: 60 * s, retry: 30 * s, used: 1},
+		}},
+		{"sliding window weighs the previous bucket by what is left of it", rule("requests", StrategySlidingWindow, 10, time.Minute), []step{
+			{at: 500 * ms, grant: 10, retry: 65*s + 500*ms, used: 10}, // 1 + 10*(1-f) <= 10 at f = 0.1 of the next window
+			{at: 59*s + 999*ms, retry: 6*s + ms, used: 10},
+			{at: 90 * s, used: 5},
+			{at: 90 * s, grant: 5, used: 10},
+			{at: 150 * s, used: 3}, // half of the 5 counted in the minute before, rounded up
+			{at: 180 * s, grant: 10, retry: 66 * s, used: 10},
+		}},
+		{"sliding window refunds a cancelled reserve", rule("requests", StrategySlidingWindow, 2, time.Minute), []step{
+			{at: 10 * s, hold: 2, retry: 80 * s, used: 2},
+			{at: 10 * s, settle: 1, cancel: 1, used: 1},
+			{at: 10 * s, grant: 1, retry: 80 * s, used: 2},
+		}},
+		{"fixed window resets at the boundary", rule("requests", StrategyFixedWindow, 5, time.Minute), []step{
+			{at: 30 * s, grant: 5, retry: 30 * s, used: 5},
+			{at: 59*s + 999*ms, retry: ms, used: 5},
+			{at: 60 * s, grant: 5, retry: 60 * s, used: 5},
+			{at: 120 * s, hold: 3, used: 3},
+			{at: 121 * s, cancel: 3, used: 0},
+			{at: 121 * s, grant: 5, retry: 59 * s, used: 5},
+		}},
+		{"leaky bucket drains at amount per window", rule("requests", StrategyLeakyBucket, 10, time.Minute), []step{
+			{at: 0, grant: 10, retry: 6 * s, used: 10},
+			{at: 3 * s, retry: 3 * s, used: 10},
+			{at: 30 * s, used: 5},
+			{at: 30 * s, hold: 5, retry: 6 * s, used: 10},
+			{at: 30 * s, settle: 2, used: 10},
+			{at: 30 * s, cancel: 3, used: 7},
+			{at: 30 * s, grant: 3, retry: 6 * s, used: 10},
+			{at: 300 * s, grant: 10, retry: 6 * s, used: 10},
+		}},
+		{"leaky bucket retry-after is one drained slot", rule("requests", StrategyLeakyBucket, 6, time.Minute), []step{
+			{grant: 6, retry: 10 * s, used: 6},
+		}},
+		{"session window anchors on the first request after expiry", rule("requests", StrategySessionWindow, 3, 5*time.Hour), []step{
+			{at: 0, grant: 3, retry: 5 * time.Hour, used: 3},
+			{at: 2 * time.Hour, retry: 3 * time.Hour, used: 3},
+			{at: 5*time.Hour - ms, retry: ms, used: 3},
+			{at: 9 * time.Hour, used: 0},
+			{at: 9 * time.Hour, grant: 1, used: 1},
+			{at: 13 * time.Hour, hold: 2, retry: time.Hour, used: 3},
+			{at: 13 * time.Hour, settle: 1, cancel: 1, used: 2},
+			{at: 13 * time.Hour, grant: 1, retry: time.Hour, used: 3},
+			{at: 14 * time.Hour, grant: 3, retry: 5 * time.Hour, used: 3},
+		}},
+		{"concurrency counts open reservations whatever the strategy", rule("concurrency", StrategyLeakyBucket, 2, time.Minute), []step{
+			{at: 0, hold: 1, used: 1},
+			{at: 20 * s, hold: 1, retry: 40 * s, used: 2},
+			{at: 20 * s, settle: 1, used: 1},
+			{at: 20 * s, cancel: 1, used: 0},
+			{at: 20 * s, grant: 5, used: 0},
+			{at: 30 * s, hold: 2, retry: 60 * s, used: 2},
+			{at: 90 * s, used: 0}, // leases last one window
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := scenarioStart
+			l := newTestLimiter(t, &now)
+			rules := []Rule{tc.rule}
+			var open []*Reservation
+			for i, st := range tc.steps {
+				now = scenarioStart.Add(st.at)
+				for range st.grant {
+					mustCommit(t, l, mustReserve(t, l, "scope", rules), Observations{})
+				}
+				for range st.hold {
+					open = append(open, mustReserve(t, l, "scope", rules))
+				}
+				for range st.settle {
+					mustCommit(t, l, open[0], Observations{})
+					open = open[1:]
+				}
+				for range st.cancel {
+					mustCommit(t, l, open[0], Observations{Cancelled: true})
+					open = open[1:]
+				}
+				if st.retry != 0 {
+					if diff := cmp.Diff(&ExceededError{Rule: tc.rule, RetryAfter: st.retry}, mustExceed(t, l, "scope", rules)); diff != "" {
+						t.Fatalf("step %d at +%v: refusal (-want +got):\n%s", i, st.at, diff)
+					}
+				}
+				if got := peekOne(t, l, "scope", rules)[0]; got != st.used {
+					t.Fatalf("step %d at +%v: used = %d, want %d", i, st.at, got, st.used)
+				}
 			}
-			break
-		}
-		okCount++
-		_ = l.Commit(ctx, res, Observations{})
-	}
-	if okCount < 4 || okCount > 6 {
-		t.Fatalf("expected ~5 requests at half-window, got %d", okCount)
-	}
-
-	// At t=3min: all prior buckets expired (2*window TTL). Fresh 10 slots.
-	now = base.Add(3 * time.Minute)
-	for i := 0; i < 10; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("new window reserve %d: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-	_, err := l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded after 10 in new window, got %v", err)
+		})
 	}
 }
 
-// Bare "tokens" counts input + output. The other keys break those two
-// down (reasoning ⊂ output, cache reads ⊂ input), so summing the whole map
-// charged one request several times over.
-func TestBareTokensMeterCountsInputPlusOutputOnly(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+func TestSlidingWindowRetryAfterIsEarliestAdmission(t *testing.T) {
+	now := scenarioStart.Add(500 * time.Millisecond)
 	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rules := []Rule{tokRule("Route:test-route:rl-tokens", "tokens", 100, time.Minute)}
+	rules := []Rule{reqRule("rule", "the rule", 10, time.Minute)}
+	for range 10 {
+		mustCommit(t, l, mustReserve(t, l, "scope", rules), Observations{})
+	}
+	now = scenarioStart.Add(90 * time.Second)
+	for range 5 {
+		mustCommit(t, l, mustReserve(t, l, "scope", rules), Observations{})
+	}
+	// One more fits once 6 + 10*(1-f) <= 10, at f = 0.6 of the window: 6s from now.
+	if got := mustExceed(t, l, "scope", rules).RetryAfter; got != 6*time.Second {
+		t.Errorf("RetryAfter = %v, want 6s", got)
+	}
+	now = scenarioStart.Add(96 * time.Second)
+	mustReserve(t, l, "scope", rules)
+}
 
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
+// A refused reserve names the first rule over budget and leaves every rule's count as it was, including rules checked before it.
+func TestReserveRefusalWritesNothing(t *testing.T) {
+	now := scenarioStart.Add(30 * time.Second)
+	l := newTestLimiter(t, &now)
+	rule := func(key, meter string, strategy Strategy, amount int64) Rule {
+		return Rule{Key: key, Name: key + " name", Meter: meter, Strategy: strategy, Amount: amount, Window: time.Minute}
 	}
-	// 60 real tokens, reported alongside the sub-meters that break them down.
-	obs := Observations{Tokens: map[string]int64{
-		"input": 40, "output": 20,
-		"reasoning": 15, "cache_read": 30, "cache_creation": 25,
-	}}
-	if err := l.Commit(ctx, res, obs); err != nil {
-		t.Fatalf("commit: %v", err)
+	counted := []Rule{
+		rule("sliding", "requests", StrategySlidingWindow, 2),
+		rule("fixed", "requests", StrategyFixedWindow, 3),
+		rule("bucket", "requests", StrategyTokenBucket, 4),
+		rule("leaky", "requests", StrategyLeakyBucket, 5),
+		rule("session", "requests", StrategySessionWindow, 6),
+		rule("slots", "concurrency", "", 7),
 	}
-	// The old sum was 130 > 100 and would have refused the next reserve.
-	if _, err := l.Reserve(ctx, testScope, rules); err != nil {
-		t.Fatalf("reserve after 60 counted tokens: %v — sub-meters were double-counted", err)
+	blocker := rule("blocker", "concurrency", "", 0)
+	last := rule("last", "requests", StrategyFixedWindow, 0)
+	all := append(append([]Rule{}, counted...), blocker, last)
+
+	if diff := cmp.Diff(&ExceededError{Rule: blocker, RetryAfter: time.Minute}, mustExceed(t, l, "scope", all)); diff != "" {
+		t.Fatalf("refusal (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]int64{0, 0, 0, 0, 0, 0, 0, 0}, peekOne(t, l, "scope", all)); diff != "" {
+		t.Fatalf("counts after a refused reserve (-want +got):\n%s", diff)
+	}
+
+	// The tightest rule refuses the third request; the two granted ones are counted once on every rule.
+	open := []*Reservation{mustReserve(t, l, "scope", counted), mustReserve(t, l, "scope", counted)}
+	if diff := cmp.Diff(&ExceededError{Rule: counted[0], RetryAfter: time.Minute}, mustExceed(t, l, "scope", counted)); diff != "" {
+		t.Fatalf("refusal (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]int64{2, 2, 2, 2, 2, 2}, peekOne(t, l, "scope", counted)); diff != "" {
+		t.Fatalf("counts after two grants and a refusal (-want +got):\n%s", diff)
+	}
+	for _, res := range open {
+		mustCommit(t, l, res, Observations{Cancelled: true})
+	}
+	if diff := cmp.Diff([]int64{0, 0, 0, 0, 0, 0}, peekOne(t, l, "scope", counted)); diff != "" {
+		t.Fatalf("counts after cancelling both (-want +got):\n%s", diff)
 	}
 }
 
-// TestConcurrency_CommitOnCancel_DecreasesCounter
-func TestConcurrency_CommitOnCancel_DecreasesCounter(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+// The bare meter charges input plus output; the other keys break those two down and have meters of their own.
+func TestCommitChargesTokenMetersSeparately(t *testing.T) {
+	now := scenarioStart.Add(30 * time.Second)
 	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rules := []Rule{conRule("Route:test-route:rl-concurrency", "concurrency", 1, time.Minute)}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
+	var rules []Rule
+	for _, meter := range []string{"tokens", "tokens.input", "tokens.output", "tokens.cache_read", "tokens.absent"} {
+		rules = append(rules, Rule{Key: "rule", Name: meter, Meter: meter, Strategy: StrategySlidingWindow, Amount: 100, Window: time.Minute})
 	}
-
-	_, err = l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded, got %v", err)
+	obs := Observations{Tokens: map[string]int64{"input": 40, "output": 20, "reasoning": 15, "cache_read": 30, "cache_creation": 25}}
+	mustCommit(t, l, mustReserve(t, l, "scope", rules), obs)
+	if diff := cmp.Diff([]int64{60, 40, 20, 30, 0}, peekOne(t, l, "scope", rules)); diff != "" {
+		t.Fatalf("token counts (-want +got):\n%s", diff)
 	}
-
-	if err := l.Commit(ctx, res, Observations{Cancelled: true}); err != nil {
-		t.Fatalf("commit: %v", err)
+	// A cancelled commit charges no tokens.
+	obs.Cancelled = true
+	mustCommit(t, l, mustReserve(t, l, "scope", rules), obs)
+	if diff := cmp.Diff([]int64{60, 40, 20, 30, 0}, peekOne(t, l, "scope", rules)); diff != "" {
+		t.Fatalf("token counts after a cancelled commit (-want +got):\n%s", diff)
 	}
-
-	res2, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve after cancel commit: %v", err)
+	// 100 used of 100 still admits; one more token refuses until the 101 weigh 100 in the next window.
+	mustCommit(t, l, mustReserve(t, l, "scope", rules[:1]), Observations{Tokens: map[string]int64{"output": 40}})
+	mustCommit(t, l, mustReserve(t, l, "scope", rules[:1]), Observations{Tokens: map[string]int64{"input": 1}})
+	if diff := cmp.Diff(&ExceededError{Rule: rules[0], RetryAfter: 30595 * time.Millisecond}, mustExceed(t, l, "scope", rules)); diff != "" {
+		t.Fatalf("refusal (-want +got):\n%s", diff)
 	}
-	_ = l.Commit(ctx, res2, Observations{})
 }
 
 // A commit whose lease set already expired frees nothing it does not hold.
 func TestConcurrencyCommitAfterKeyExpiry(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	s := newTestStore(t)
-	l := New(s, discardLog(), func() time.Time { return now })
-	ctx := context.Background()
-	rule := conRule("Route:test-route:rl-concurrency-expired", "concurrency", 1, time.Minute)
+	now := scenarioStart
+	l := newTestLimiter(t, &now)
+	rule := conRule("rule", "concurrency", 1, time.Minute)
 	rules := []Rule{rule}
 
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	if err := s.Del(ctx, concurrencyKey(testScope, rule)); err != nil {
+	res := mustReserve(t, l, "scope", rules)
+	if err := l.store.Del(context.Background(), concurrencyKey("scope", rule)); err != nil {
 		t.Fatalf("expire key: %v", err)
 	}
-	if err := l.Commit(ctx, res, Observations{}); err != nil {
-		t.Fatalf("commit after expiry: %v", err)
-	}
+	mustCommit(t, l, res, Observations{})
 
-	res2, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve after commit: %v", err)
+	mustReserve(t, l, "scope", rules)
+	if got := peekOne(t, l, "scope", rules)[0]; got != 1 {
+		t.Fatalf("held slots = %d, want 1", got)
 	}
-	defer func() { _ = l.Commit(ctx, res2, Observations{}) }()
-	if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
-		t.Fatalf("second reserve after commit got %v, want ErrExceeded", err)
-	}
-}
-
-// TestSlidingWindow_BoundaryAccuracy
-func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
-	base := time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC) // minute boundary
-	rule := reqRule("Route:test-route:rl-requests", "requests", 5, time.Minute)
-
-	// Fill 5 in bucket starting at base.
-	{
-		now := base.Add(500 * time.Millisecond)
-		l := newTestLimiter(t, &now)
-		ctx := context.Background()
-		for i := 0; i < 5; i++ {
-			res, err := l.Reserve(ctx, testScope, []Rule{rule})
-			if err != nil {
-				t.Fatalf("fill %d: %v", i+1, err)
-			}
-			_ = l.Commit(ctx, res, Observations{})
-		}
-		_, err := l.Reserve(ctx, testScope, []Rule{rule})
-		if !errors.Is(err, ErrExceeded) {
-			t.Fatalf("expected exceeded at t=0.5s, got %v", err)
-		}
-	}
-
-	// At t=59.999s: still exceeded.
-	{
-		now := base.Add(59*time.Second + 999*time.Millisecond)
-		l := newTestLimiter(t, &now)
-		ctx := context.Background()
-		for i := 0; i < 5; i++ {
-			res, err := l.Reserve(ctx, testScope, []Rule{rule})
-			if err != nil {
-				t.Fatalf("fill at 59.999s %d: %v", i+1, err)
-			}
-			_ = l.Commit(ctx, res, Observations{})
-		}
-		_, err := l.Reserve(ctx, testScope, []Rule{rule})
-		if !errors.Is(err, ErrExceeded) {
-			t.Fatalf("expected exceeded at t=59.999s, got %v", err)
-		}
-	}
-
-	// At t=60.001s (next bucket): resets.
-	{
-		now := base.Add(60*time.Second + time.Millisecond)
-		l := newTestLimiter(t, &now)
-		ctx := context.Background()
-		res, err := l.Reserve(ctx, testScope, []Rule{rule})
-		if err != nil {
-			t.Fatalf("expected success in new bucket, got %v", err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-}
-
-// TestReserve_ContextCancel
-func TestReserve_ContextCancel(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	rules := []Rule{conRule("Route:test-route:rl-concurrency", "concurrency", 2, time.Minute)}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	res1, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve 1: %v", err)
-	}
-	res2, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve 2: %v", err)
-	}
-
-	cancel()
-
-	_ = l.Commit(context.Background(), res1, Observations{})
-	_ = l.Commit(context.Background(), res2, Observations{})
-
-	// Both commits released their concurrency slots → two new reserves succeed.
-	for i := 0; i < 2; i++ {
-		res, err2 := l.Reserve(context.Background(), testScope, rules)
-		if err2 != nil {
-			t.Fatalf("post-cancel reserve %d: expected success, got %v", i+1, err2)
-		}
-		_ = l.Commit(context.Background(), res, Observations{})
-	}
-}
-
-// TestFixedWindow_HappyPath: amount=5, 5 succeed, 6th fails, new window resets.
-func TestFixedWindow_HappyPath(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rule := Rule{
-		Key:      "Route:test-route:rl-fw",
-		Name:     "requests on rl-fw",
-		Meter:    "requests",
-		Strategy: StrategyFixedWindow,
-		Amount:   5,
-		Window:   time.Minute,
-	}
-	rules := []Rule{rule}
-
-	for i := 0; i < 5; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve %d: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-	_, err := l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded on 6th, got %v", err)
-	}
-
-	now = now.Add(time.Minute)
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("expected success in new window, got %v", err)
-	}
-	_ = l.Commit(ctx, res, Observations{})
-}
-
-// TestTokenBucket_Refill: burst=5, exhaust, advance 12s (1 token refilled).
-func TestTokenBucket_Refill(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rule := Rule{
-		Key:      "Route:test-route:rl-tb",
-		Name:     "requests on rl-tb",
-		Meter:    "requests",
-		Strategy: StrategyTokenBucket,
-		Amount:   5,
-		Window:   time.Minute,
-	}
-	rules := []Rule{rule}
-
-	for i := 0; i < 5; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve %d: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-	_, err := l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded after burst exhausted, got %v", err)
-	}
-
-	// Advance 12s → 1 token refilled (5 tokens/60s = 1/12s).
-	now = now.Add(12 * time.Second)
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("expected 1 refilled token, got %v", err)
-	}
-	_ = l.Commit(ctx, res, Observations{})
-}
-
-// TestTokenBucket_RefundOnCancel: cancelled reservation returns token.
-func TestTokenBucket_RefundOnCancel(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rule := Rule{
-		Key:      "Route:test-route:rl-tb",
-		Name:     "requests on rl-tb",
-		Meter:    "requests",
-		Strategy: StrategyTokenBucket,
-		Amount:   1,
-		Window:   time.Minute,
-	}
-	rules := []Rule{rule}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	_, err = l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded, got %v", err)
-	}
-
-	_ = l.Commit(ctx, res, Observations{Cancelled: true})
-
-	res2, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("expected success after refund, got %v", err)
-	}
-	_ = l.Commit(ctx, res2, Observations{})
-}
-
-func TestTokenBucket_EmptyStrategyRefundsOnCancel(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rule := Rule{
-		Key:    "Route:test-route:rl-tb-default",
-		Name:   "requests on rl-tb-default",
-		Meter:  "requests",
-		Amount: 1,
-		Window: time.Minute,
-	}
-	rules := []Rule{rule}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exhausted bucket before refund, got %v", err)
-	}
-
-	if err := l.Commit(ctx, res, Observations{Cancelled: true}); err != nil {
-		t.Fatalf("commit cancel: %v", err)
-	}
-	res2, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve after cancel refund: %v", err)
-	}
-	_ = l.Commit(ctx, res2, Observations{})
-}
-
-// TestLeakyBucket_DrainAndRefund: queue fills, drains over time, and refund works.
-func TestLeakyBucket_DrainAndRefund(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rule := Rule{
-		Key:      "Route:test-route:rl-lb",
-		Name:     "requests on rl-lb",
-		Meter:    "requests",
-		Strategy: StrategyLeakyBucket,
-		Amount:   3,
-		Window:   time.Minute,
-	}
-	rules := []Rule{rule}
-
-	for i := 0; i < 3; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve %d: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-	_, err := l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded after queue full, got %v", err)
-	}
-
-	// Advance 20s → 1 slot drained (3/60s = 1/20s).
-	now = now.Add(20 * time.Second)
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("expected slot after drain, got %v", err)
-	}
-	_ = l.Commit(ctx, res, Observations{})
-}
-
-// TestLeakyBucket_RefundOnCancel
-func TestLeakyBucket_RefundOnCancel(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rule := Rule{
-		Key:      "Route:test-route:rl-lb",
-		Name:     "requests on rl-lb",
-		Meter:    "requests",
-		Strategy: StrategyLeakyBucket,
-		Amount:   1,
-		Window:   time.Minute,
-	}
-	rules := []Rule{rule}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	_, err = l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded, got %v", err)
-	}
-
-	_ = l.Commit(ctx, res, Observations{Cancelled: true})
-
-	res2, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("expected success after cancel refund, got %v", err)
-	}
-	_ = l.Commit(ctx, res2, Observations{})
-}
-
-// TestMultiRule_AllGranted: all rules have headroom → reservation succeeds.
-func TestMultiRule_AllGranted(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-
-	rules := []Rule{
-		{Key: "Policy:test-policy:tier-1", Name: "requests on tier-1", Meter: "requests", Strategy: StrategySlidingWindow, Amount: 10, Window: time.Minute},
-		{Key: "Policy:test-policy:tier-1", Name: "tokens.input on tier-1", Meter: "tokens.input", Strategy: StrategySlidingWindow, Amount: 100000, Window: time.Minute},
-		{Key: "Policy:test-policy:tier-1", Name: "tokens.output on tier-1", Meter: "tokens.output", Strategy: StrategySlidingWindow, Amount: 50000, Window: time.Minute},
-	}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("expected reservation to succeed, got: %v", err)
-	}
-	if err := l.Commit(ctx, res, Observations{
-		Tokens: map[string]int64{"input": 500, "output": 200},
-	}); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-}
-
-// TestMultiRule_ViolatingRuleNamed: one exhausted rule → 429 names that rule.
-func TestMultiRule_ViolatingRuleNamed(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-
-	rules := []Rule{
-		{Key: "Policy:test-policy:tier-1", Name: "requests on tier-1", Meter: "requests", Strategy: StrategySlidingWindow, Amount: 1, Window: time.Minute},
-		{Key: "Policy:test-policy:tier-1", Name: "tokens.input on tier-1", Meter: "tokens.input", Strategy: StrategySlidingWindow, Amount: 100000, Window: time.Minute},
-	}
-
-	res1, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("first reserve: %v", err)
-	}
-	_ = l.Commit(ctx, res1, Observations{Tokens: map[string]int64{"input": 100}})
-
-	_, err = l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected ErrExceeded, got: %v", err)
-	}
-	var ee *ExceededError
-	errors.As(err, &ee)
-	if ee.Rule.Meter != "requests" {
-		t.Fatalf("expected requests meter violated, got meter=%q", ee.Rule.Meter)
-	}
-}
-
-// TestMultiRule_PerMeterCommit: tokens.input/tokens.output incremented separately.
-func TestMultiRule_PerMeterCommit(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-
-	rules := []Rule{
-		{Key: "Policy:test-policy:tier-1", Name: "tokens.input", Meter: "tokens.input", Strategy: StrategySlidingWindow, Amount: 1000, Window: time.Minute},
-		{Key: "Policy:test-policy:tier-1", Name: "tokens.output", Meter: "tokens.output", Strategy: StrategySlidingWindow, Amount: 500, Window: time.Minute},
-	}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	if err := l.Commit(ctx, res, Observations{
-		Tokens: map[string]int64{"input": 900, "output": 400},
-	}); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-
-	// After committing 900 input and 400 output, commit 101 output more (total 501 > 500).
-	// Using > comparator: rate == amount is still allowed; rate > amount exceeds.
-	res2, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("second reserve: %v", err)
-	}
-	_ = l.Commit(ctx, res2, Observations{
-		Tokens: map[string]int64{"input": 100, "output": 101},
-	})
-	// Third reserve should now exceed the output limit (501 > 500).
-	_, err = l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected ErrExceeded after limits exhausted, got %v", err)
-	}
-}
-
-// TestMultiRule_BareTokensMeter: bare "tokens" meter sums all token values.
-func TestMultiRule_BareTokensMeter(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-
-	rules := []Rule{tokRule("Policy:test-policy:tier-1", "tokens", 1000, time.Minute)}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	if err := l.Commit(ctx, res, Observations{
-		Tokens: map[string]int64{"input": 300, "output": 200},
-	}); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-
-	// After 500 tokens consumed, a second commit of 501 (total 1001 > 1000) exceeds.
-	// Using > comparator: rate == amount is still allowed; rate > amount exceeds.
-	res2, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("second reserve: %v", err)
-	}
-	_ = l.Commit(ctx, res2, Observations{
-		Tokens: map[string]int64{"input": 251, "output": 250},
-	})
-	// Third reserve should now exceed the 1000-token limit (total 1001 > 1000).
-	_, err = l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected ErrExceeded after 1001 tokens consumed, got %v", err)
-	}
-}
-
-// TestSessionWindow_AnchorsOnFirstRequest
-func TestSessionWindow_AnchorsOnFirstRequest(t *testing.T) {
-	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	now := base
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rule := Rule{
-		Key:      "Route:test-route:rl-sw",
-		Name:     "requests on rl-sw",
-		Meter:    "requests",
-		Strategy: StrategySessionWindow,
-		Amount:   3,
-		Window:   5 * time.Hour,
-	}
-	rules := []Rule{rule}
-
-	for i := 0; i < 3; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve %d at anchor: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-	if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded at 4th, got %v", err)
-	}
-
-	// Mid-window: still exceeded.
-	now = base.Add(2 * time.Hour)
-	if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected still exceeded mid-window, got %v", err)
-	}
-
-	// After expiry+idle: fresh window anchors at arrival time.
-	now = base.Add(9 * time.Hour)
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("expected success after expiry+idle, got %v", err)
-	}
-	_ = l.Commit(ctx, res, Observations{})
-
-	// New window anchored at t=9h: advance to t=13h (still inside 5h window from 9h).
-	now = base.Add(13 * time.Hour)
-	for i := 0; i < 2; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve %d in new window: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-	if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded after 3 in new window, got %v", err)
-	}
-}
-
-// TestSessionWindow_RefundOnCancel
-func TestSessionWindow_RefundOnCancel(t *testing.T) {
-	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	now := base
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rule := Rule{
-		Key:      "Route:test-route:rl-sw",
-		Name:     "requests on rl-sw",
-		Meter:    "requests",
-		Strategy: StrategySessionWindow,
-		Amount:   2,
-		Window:   time.Hour,
-	}
-	rules := []Rule{rule}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	if err := l.Commit(ctx, res, Observations{Cancelled: true}); err != nil {
-		t.Fatalf("commit cancel: %v", err)
-	}
-
-	// 2 reservations should fit after refund.
-	for i := 0; i < 2; i++ {
-		r2, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve after refund %d: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, r2, Observations{})
-	}
-	if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded after 2 post-refund, got %v", err)
-	}
+	_ = mustExceed(t, l, "scope", rules)
 }

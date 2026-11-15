@@ -13,8 +13,8 @@ import (
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
-// cacheShards must be a power of two — the digest's first byte is masked to
-// pick a shard.
+// cacheShards must be a power of two no larger than 16 — the value of the
+// digest's first hex digit is masked to pick a shard.
 const cacheShards = 16
 
 // cacheEntry is one verified bearer, fixed at insert.
@@ -112,11 +112,17 @@ func (c *claimsCache) put(digest string, ent *cacheEntry) {
 	s.mu.Unlock()
 }
 
-// shardOf reads the digest's leading hex byte; a sha256 digest is uniform,
-// so this spreads evenly without hashing the string again.
+// shardOf reads the value of the digest's leading hex digit; a sha256 digest
+// is uniform, so this spreads evenly without hashing the string again. The
+// digit's ASCII code would not: '0'–'9' and 'a'–'f' overlap under the mask.
 func shardOf(digest string) int {
 	if digest == "" {
 		return 0
 	}
-	return int(digest[0]) & (cacheShards - 1)
+	c := digest[0]
+	n := int(c - '0')
+	if c >= 'a' {
+		n = int(c-'a') + 10
+	}
+	return n & (cacheShards - 1)
 }

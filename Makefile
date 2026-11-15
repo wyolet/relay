@@ -442,7 +442,7 @@ cover-check: ## per-package coverage vs scripts/coverage-tiers.txt
 BENCH_PKGS            := ./app/httpapi/inference ./auth/token ./app/limits/lua ./app/catalog
 BENCH_BASELINE        := scripts/bench-baseline.txt
 BENCH_ALLOC_TOLERANCE ?= 0
-BENCH_COUNT           ?= 1
+BENCH_COUNT           ?= 3
 
 # Piped through a temp file, not a pipeline: /bin/sh has no pipefail, so a
 # failing `go test` would otherwise be masked by the parser's exit status.

@@ -36,6 +36,17 @@ func (f *flakyModelGetter) Get(_ context.Context, id string) (*model.Model, erro
 	return nil, nil
 }
 
+// lateModel is a model a concurrent admin write committed after the initial reload.
+func lateModel(providerID string) *model.Model {
+	return &model.Model{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-late", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: providerID}},
+		Spec: model.Spec{
+			Snapshots: []model.Snapshot{{Name: "gpt-late-2025-01-01", OriginalName: "gpt-late-2025-01-01"}},
+			Pointer:   "gpt-late-2025-01-01",
+		},
+	}
+}
+
 // A drained NOTIFY event whose apply fails with a transient store error is
 // gone from the debouncer, so the listener must still converge on PG state.
 func TestNotify_TransientApplyFailureEventuallyApplied(t *testing.T) {
@@ -44,21 +55,10 @@ func TestNotify_TransientApplyFailureEventuallyApplied(t *testing.T) {
 
 	mut := &mutModList{models: models}
 	c := New(provs, hosts, pols, mut, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(ctx); err != nil {
-		t.Fatalf("initial reload: %v", err)
-	}
+	must(t, c.Reload(ctx))
 
 	// A concurrent admin write commits a new model; PG NOTIFY fires.
-	m3 := &model.Model{
-		Meta: meta.Metadata{
-			ID: meta.NewID(), Name: "gpt-late",
-			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provs[0].Meta.ID},
-		},
-		Spec: model.Spec{
-			Snapshots: []model.Snapshot{{Name: "gpt-late-2025-01-01", OriginalName: "gpt-late-2025-01-01"}},
-			Pointer:   "gpt-late-2025-01-01",
-		},
-	}
+	m3 := lateModel(provs[0].Meta.ID)
 	mut.models = append(append([]*model.Model{}, models...), m3)
 	getter := &flakyModelGetter{m: m3}
 
@@ -98,20 +98,9 @@ func TestNotify_FailedFallbackReloadRetriedNextFlush(t *testing.T) {
 
 	list := &failingModelList{mutModList: mutModList{models: models}}
 	c := New(provs, hosts, pols, list, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(ctx); err != nil {
-		t.Fatalf("initial reload: %v", err)
-	}
+	must(t, c.Reload(ctx))
 
-	m3 := &model.Model{
-		Meta: meta.Metadata{
-			ID: meta.NewID(), Name: "gpt-late",
-			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provs[0].Meta.ID},
-		},
-		Spec: model.Spec{
-			Snapshots: []model.Snapshot{{Name: "gpt-late-2025-01-01", OriginalName: "gpt-late-2025-01-01"}},
-			Pointer:   "gpt-late-2025-01-01",
-		},
-	}
+	m3 := lateModel(provs[0].Meta.ID)
 	list.models = append(append([]*model.Model{}, models...), m3)
 	list.fail = true
 
@@ -155,9 +144,7 @@ func TestNotify_FailedSettingsEventRequeued(t *testing.T) {
 	ctx := context.Background()
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(ctx); err != nil {
-		t.Fatalf("initial reload: %v", err)
-	}
+	must(t, c.Reload(ctx))
 	// Fails the incremental apply and the retry after the fallback reload.
 	store := &flakySettingsStore{failGets: 2, fakeSettingsStore: fakeSettingsStore{rows: map[string]*settings.Row{
 		settings.SectionParsing: {Section: settings.SectionParsing, Value: &settings.Parsing{RichParsing: false}},
@@ -167,8 +154,13 @@ func TestNotify_FailedSettingsEventRequeued(t *testing.T) {
 	l := &Listener{cat: c, deb: newDebouncer(time.Second)}
 	l.deb.push(notifyEvent{Kind: "settings", Op: "upsert", ID: settings.SectionParsing})
 	l.applyDrained(ctx)
+	if _, ok := c.settings.load()[settings.SectionParsing]; ok || store.gets != 2 {
+		t.Fatalf("after the failed flush: section applied = %v with %d store reads, want unapplied after the apply and its one retry", ok, store.gets)
+	}
 	l.applyDrained(ctx)
-	if _, ok := c.settings.load()[settings.SectionParsing]; !ok {
-		t.Fatalf("settings section %q never applied after a transient failure (store.Get calls: %d)", settings.SectionParsing, store.gets)
+
+	v, ok := c.settings.load()[settings.SectionParsing]
+	if p, _ := v.(*settings.Parsing); !ok || p == nil || p.RichParsing || store.gets != 3 {
+		t.Fatalf("after the next flush: section = %+v (present %v) with %d store reads, want the stored value on the third read", v, ok, store.gets)
 	}
 }

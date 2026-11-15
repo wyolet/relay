@@ -112,9 +112,7 @@ var modelFilter = filter.Schema[model.Model]{
 	Fields: []filter.Field[model.Model]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(m *model.Model) string { return m.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(m *model.Model) bool { return enabledTrue(m.Spec.Enabled) }},
-		{Name: "deprecated", Kind: filter.Bool, GetBool: func(m *model.Model) bool {
-			return m.Spec.Deprecation != nil || m.Spec.DeprecationDate != ""
-		}},
+		{Name: "deprecated", Kind: filter.Bool, GetBool: func(m *model.Model) bool { return deprecationStatus(m) != "" }},
 		{Name: "family", Kind: filter.String, Repeat: true, Sortable: true, Get: func(m *model.Model) string { return m.Spec.Family }},
 		{Name: "product_line", Kind: filter.String, Repeat: true, Sortable: true, Get: func(m *model.Model) string { return m.Spec.ProductLine }},
 		{Name: "license", Kind: filter.String, Get: func(m *model.Model) string { return m.Spec.License }},

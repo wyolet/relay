@@ -92,9 +92,6 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 		return nil, fmt.Errorf("canonical→anthropic: item.started: %w", err)
 	}
 
-	idx := s.blockIndex
-	s.blockIndex++
-
 	// Each Anthropic content block type requires different fields on the
 	// opening frame. Emitting the wrong shape (e.g. text:"" on tool_use)
 	// trips strict clients like Claude Code with `undefined.slice()` when
@@ -116,10 +113,16 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 			"input": map[string]any{},
 		}
 	case v1.ItemTypeReasoning:
+		if data := redactedThinkingData(e.ProviderData); data != "" {
+			cb = map[string]any{"type": "redacted_thinking", "data": data}
+			break
+		}
 		cb = map[string]any{"type": "thinking", "thinking": "", "signature": ""}
 	default:
 		return nil, nil
 	}
+	idx := s.blockIndex
+	s.blockIndex++
 	if s.blockIndexByCanonical == nil {
 		s.blockIndexByCanonical = make(map[int]int)
 	}
@@ -220,21 +223,28 @@ func thinkingSignature(providerData json.RawMessage) string {
 	return pd.Signature
 }
 
+// redactedThinkingData returns the encrypted data an Anthropic redacted_thinking block left in provider_data; anything else yields "".
+func redactedThinkingData(providerData json.RawMessage) string {
+	if len(providerData) == 0 {
+		return ""
+	}
+	var pd struct {
+		Type string `json:"type"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(providerData, &pd); err != nil || pd.Type != "redacted_thinking" {
+		return ""
+	}
+	return pd.Data
+}
+
 func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]byte, error) {
 	var e v1.GenerationCompletedEvent
 	if err := json.Unmarshal(data, &e); err != nil {
 		return nil, fmt.Errorf("canonical→anthropic: generation.completed: %w", err)
 	}
 
-	stopReason := canonicalFinishReasonToAnthropic(e.FinishReason, e.IncompleteDetails)
-	if e.Status == v1.StatusIncomplete && e.FinishReason == "" {
-		stopReason = "pause_turn"
-	}
-	if e.Status == v1.StatusFailed && e.FinishReason == "" {
-		// canonical: status=failed with no finish_reason must not surface as end_turn
-		// (rule 11); refusal is the nearest non-success Anthropic stop_reason.
-		stopReason = "refusal"
-	}
+	stopReason := canonicalFinishReasonToAnthropic(e.Status, e.FinishReason, e.IncompleteDetails)
 
 	deltaUsage := map[string]any{"output_tokens": 0}
 	if len(e.Usage) > 0 {

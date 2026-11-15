@@ -29,16 +29,12 @@ func TestHostKeysForHostUsesIndex(t *testing.T) {
 	zed, alpha, dead := mk("zed", nil), mk("alpha", nil), mk("dead", &off)
 	c := New(provList{}, hostList{h}, polList{tier}, modList{}, keyList{zed, alpha, dead}, rlList{},
 		rkList{}, rcList{}, bndList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	got := c.Current().HostKeysForHost(hostID)
 	if len(got) != 2 || got[0].Meta.Name != "alpha" || got[1].Meta.Name != "zed" {
 		t.Fatalf("pool = %v, want [alpha zed]", names(got))
 	}
-	if err := c.ApplyHostKeyDelete(alpha.Meta.ID); err != nil {
-		t.Fatalf("delete host key: %v", err)
-	}
+	must(t, c.ApplyHostKeyDelete(alpha.Meta.ID))
 	got = c.Current().HostKeysForHost(hostID)
 	if len(got) != 1 || got[0].Meta.Name != "zed" {
 		t.Fatalf("pool after delete = %v, want [zed]", names(got))
@@ -46,11 +42,7 @@ func TestHostKeysForHostUsesIndex(t *testing.T) {
 }
 
 func names(keys []*hostkey.HostKey) []string {
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, k.Meta.Name)
-	}
-	return out
+	return namesOf(keys, func(k *hostkey.HostKey) string { return k.Meta.Name })
 }
 
 // BenchmarkHostKeysForHost is the evidence for the index: the policy-less
@@ -68,9 +60,7 @@ func BenchmarkHostKeysForHost(b *testing.B) {
 	}
 	c := New(provList{}, hostList{h}, polList{tier}, modList{}, keyList(keys), rlList{},
 		rkList{}, rcList{}, bndList{})
-	if err := c.Reload(context.Background()); err != nil {
-		b.Fatal(err)
-	}
+	must(b, c.Reload(context.Background()))
 	s := c.Current()
 	b.ReportAllocs()
 	b.ResetTimer()

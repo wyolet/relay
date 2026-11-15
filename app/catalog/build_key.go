@@ -34,5 +34,7 @@ func sanitizeKey(k *key.Key, sas idSet) (*key.Key, bool) {
 		}
 	}
 	clean := *k
+	// Runtime state, not catalog state: it changes without a notify, so a snapshot copy would only be stale.
+	clean.Status = key.ObservedStatus{}
 	return &clean, true
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/go-cmp/cmp"
 	"slices"
 	"strings"
 	"testing"
@@ -55,21 +56,25 @@ func runMarkersSuite(t *testing.T, s kv.Scripter) {
 
 	t.Run("the same span id in another trace is another call", func(t *testing.T) {
 		mark(t, otlpreceiver.MarkerUsage, call(5, 1))
-		if got := mark(t, otlpreceiver.MarkerUsage, call(6, 1)); !got[0] {
-			t.Fatal("span 1 of trace 6 taken for span 1 of trace 5")
+		if got := mark(t, otlpreceiver.MarkerUsage, call(6, 1)); !slices.Equal(got, []bool{true}) {
+			t.Fatalf("mark = %v: span 1 of trace 6 taken for span 1 of trace 5", got)
 		}
 	})
 
 	t.Run("usage and content are marked independently", func(t *testing.T) {
 		mark(t, otlpreceiver.MarkerUsage, call(7, 1))
-		if got := mark(t, otlpreceiver.MarkerContent, call(7, 1)); !got[0] {
-			t.Fatal("content not fresh for a call whose usage is marked")
-		}
-		if got := mark(t, otlpreceiver.MarkerContent, call(7, 1)); got[0] {
-			t.Fatal("content fresh twice")
-		}
-		if got := mark(t, otlpreceiver.MarkerUsage, call(7, 1)); got[0] {
-			t.Fatal("marking content cleared the usage marker")
+		for _, step := range []struct {
+			kind otlpreceiver.MarkerKind
+			want bool
+			why  string
+		}{
+			{otlpreceiver.MarkerContent, true, "content not fresh for a call whose usage is marked"},
+			{otlpreceiver.MarkerContent, false, "content fresh twice"},
+			{otlpreceiver.MarkerUsage, false, "marking content cleared the usage marker"},
+		} {
+			if got := mark(t, step.kind, call(7, 1)); !slices.Equal(got, []bool{step.want}) {
+				t.Fatalf("mark = %v: %s", got, step.why)
+			}
 		}
 	})
 
@@ -107,14 +112,14 @@ func runMarkersSuite(t *testing.T, s kv.Scripter) {
 
 	t.Run("tenants do not see each other's markers", func(t *testing.T) {
 		mark(t, otlpreceiver.MarkerUsage, call(12, 1))
-		if got := markFor(t, "project-b", otlpreceiver.MarkerUsage, call(12, 1)); !got[0] {
-			t.Fatal("a call reported by one tenant is taken as recorded for another")
+		if got := markFor(t, "project-b", otlpreceiver.MarkerUsage, call(12, 1)); !slices.Equal(got, []bool{true}) {
+			t.Fatalf("mark = %v: a call reported by one tenant is taken as recorded for another", got)
 		}
 		if err := m.Unmark(t.Context(), "project-b", otlpreceiver.MarkerUsage, []otlpreceiver.Call{call(12, 1)}); err != nil {
 			t.Fatalf("Unmark: %v", err)
 		}
-		if got := mark(t, otlpreceiver.MarkerUsage, call(12, 1)); got[0] {
-			t.Fatal("one tenant's unmark removed another's marker")
+		if got := mark(t, otlpreceiver.MarkerUsage, call(12, 1)); !slices.Equal(got, []bool{false}) {
+			t.Fatalf("mark = %v: one tenant's unmark removed another's marker", got)
 		}
 	})
 }
@@ -138,6 +143,43 @@ func TestMarkers_StoreWithoutBatching(t *testing.T) {
 	// Registers the in-memory scripts, which the wrapper keeps NewMarkers from doing.
 	otlpreceiver.NewMarkers(s)
 	runMarkersSuite(t, scripterOnly{inner: s})
+}
+
+// recorder notes each script call a store is asked to run and answers every one with reply.
+type recorder struct {
+	calls []string
+	reply string
+}
+
+func (r *recorder) RunScript(_ context.Context, name, _ string, keys []string, args ...any) ([]byte, error) {
+	r.calls = append(r.calls, fmt.Sprintf("%s %v %v", name, keys, args))
+	return []byte(r.reply), nil
+}
+
+// One script call per trace, its keys under the tenant-and-trace hash tag, set for a day.
+func TestMarkers_KeysAndScriptCalls(t *testing.T) {
+	r := &recorder{reply: "1"}
+	m := otlpreceiver.NewMarkers(r)
+	calls := []otlpreceiver.Call{call(1, 1), call(2, 1), call(1, 2)}
+	one, two := "{otlp:project-a:"+call(1, 1).TraceID+"}", "{otlp:project-a:"+call(2, 1).TraceID+"}"
+
+	fresh, err := m.Mark(t.Context(), tenant, otlpreceiver.MarkerContent, calls)
+	// Trace 1 asked about two keys and got one answer: an error, and its calls recorded rather than lost.
+	if want := "otlpreceiver: mark returned 1 results for 2 keys"; err == nil || err.Error() != want || !slices.Equal(fresh, []bool{true, true, true}) {
+		t.Fatalf("fresh = %v err = %v, want all fresh and %q", fresh, err, want)
+	}
+	if err := m.Unmark(t.Context(), tenant, otlpreceiver.MarkerUsage, calls[1:]); err != nil {
+		t.Fatalf("Unmark: %v", err)
+	}
+	want := []string{
+		"otlpreceiver.mark [" + one + ":content:0000000000000001 " + one + ":content:0000000000000002] [86400000]",
+		"otlpreceiver.mark [" + two + ":content:0000000000000001] [86400000]",
+		"otlpreceiver.unmark [" + two + ":usage:0000000000000001] []",
+		"otlpreceiver.unmark [" + one + ":usage:0000000000000002] []",
+	}
+	if diff := cmp.Diff(want, r.calls); diff != "" {
+		t.Fatalf("script calls (-want +got):\n%s", diff)
+	}
 }
 
 // failingTrace fails every script call that touches one trace, like one unreachable shard.

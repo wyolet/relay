@@ -265,16 +265,44 @@ func TestSetRouteDisplayName(t *testing.T) {
 		}
 	}
 
-	for name, route := range map[string]string{"inline entry": "relay", "unknown route": "nope"} {
-		if err := SetRouteDisplayName(path, route, "x"); err == nil {
-			t.Errorf("%s: want error", name)
-		}
-	}
-	if err := SetRouteDisplayName(path, "relay", "x"); err == nil || !strings.Contains(err.Error(), "inline entry") {
-		t.Fatalf("inline route: err = %v", err)
+	if err := SetRouteDisplayName(path, "nope", "x"); err == nil {
+		t.Error("unknown route: want error")
 	}
 	if got := readFile(t, path); got != tableRoutesFile {
 		t.Fatal("a refused edit changed the file")
+	}
+}
+
+// An inline entry is rewritten on its line, its key and trailing comment kept;
+// a table gains the key after its last one.
+func TestSetRouteAccount(t *testing.T) {
+	body := strings.Replace(tableRoutesFile, `relay = { url = "https://relay.example" }`, `"re{lay}" = { url = "https://relay.example", auth = "subscription" } # shared {login}`, 1)
+	body = strings.Replace(body, `[routes.codex]`, `[routes.codex] # chatgpt`, 1)
+	path := writeRoutes(t, body)
+	if err := SetRouteAccount(path, "re{lay}", "sam@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetRouteDisplayName(path, "re{lay}", "Relay (sam)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetRouteAccount(path, "codex", "sam@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(body, `{ url = "https://relay.example", auth = "subscription" }`, `{ url = "https://relay.example", auth = "subscription", account = "sam@example.com", displayName = "Relay (sam)" }`, 1)
+	want = strings.Replace(want, "adapter = \"codex\"\n", "adapter = \"codex\"\naccount = \"sam@example.com\"\n", 1)
+	if got := readFile(t, path); got != want {
+		t.Fatalf("file:\n%s\nwant:\n%s", got, want)
+	}
+
+	if err := SetRouteAccount(path, "re{lay}", ""); err != nil {
+		t.Fatal(err)
+	}
+	f, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := f.Routes[0]; r.Account != "" || r.DisplayName != "Relay (sam)" {
+		t.Fatalf("after clearing the account: %+v", r)
 	}
 }
 

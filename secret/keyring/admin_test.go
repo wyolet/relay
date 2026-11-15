@@ -19,9 +19,7 @@ func TestRotateOldDecryptsStale(t *testing.T) {
 	old, oldID := mustEncrypt(t, r, "", "v1", "row")
 	c.Advance(time.Minute)
 	nk, err := r.Rotate(ctx, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if nk.ID == oldID || nk.State != keyring.Primary || nk.Wrapped == nil {
 		t.Fatalf("Rotate = %+v", nk)
 	}
@@ -90,16 +88,12 @@ func TestDestroyAgeCheckedByStore(t *testing.T) {
 	ringClock, storeClock := newClock(), newClock()
 	rs := newRows(memstore.WithClock(storeClock.Now))
 	r := newRing(t, rs.ms, ringClock, newKEK(t, 1))
-	if err := r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")); err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")))
 	oldID := rs.get("x").keyID
 	if _, err := r.Rotate(ctx, "s"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")); err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")))
 	ringClock.Advance(48 * time.Hour)
 	if err := r.Destroy(ctx, oldID); !errors.Is(err, keyring.ErrTooRecent) {
 		t.Fatalf("destroy with the ring's clock ahead: %v, want ErrTooRecent from the store", err)
@@ -114,9 +108,7 @@ func TestDestroy(t *testing.T) {
 	c := newClock()
 	rs := newRows(memstore.WithClock(c.Now))
 	r := newRing(t, rs.ms, c, newKEK(t, 1))
-	if err := r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")); err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")))
 	oldID := rs.get("x").keyID
 	oldSealed := rs.get("x").sealed
 	if err := r.Destroy(ctx, oldID); !errors.Is(err, keyring.ErrIsPrimary) {
@@ -143,9 +135,7 @@ func TestDestroy(t *testing.T) {
 		t.Fatalf("force destroy in use: %v", err)
 	}
 	// Rewrite the row under the new Primary, then destroy.
-	if err := r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")); err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")))
 	other := newRing(t, rs.ms, c, newKEK(t, 1)) // holds the old DEK
 	if err := r.Destroy(ctx, oldID); err != nil {
 		t.Fatalf("destroy: %v", err)
@@ -156,9 +146,7 @@ func TestDestroy(t *testing.T) {
 	if _, _, err := r.Decrypt(ctx, "s", oldSealed, []byte("x")); !errors.Is(err, keyring.ErrDestroyed) {
 		t.Fatalf("decrypt under destroyed key: %v", err)
 	}
-	if err := other.Reload(ctx, oldID); err != nil {
-		t.Fatal(err)
-	}
+	must(t, other.Reload(ctx, oldID))
 	if _, _, err := other.Decrypt(ctx, "s", oldSealed, []byte("x")); !errors.Is(err, keyring.ErrDestroyed) {
 		t.Fatalf("other ring after reload: %v", err)
 	}
@@ -179,9 +167,7 @@ func TestDestroy(t *testing.T) {
 	if _, err := r.Rotate(ctx, "s"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")); err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")))
 	if err := r.Destroy(ctx, prev); !errors.Is(err, keyring.ErrTooRecent) {
 		t.Fatalf("destroy fresh: %v", err)
 	}
@@ -202,9 +188,7 @@ func TestRewrap(t *testing.T) {
 	for i, scope := range []string{"", "a", "b", "a"} {
 		name := fmt.Sprint("r", i)
 		values[name] = "v" + name
-		if err := both.EncryptAndWrite(ctx, scope, []byte(values[name]), []byte(name), rs.writer(name, scope)); err != nil {
-			t.Fatal(err)
-		}
+		must(t, both.EncryptAndWrite(ctx, scope, []byte(values[name]), []byte(name), rs.writer(name, scope)))
 	}
 	if _, err := both.Rotate(ctx, "a"); err != nil { // leaves a DecryptOnly key in use
 		t.Fatal(err)
@@ -229,9 +213,7 @@ func TestRewrap(t *testing.T) {
 	}
 	// A ring holding only the new KEK reads everything; one holding only the old KEK keeps the DEKs it already unwrapped.
 	newOnly := newRing(t, rs.ms, c, k2)
-	if err := oldOnly.ReloadAll(ctx); err != nil {
-		t.Fatal(err)
-	}
+	must(t, oldOnly.ReloadAll(ctx))
 	for name, rw := range rs.snapshot() {
 		mustDecrypt(t, newOnly, rw.scope, rw.sealed, name, values[name])
 		mustDecrypt(t, oldOnly, rw.scope, rw.sealed, name, values[name])

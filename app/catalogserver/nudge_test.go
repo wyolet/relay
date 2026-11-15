@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/google/go-cmp/cmp"
 )
 
 // subscribe registers rc for testChannel through the real endpoint.
@@ -32,47 +32,41 @@ func failedTags(s *Server, k subKey) (int, bool) {
 	return sub.failedTags, true
 }
 
-func TestNudge_RetriesThreeTimesThenGivesUp(t *testing.T) {
-	s, res := newHookServer(t, true)
-	rc := newReceiver(t, false)
-	key := subscribe(t, s, res, rc)
-	rc.failReleases = -1
+func TestNudge_RetriesThreeTimes(t *testing.T) {
+	nudge := map[string]string{"type": "release", "channel": testChannel, "tag": "v0.1.1"}
+	for _, c := range []struct {
+		name                       string
+		failReleases               int
+		received                   []map[string]string
+		failedTags                 int
+		failed, gaveUp, deliveries float64
+	}{
+		{"receiver stays down: one failed tag", -1, []map[string]string{nudge, nudge, nudge, nudge}, 1, 4, 1, 0},
+		{"a retry succeeds", 2, []map[string]string{nudge, nudge, nudge}, 0, 2, 0, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, res := newHookServer(t, true)
+			rc := newReceiver(t, false)
+			key := subscribe(t, s, res, rc)
+			rc.failReleases = c.failReleases
 
-	s.deliver(t.Context(), testChannel, "v0.1.1", s.hooks.subs.live(testChannel, s.now()))
-	if n := rc.releaseCount(); n != 4 {
-		t.Fatalf("%d attempts, want 1 + 3 retries", n)
+			s.deliver(t.Context(), testChannel, "v0.1.1", s.hooks.subs.live(testChannel, s.now()))
+			rc.mu.Lock()
+			diff := cmp.Diff(c.received, rc.releases)
+			rc.mu.Unlock()
+			if diff != "" {
+				t.Fatalf("nudges received (-want +got):\n%s", diff)
+			}
+			if n, ok := failedTags(s, key); !ok || n != c.failedTags {
+				t.Fatalf("failed tags %d (kept %v), want %d", n, ok, c.failedTags)
+			}
+			for result, want := range map[string]float64{"failed": c.failed, "gave_up": c.gaveUp, "delivered": c.deliveries} {
+				wantCount(t, result+" nudges", s.metrics.nudges.WithLabelValues(result), want)
+			}
+		})
 	}
-	if n, ok := failedTags(s, key); !ok || n != 1 {
-		t.Fatalf("failed tags %d (kept %v), want 1", n, ok)
-	}
-	for result, want := range map[string]float64{"failed": 4, "gave_up": 1, "delivered": 0} {
-		if n := testutil.ToFloat64(s.metrics.nudges.WithLabelValues(result)); n != want {
-			t.Errorf("%s nudges %v, want %v", result, n, want)
-		}
-	}
-	if got := nudgeRetryDelays; len(got) != 3 || got[0] != 10*time.Second || got[1] != time.Minute || got[2] != 5*time.Minute {
-		t.Fatalf("production retry delays %v", got)
-	}
-}
-
-func TestNudge_RetrySucceeds(t *testing.T) {
-	s, res := newHookServer(t, true)
-	rc := newReceiver(t, false)
-	key := subscribe(t, s, res, rc)
-	rc.failReleases = 2
-
-	s.deliver(t.Context(), testChannel, "v0.1.1", s.hooks.subs.live(testChannel, s.now()))
-	if n := rc.releaseCount(); n != 3 {
-		t.Fatalf("%d attempts, want 3", n)
-	}
-	rc.mu.Lock()
-	last := rc.releases[2]
-	rc.mu.Unlock()
-	if last["type"] != "release" || last["channel"] != testChannel || last["tag"] != "v0.1.1" {
-		t.Fatalf("nudge body %v", last)
-	}
-	if n, _ := failedTags(s, key); n != 0 {
-		t.Fatalf("failed tags %d after a delivery, want 0", n)
+	if diff := cmp.Diff([]time.Duration{10 * time.Second, time.Minute, 5 * time.Minute}, nudgeRetryDelays); diff != "" {
+		t.Fatalf("production retry delays (-want +got):\n%s", diff)
 	}
 }
 
@@ -254,9 +248,7 @@ func TestNudge_RetryWaitsFromItsOwnFailure(t *testing.T) {
 	if n := slow.releaseCount(); n != 2 {
 		t.Fatalf("%d attempts at the slow receiver, want 2", n)
 	}
-	if n := testutil.ToFloat64(s.metrics.nudges.WithLabelValues("gave_up")); n != 1 {
-		t.Fatalf("gave_up %v, want 1", n)
-	}
+	wantCount(t, "gave_up", s.metrics.nudges.WithLabelValues("gave_up"), 1)
 }
 
 func TestNudge_NewerTagSupersedesPendingRetries(t *testing.T) {
@@ -282,18 +274,16 @@ func TestNudge_NewerTagSupersedesPendingRetries(t *testing.T) {
 	<-done
 
 	rc.mu.Lock()
-	var tags []string
-	for _, r := range rc.releases {
-		tags = append(tags, r["tag"])
-	}
+	diff := cmp.Diff([]map[string]string{
+		{"type": "release", "channel": testChannel, "tag": "v0.1.1"},
+		{"type": "release", "channel": testChannel, "tag": "v0.1.2"},
+	}, rc.releases)
 	rc.mu.Unlock()
-	if len(tags) != 2 || tags[0] != "v0.1.1" || tags[1] != "v0.1.2" {
-		t.Fatalf("nudged tags %v, want [v0.1.1 v0.1.2]", tags)
+	if diff != "" {
+		t.Fatalf("nudges received (-want +got):\n%s", diff)
 	}
 	for result, want := range map[string]float64{"superseded": 1, "gave_up": 0, "delivered": 1} {
-		if n := testutil.ToFloat64(s.metrics.nudges.WithLabelValues(result)); n != want {
-			t.Errorf("%s nudges %v, want %v", result, n, want)
-		}
+		wantCount(t, result+" nudges", s.metrics.nudges.WithLabelValues(result), want)
 	}
 	if n, _ := failedTags(s, sub.subKey); n != 0 {
 		t.Fatalf("failed tags %d, want 0", n)

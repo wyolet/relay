@@ -105,26 +105,20 @@ func (*ResponsesFunctionCallOutput) ResponsesItemType() ResponsesItemType {
 	return ResponsesItemTypeFunctionCallOutput
 }
 
-// MarshalJSON emits exactly one of output (string) or content (array). output
-// is REQUIRED on the wire, and an empty tool result ("") is valid — so unless
-// the content array actually has parts, emit output unconditionally (a
-// *string, non-nil even for ""). Keying on non-emptiness rather than non-nil
-// matters: a non-nil empty Content (parse round-trip of "content":[], or
-// every part dropped in conversion) would take the content branch, omitempty
-// would erase it, and the item would ship with NEITHER form — 400
-// ("Missing required parameter: 'input[N].output'").
+// MarshalJSON emits output as the parts array when Content has parts, else as
+// the string. output is REQUIRED on the wire (there is no content member), and
+// an empty tool result ("") is valid, so it is never omitted.
 func (f *ResponsesFunctionCallOutput) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type    ResponsesItemType `json:"type"`
-		CallID  string            `json:"call_id"`
-		Output  *string           `json:"output,omitempty"`
-		Content []ResponsesPart   `json:"content,omitempty"`
+		Type   ResponsesItemType `json:"type"`
+		CallID string            `json:"call_id"`
+		Output any               `json:"output"`
 	}
 	w := wire{Type: ResponsesItemTypeFunctionCallOutput, CallID: f.CallID}
 	if len(f.Content) > 0 {
-		w.Content = f.Content
+		w.Output = f.Content
 	} else {
-		w.Output = &f.Output
+		w.Output = f.Output
 	}
 	return json.Marshal(w)
 }
@@ -139,7 +133,13 @@ func (f *ResponsesFunctionCallOutput) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	f.CallID = raw.CallID
-	if len(raw.Output) > 0 {
+	if len(raw.Output) > 0 && raw.Output[0] == '[' {
+		parts, err := responsesUnmarshalContent(raw.Output)
+		if err != nil {
+			return fmt.Errorf("function_call_output.output: %w", err)
+		}
+		f.Content = parts
+	} else if len(raw.Output) > 0 {
 		if err := json.Unmarshal(raw.Output, &f.Output); err != nil {
 			return fmt.Errorf("function_call_output.output: %w", err)
 		}
@@ -248,15 +248,25 @@ func (*ResponsesRawItem) isResponsesItem()                       {}
 func (r *ResponsesRawItem) ResponsesItemType() ResponsesItemType { return r.Type }
 func (r *ResponsesRawItem) MarshalJSON() ([]byte, error)         { return r.Raw, nil }
 
-// responsesUnmarshalItem decodes a single item from the wire format.
-func responsesUnmarshalItem(data []byte) (ResponsesItem, error) {
+// responsesUnmarshalItem decodes a single item from the wire format; input marks a request input item.
+func responsesUnmarshalItem(data []byte, input bool) (ResponsesItem, error) {
 	var probe struct {
 		Type ResponsesItemType `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
-	switch probe.Type {
+	typ := probe.Type
+	// type is optional on an input message: the API reads a type-less input item with a role as a message.
+	if input && typ == "" {
+		var msg struct {
+			Role ResponsesRole `json:"role"`
+		}
+		if json.Unmarshal(data, &msg) == nil && msg.Role != "" {
+			typ = ResponsesItemTypeMessage
+		}
+	}
+	switch typ {
 	case ResponsesItemTypeMessage:
 		var v ResponsesMessage
 		if err := json.Unmarshal(data, &v); err != nil {
@@ -309,7 +319,7 @@ func responsesUnmarshalItems(data []byte) ([]ResponsesItem, error) {
 	}
 	items := make([]ResponsesItem, 0, len(raws))
 	for _, raw := range raws {
-		it, err := responsesUnmarshalItem(raw)
+		it, err := responsesUnmarshalItem(raw, true)
 		if err != nil {
 			return nil, err
 		}

@@ -23,7 +23,7 @@ func runPlainMatchesScript(t *testing.T, newStore func(t *testing.T) kvtest.Scri
 		{Meter: MeterSpend, Amount: 5000, Period: PeriodWeek},
 		{Meter: MeterSpend, Amount: 5000, Period: PeriodDay, Alert: true},
 	}
-	counts := [][2]int64{{0, 0}, {99, 0}, {100, 0}, {60, 80}, {40, 120}, {1000, 0}, {700, 600}, {4999, 0}, {5000, 0}, {0, 300}}
+	counts := [][2]int64{{0, 0}, {99, 0}, {100, 0}, {60, 80}, {40, 120}, {1000, 0}, {700, 600}, {2000, 500}, {4999, 0}, {5000, 0}, {0, 300}}
 	offsets := []time.Duration{0, 1500 * time.Millisecond, 29 * time.Second, 59*time.Second + 999*time.Millisecond}
 	base := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
 	n := 0

@@ -57,8 +57,8 @@ func ccUsageToCanonical(u *Usage) usage.Tokens {
 }
 
 // canonicalUsageToCC maps a canonical orthogonal-meter map back to
-// CC's Usage block. prompt_tokens is reconstructed as input +
-// cache_read (CC's convention). total_tokens is prompt + completion —
+// CC's Usage block. prompt_tokens counts every input token (input +
+// cache_read + cache_creation), as OpenAI's does. total_tokens is prompt + completion —
 // NOT Tokens.Sum(): reasoning/audio are sub-breakdowns already inside
 // completion, so summing the whole map double-counts them (OpenAI's own
 // total_tokens is just input_tokens + output_tokens).
@@ -67,18 +67,24 @@ func canonicalUsageToCC(t usage.Tokens) *Usage {
 		return nil
 	}
 	cached := int(t["cache_read"])
-	prompt := int(t["input"]) + cached
+	prompt := int(t.PromptTokens())
 	completion := int(t["output"])
 	cu := &Usage{
 		PromptTokens:     prompt,
 		CompletionTokens: completion,
 		TotalTokens:      prompt + completion,
 	}
-	if cached > 0 {
-		cu.PromptDetails = &PromptTokenDetails{CachedTokens: cached}
+	if pd := (PromptTokenDetails{CachedTokens: cached, AudioTokens: int(t["audio_input"])}); pd != (PromptTokenDetails{}) {
+		cu.PromptDetails = &pd
 	}
-	if r := int(t["reasoning"]); r > 0 {
-		cu.CompletionDetails = &CompletionTokenDetails{ReasoningTokens: r}
+	cd := CompletionTokenDetails{
+		ReasoningTokens:          int(t["reasoning"]),
+		AudioTokens:              int(t["audio_output"]),
+		AcceptedPredictionTokens: int(t["accepted_prediction"]),
+		RejectedPredictionTokens: int(t["rejected_prediction"]),
+	}
+	if cd != (CompletionTokenDetails{}) {
+		cu.CompletionDetails = &cd
 	}
 	return cu
 }

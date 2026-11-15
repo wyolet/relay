@@ -6,6 +6,7 @@
 package pipeline
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -24,6 +25,7 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/settle"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -79,6 +81,11 @@ type Request struct {
 	// Hops are the route's pools in failover order, each with the credentials that may serve and the counters each one's request must fit. No slot in any hop → ErrNoKeys. Every hop must speak the Adapter's wire shape: the body is built once.
 	Hops []plan.RouteHop
 
+	// HopBody, when set, returns the body to send to hop: Body itself unless the hop's host rewrites a body in BodyShape, plus the top-level keys the rewrite dropped. It must not modify Body. Run calls it on the first attempt at each hop, so a failover sends each host its own form.
+	HopBody func(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []string)
+	// BodyShape is the wire shape Body is in, handed to HopBody.
+	BodyShape adapters.Name
+
 	ModelName string
 
 	// UpstreamModel is the resolved upstream wire name (routing's
@@ -108,6 +115,8 @@ type Result struct {
 	Headers http.Header
 	Body    io.ReadCloser
 	KeyHash string
+	// BodyDropped are the keys Request.HopBody dropped from the body the serving hop was sent.
+	BodyDropped []string
 }
 
 // Pipeline orchestrates requests. Construct once at boot.
@@ -235,10 +244,14 @@ func readBodyCapped(resp *http.Response, max int) []byte {
 	defer resp.Body.Close()
 	var src io.Reader = resp.Body
 	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
-		gr, err := gzip.NewReader(resp.Body)
-		if err == nil {
-			defer gr.Close()
-			src = gr
+		// Sniff the magic without consuming it, so a body mislabelled as gzip is kept as sent.
+		br := bufio.NewReader(resp.Body)
+		src = br
+		if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+			if gr, err := gzip.NewReader(br); err == nil {
+				defer gr.Close()
+				src = gr
+			}
 		}
 	}
 	buf := make([]byte, max)
@@ -332,7 +345,7 @@ func (e *UpstreamUnreachableError) Unwrap() error { return e.Cause }
 func (p *Pipeline) makeResult(req *Request, st *runState, resp *http.Response, call *upstreamCall) *Result {
 	status := resp.StatusCode
 	requestBytes := len(req.Body)
-	req.Body = nil
+	req.Body, st.body = nil, nil
 	if req.Lifecycle != nil {
 		req.Lifecycle.Streamed = req.Stream
 		// Stamp the outcome so the metrics stream observer (whose Fill fan-out
@@ -411,10 +424,11 @@ func (p *Pipeline) makeResult(req *Request, st *runState, resp *http.Response, c
 	}
 
 	return &Result{
-		Status:  status,
-		Headers: resp.Header,
-		Body:    body,
-		KeyHash: st.cur.slot.Credential.KeyHash,
+		Status:      status,
+		Headers:     resp.Header,
+		Body:        body,
+		KeyHash:     st.cur.slot.Credential.KeyHash,
+		BodyDropped: st.bodyDropped,
 	}
 }
 

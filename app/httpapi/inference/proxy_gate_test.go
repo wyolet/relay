@@ -15,18 +15,10 @@ import (
 	"github.com/wyolet/relay/pkg/httpheader"
 )
 
-// poisonBody fails the test when read: a refused request must cost no body read.
-type poisonBody struct{ t *testing.T }
-
-func (b poisonBody) Read([]byte) (int, error) {
-	b.t.Error("request body was read")
-	return 0, io.ErrUnexpectedEOF
-}
-
 // poisonedProxyRequest is a proxy-mode request whose body must never be read; an empty relayKey makes it anonymous.
 func poisonedProxyRequest(t *testing.T, relayKey string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
-	r.Body = io.NopCloser(poisonBody{t})
+	r.Body = io.NopCloser(unreadBody{t})
 	r.Header.Set(httpheader.HeaderProxyMode, httpheader.ProxyModeValueProxy)
 	r.Header.Set("Authorization", "Bearer upstream-key")
 	if relayKey != "" {
@@ -100,7 +92,7 @@ func TestProxyModeRefusalComesAfterTheCredential(t *testing.T) {
 		var reached bool
 		w := httptest.NewRecorder()
 		gatedEdge(d, &reached).ServeHTTP(w, poisonedProxyRequest(t, tc.relayKey))
-		if w.Code != tc.status || errCode(t, w.Body.Bytes()) != tc.code {
+		if w.Code != tc.status || envelopeOf(t, w).Code != tc.code {
 			t.Fatalf("%s: got %d %s, want %d %s", tc.relayKey, w.Code, w.Body, tc.status, tc.code)
 		}
 	}
@@ -108,26 +100,25 @@ func TestProxyModeRefusalComesAfterTheCredential(t *testing.T) {
 }
 
 func TestProxyModeRefusal(t *testing.T) {
+	const disabled = "proxy mode is not enabled on this relay"
 	for _, tc := range []struct {
-		name   string
-		pm     *settings.ProxyMode
-		mode   Mode
-		status int
-		code   string
+		name      string
+		pm        *settings.ProxyMode
+		mode      Mode
+		status    int
+		code, msg string
 	}{
-		{"no setting", nil, ModeProxyAuthed, http.StatusForbidden, "proxy_disabled"},
-		{"disabled, authed", &settings.ProxyMode{}, ModeProxyAuthed, http.StatusForbidden, "proxy_disabled"},
-		{"disabled, anonymous allowed", &settings.ProxyMode{AllowUnauthenticated: true}, ModeProxyAnonymous, http.StatusForbidden, "proxy_disabled"},
-		{"enabled, authed", &settings.ProxyMode{Enabled: true}, ModeProxyAuthed, 0, ""},
-		{"enabled, anonymous not allowed", &settings.ProxyMode{Enabled: true}, ModeProxyAnonymous, http.StatusUnauthorized, "unauthenticated"},
-		{"enabled, anonymous allowed", &settings.ProxyMode{Enabled: true, AllowUnauthenticated: true}, ModeProxyAnonymous, 0, ""},
+		{"no setting", nil, ModeProxyAuthed, http.StatusForbidden, "proxy_disabled", disabled},
+		{"no setting, anonymous", nil, ModeProxyAnonymous, http.StatusForbidden, "proxy_disabled", disabled},
+		{"disabled, authed", &settings.ProxyMode{}, ModeProxyAuthed, http.StatusForbidden, "proxy_disabled", disabled},
+		{"disabled, anonymous allowed", &settings.ProxyMode{AllowUnauthenticated: true}, ModeProxyAnonymous, http.StatusForbidden, "proxy_disabled", disabled},
+		{"enabled, authed", &settings.ProxyMode{Enabled: true}, ModeProxyAuthed, 0, "", ""},
+		{"enabled, anonymous not allowed", &settings.ProxyMode{Enabled: true}, ModeProxyAnonymous, http.StatusUnauthorized, "unauthenticated", "anonymous proxy traffic is not enabled on this relay"},
+		{"enabled, anonymous allowed", &settings.ProxyMode{Enabled: true, AllowUnauthenticated: true}, ModeProxyAnonymous, 0, "", ""},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			status, code, _ := proxyModeRefusal(tc.pm, tc.mode)
-			if status != tc.status || code != tc.code {
-				t.Fatalf("got %d %q, want %d %q", status, code, tc.status, tc.code)
-			}
-		})
+		if status, code, msg := proxyModeRefusal(tc.pm, tc.mode); status != tc.status || code != tc.code || msg != tc.msg {
+			t.Errorf("%s: got %d %q %q, want %d %q %q", tc.name, status, code, msg, tc.status, tc.code, tc.msg)
+		}
 	}
 }
 

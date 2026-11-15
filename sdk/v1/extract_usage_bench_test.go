@@ -25,7 +25,7 @@ var benchTranslators = []struct {
 	name string
 	tr   Translator
 }{
-	{"canonical", fakeTranslator{}},
+	{"canonical", IdentityTranslator{}},
 	{"translated", passTranslator{}},
 }
 

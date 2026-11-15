@@ -27,7 +27,10 @@
           "type": "output_text",
           "text": "No. 221 = 13 × 17."
         }
-      ]
+      ],
+      "provider_data": {
+        "thoughtSignature": "CtwBAdHtim9AnswerSignature"
+      }
     }
   ],
   "usage": {

@@ -81,7 +81,8 @@ type proxyShapeCall struct {
 	length    int64
 }
 
-func serveProxyShape(d Deps, req proxyShapeCall) *httptest.ResponseRecorder {
+// request is the call as the classifier and credential middleware leave it.
+func (req proxyShapeCall) request(d Deps) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", req.body)
 	r.ContentLength = req.length
 	mode := ModeProxyAnonymous
@@ -92,8 +93,12 @@ func serveProxyShape(d Deps, req proxyShapeCall) *httptest.ResponseRecorder {
 	if req.principal != nil {
 		ctx = withPrincipal(ctx, d.Catalog.Current(), req.principal, req.principal.Key)
 	}
+	return r.WithContext(ctx)
+}
+
+func serveProxyShape(d Deps, req proxyShapeCall) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
-	handleShape(d.Specs.Spec(adapters.Anthropic), d, w, r.WithContext(ctx))
+	handleShape(d.Specs.Spec(adapters.Anthropic), d, w, req.request(d))
 	return w
 }
 

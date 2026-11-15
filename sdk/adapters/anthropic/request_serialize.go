@@ -39,17 +39,19 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	// max_tokens: always required by Anthropic wire.
 	maxTokens := defaultMaxTokensCanonical
 
-	// Track the caller's tool choice separately so we can decide whether to
-	// override it with the structured-output forced-tool choice below.
 	var callerToolChoice *v1.ToolChoice
 	var callerParallel *bool
 
 	// Tools are task-level (req.Tools), shared across models — not per-model.
 	if tc := req.Tools; tc != nil {
+		allowed := allowedToolNames(tc.Choice)
 		for _, tool := range tc.Definitions {
 			ft, ok := tool.(*v1.FunctionTool)
 			if !ok {
 				return nil, fmt.Errorf("anthropic serialize_request: unsupported tool type %T", tool)
+			}
+			if allowed != nil && !allowed[ft.Name] {
+				continue
 			}
 			schema := ft.Parameters
 			if schema == nil {
@@ -76,7 +78,7 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 	}
 
-	if opts, ok := req.ModelConfig[model]; ok && opts != nil {
+	if opts := req.ModelOptsFor(model); opts != nil {
 		if opts.Sampling != nil {
 			s := opts.Sampling
 			out.Temperature = s.Temperature
@@ -132,44 +134,32 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			out.Temperature, out.TopP, out.TopK = nil, nil, nil
 		}
 
-		// Structured output via forced-tool trick. Anthropic has no native
-		// response_format/json_schema param, so we inject a synthetic tool and
-		// force the model to call it. ParseResponse/stream unwrap it back to
-		// plain text so the caller sees a normal completed text response.
 		// canonical: Output.Verbosity dropped — the Messages API has no
 		// verbosity control.
 		if opts.Output != nil && opts.Output.Format != nil {
 			f := opts.Output.Format
-			// canonical: Format.Name/Description/Strict dropped — the
-			// structured-output tool uses a fixed name and description, and
-			// Anthropic tools take no strict flag.
-			if f.Type == "json_schema" || f.Type == "json_object" {
-				// canonical: Output.Format ignored when caller forces their own
-				// tool choice — their explicit intent wins over structured output.
-				callerForces := callerToolChoice != nil &&
-					(callerToolChoice.Mode == "required" || callerToolChoice.Mode == "function")
-				if !callerForces {
-					schema := f.Schema
-					if len(schema) == 0 || f.Type == "json_object" {
-						schema = defaultJSONObjectSchema
-					}
-					out.Tools = append(out.Tools, anthropicCanonTool{
-						Name:                structuredOutputToolName,
-						Description:         "Return the response as JSON.",
-						InputSchema:         schema,
-						EagerInputStreaming: out.Stream,
-					})
-					out.ToolChoice = map[string]any{
-						"type": "tool",
-						"name": structuredOutputToolName,
-					}
+			// canonical: Format.Name/Description/Strict dropped — output_config.format
+			// takes only a schema, and its decoding is always constrained.
+			switch f.Type {
+			case "text":
+			case "json_schema", "json_object":
+				// Native structured output takes only a strict schema, and an
+				// object schema must close additionalProperties, so "any JSON
+				// object" has no form here.
+				if f.Type == "json_object" || len(f.Schema) == 0 {
+					return nil, fmt.Errorf("anthropic serialize_request: %w: structured output needs a JSON schema (json_object has no Anthropic equivalent)", v1.ErrUnsupportedRequest)
 				}
+				if out.OutputConfig == nil {
+					out.OutputConfig = &anthropicOutputConfig{}
+				}
+				out.OutputConfig.Format = &anthropicOutputFormat{Type: "json_schema", Schema: f.Schema}
+			default:
+				return nil, fmt.Errorf("anthropic serialize_request: %w: response format type %q", v1.ErrUnsupportedRequest, f.Type)
 			}
 		}
 	}
 
-	// Apply the caller's tool choice only when structured-output didn't override it.
-	if out.ToolChoice == nil && callerToolChoice != nil {
+	if callerToolChoice != nil {
 		out.ToolChoice = canonicalToolChoiceToAnthropic(callerToolChoice, callerParallel)
 	}
 
@@ -192,6 +182,9 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	msgs, sysFromItems, err := canonicalItemsToAnthropic(input, cacheTTL)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic serialize_request: %w", err)
+	}
+	if len(msgs) == 0 {
+		return nil, fmt.Errorf("anthropic serialize_request: %w: no messages to send", v1.ErrUnsupportedRequest)
 	}
 	out.Messages = msgs
 	for _, extra := range []string{sysFromItems, hoistedSys} {
@@ -227,6 +220,18 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	trimMessageBreakpoints(out.Messages, fixedBreakpoints)
 
 	return json.Marshal(out)
+}
+
+// allowedToolNames returns the set a choice restricts the model to, or nil when every tool is callable. tool_choice has no allowed list here, so the request carries only these tools; a conversation that changes the list between turns therefore changes `tools`, which invalidates earlier thinking blocks on models that check their prefix.
+func allowedToolNames(tc *v1.ToolChoice) map[string]bool {
+	if tc == nil || len(tc.Allowed) == 0 || (tc.Mode != "auto" && tc.Mode != "required") {
+		return nil
+	}
+	names := make(map[string]bool, len(tc.Allowed))
+	for _, n := range tc.Allowed {
+		names[n] = true
+	}
+	return names
 }
 
 // canonicalToolChoiceToAnthropic converts canonical ToolChoice → Anthropic tool_choice map.

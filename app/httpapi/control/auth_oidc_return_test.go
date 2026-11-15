@@ -216,39 +216,46 @@ func TestOIDCReturnTo_ProviderErrorRedirects(t *testing.T) {
 	}
 }
 
-// Each refusal relay decides maps to its code and status: as the JSON envelope without a return target, as ?error=<code> with one.
+// Each refusal relay decides maps to its code, status and message: as the JSON envelope without a return target, as ?error=<code> with one. A refused sign-in mints no session, links nothing and leaves one denied audit row naming the account, or the identity when there is none.
 func TestOIDCFailureCodes(t *testing.T) {
+	const identity = "<identity>"
 	cases := []struct {
-		code   string
-		status int
-		setup  func(t *testing.T) *oidcHarness
+		code    string
+		status  int
+		message string
+		denied  string
+		// sessions and created are the LoginOIDC calls made and the accounts provisioned before the refusal.
+		sessions, created int
+		setup             func(t *testing.T) *oidcHarness
 	}{
-		{"account_disabled", http.StatusUnauthorized, func(t *testing.T) *oidcHarness {
+		{"account_disabled", http.StatusUnauthorized, "account is disabled; contact your administrator", "alice", 0, 0, func(t *testing.T) *oidcHarness {
 			h := newTestOIDC(t, newFakeIdP(t), "open")
 			_ = h.users.Upsert(context.Background(), &user.User{ID: "u1", Username: "alice", OIDCSubject: h.subject(), Disabled: true})
 			return h
 		}},
-		{"registration_closed", http.StatusForbidden, func(t *testing.T) *oidcHarness {
+		{"registration_closed", http.StatusForbidden, "no account for this identity (registration is closed)", identity, 0, 0, func(t *testing.T) *oidcHarness {
 			return newTestOIDC(t, newFakeIdP(t), "closed")
 		}},
-		{"email_in_use", http.StatusForbidden, func(t *testing.T) *oidcHarness {
+		// An account with no identity linked, as SCIM or YAML creates, is not linked on its email alone.
+		{"email_in_use", http.StatusForbidden, "an account with this email already exists; an administrator must link it to this sign-in", identity, 0, 0, func(t *testing.T) *oidcHarness {
 			h := newTestOIDC(t, newFakeIdP(t), "open")
 			_ = h.users.Upsert(context.Background(), &user.User{ID: "u1", Username: "alice-scim", Email: h.idp.email})
 			return h
 		}},
-		{"account_ambiguous", http.StatusConflict, func(t *testing.T) *oidcHarness {
+		// Two SCIM clients provisioned the claimed id.
+		{"account_ambiguous", http.StatusConflict, "this sign-in matches more than one provisioned account; an administrator must resolve it", identity, 0, 0, func(t *testing.T) *oidcHarness {
 			h := newLinkOIDC(t, "open")
 			h.users.provisioned(&user.User{ID: "u1", Username: "ada"}, "obj-1")
 			h.users.provisioned(&user.User{ID: "u2", Username: "ada-okta"}, "obj-1")
 			return h
 		}},
-		{"identity_conflict", http.StatusConflict, func(t *testing.T) *oidcHarness {
+		{"identity_conflict", http.StatusConflict, "the provisioned account is linked to another sign-in", identity, 0, 0, func(t *testing.T) *oidcHarness {
 			h := newLinkOIDC(t, "closed")
 			h.users.provisioned(&user.User{ID: "u1", Username: "ada"}, "obj-1")
 			h.users.beforeLink = func() { h.users.byName["ada"].OIDCSubject = "https://other.example|x" }
 			return h
 		}},
-		{"login_failed", http.StatusInternalServerError, func(t *testing.T) *oidcHarness {
+		{"login_failed", http.StatusInternalServerError, "session create failed", "alice", 1, 1, func(t *testing.T) *oidcHarness {
 			h := newTestOIDC(t, newFakeIdP(t), "open")
 			h.sess.err = errors.New("kv down")
 			return h
@@ -256,11 +263,16 @@ func TestOIDCFailureCodes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.code, func(t *testing.T) {
-			rec := tc.setup(t).signIn(httptest.NewRequest("GET", "http://control.test/api/auth/oidc/start", nil))
-			var env struct{ Error struct{ Type, Code string } }
-			if rec.Code != tc.status || json.Unmarshal(rec.Body.Bytes(), &env) != nil || env.Error.Type != "authentication_error" || env.Error.Code != tc.code {
-				t.Fatalf("without return_to: %d %s, want %d %s", rec.Code, rec.Body.String(), tc.status, tc.code)
+			h := tc.setup(t)
+			accounts, identities := len(h.users.byName), len(h.users.bySubject)
+			wantOIDCError(t, h.signIn(httptest.NewRequest("GET", "http://control.test/api/auth/oidc/start", nil)), tc.status, tc.code, tc.message)
+			if h.sess.calls != tc.sessions || h.users.links != 0 || len(h.users.byName)-accounts != tc.created || len(h.users.bySubject)-identities != tc.created {
+				t.Errorf("sessions %d, links %d, accounts %d (was %d), identities %d (was %d)", h.sess.calls, h.users.links, len(h.users.byName), accounts, len(h.users.bySubject), identities)
 			}
+			if tc.denied == identity {
+				tc.denied = h.subject()
+			}
+			wantDenied(t, h.events(), tc.denied)
 		})
 		t.Run(tc.code+" with return_to", func(t *testing.T) {
 			const target = "http://control.test/login?next=%2Fkeys"

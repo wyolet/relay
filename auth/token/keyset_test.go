@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // sharedStore stands in for storage every replica reads, counting loads.
@@ -67,6 +69,14 @@ func TestKeySet_SignAndVerifyAcrossARotation(t *testing.T) {
 	store := NewStaticStore(Keys{Signing: oldKey})
 	ks := loaded(t, store, KeySetOptions{})
 
+	verify := func(tok string, wantSub string, wantErr error) {
+		t.Helper()
+		got, err := Verify[testClaims](ctx, ks, tok)
+		if err != wantErr || got.Sub != wantSub {
+			t.Errorf("Verify = (sub %q, %v), want (sub %q, %v)", got.Sub, err, wantSub, wantErr)
+		}
+	}
+
 	old, err := ks.Sign(testClaims{Sub: "user:u1"})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
@@ -74,44 +84,81 @@ func TestKeySet_SignAndVerifyAcrossARotation(t *testing.T) {
 	if HeaderKeyID(old) != KeyID(pubOf(oldKey)) {
 		t.Fatalf("kid = %q, want KeyID of the signing key", HeaderKeyID(old))
 	}
-	bare, err := Sign(oldKey, "", testClaims{Sub: "user:bare"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	bare := mustSign(t, oldKey, "", testClaims{Sub: "user:bare"})
+	verify(old, "user:u1", nil)
+	verify(bare, "user:bare", nil)
 
-	store.Set(Keys{Signing: newKey, Previous: []ed25519.PublicKey{pubOf(oldKey)}})
+	// The previous list repeats both keys: each must still be published once.
+	store.Set(Keys{Signing: newKey, Previous: []ed25519.PublicKey{pubOf(oldKey), pubOf(newKey), pubOf(oldKey)}})
 	if err := ks.Reload(ctx); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
 	fresh, err := ks.Sign(testClaims{Sub: "user:u2"})
-	if err != nil {
-		t.Fatal(err)
+	must(t, err)
+	if HeaderKeyID(fresh) != KeyID(pubOf(newKey)) {
+		t.Fatalf("kid after rotation = %q, want KeyID of the new signing key", HeaderKeyID(fresh))
 	}
-	for name, tok := range map[string]string{"new key": fresh, "previous key": old} {
-		if _, err := Verify[testClaims](ctx, ks, tok); err != nil {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
+	verify(fresh, "user:u2", nil)
+	verify(old, "user:u1", nil)
 	// A kid-less token is checked against the current key only.
-	if _, err := Verify[testClaims](ctx, ks, bare); !errors.Is(err, ErrSignature) {
-		t.Errorf("bare token under the previous key: %v, want ErrSignature", err)
+	verify(bare, "", ErrSignature)
+	// The old key's signature under the new key's kid, and the reverse.
+	verify(mustSign(t, oldKey, KeyID(pubOf(newKey)), testClaims{Sub: "user:forged"}), "", ErrSignature)
+	verify(mustSign(t, newKey, KeyID(pubOf(oldKey)), testClaims{Sub: "user:forged"}), "", ErrSignature)
+
+	if d := cmp.Diff([]ed25519.PublicKey{pubOf(newKey), pubOf(oldKey)}, ks.PublicKeys()); d != "" {
+		t.Errorf("PublicKeys, want current then previous (-want +got):\n%s", d)
 	}
-	if got := ks.PublicKeys(); len(got) != 2 || !got[0].Equal(pubOf(newKey)) || !got[1].Equal(pubOf(oldKey)) {
-		t.Errorf("PublicKeys = %v, want current then previous", got)
-	}
+	wantSet, err := JWKSet(pubOf(newKey), pubOf(oldKey))
+	must(t, err)
 	set, err := ks.JWKSet()
-	if err != nil || len(set.Keys) != 2 || set.Keys[0].Kid != KeyID(pubOf(newKey)) {
-		t.Errorf("JWKSet = %+v, %v; want both keys, current first", set, err)
+	if d := cmp.Diff(wantSet, set); d != "" || err != nil {
+		t.Errorf("JWKSet (%v) (-want +got):\n%s", err, d)
+	}
+	if d := cmp.Diff(Keys{Signing: newKey, Current: pubOf(newKey), Previous: []ed25519.PublicKey{pubOf(oldKey), pubOf(newKey), pubOf(oldKey)}}, ks.Keys()); d != "" {
+		t.Errorf("Keys (-want +got):\n%s", d)
+	}
+
+	// Rotated out: the old key no longer verifies anything.
+	store.Set(Keys{Signing: newKey})
+	if err := ks.Reload(ctx); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	ks.opts.MinReloadInterval = -1
+	verify(old, "", ErrUnknownKey)
+	verify(fresh, "user:u2", nil)
+
+	// No keys: tokens are off.
+	store.Set(Keys{})
+	if err := ks.Reload(ctx); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	verify(fresh, "", ErrUnknownKey)
+	verify(bare, "", ErrUnknownKey)
+	if ks.Current() != nil || len(ks.PublicKeys()) != 0 {
+		t.Errorf("an empty store left keys installed: %v", ks.PublicKeys())
+	}
+}
+
+func TestKeySet_BeforeAnyLoad(t *testing.T) {
+	ks := NewKeySet(&StaticStore{}, KeySetOptions{MinReloadInterval: -1})
+	if ks.Current() != nil || ks.PublicKeys() != nil || !cmp.Equal(ks.Keys(), Keys{}) {
+		t.Errorf("an unloaded key set holds keys: %+v", ks.Keys())
+	}
+	if _, err := ks.PublicKey(context.Background(), ""); err != ErrUnknownKey {
+		t.Errorf("PublicKey = %v, want ErrUnknownKey", err)
+	}
+	if set, err := ks.JWKSet(); err != nil || set.Keys == nil || len(set.Keys) != 0 {
+		t.Errorf("JWKSet = %+v, %v; want an empty, non-nil key list", set, err)
+	}
+	if _, err := ks.Sign(testClaims{}); err != ErrNoSigningKey {
+		t.Errorf("Sign = %v, want ErrNoSigningKey", err)
 	}
 }
 
 func TestKeySet_UnknownKidIsASignatureError(t *testing.T) {
 	ks := loaded(t, NewStaticStore(Keys{Signing: signingKey(t)}), KeySetOptions{MinReloadInterval: -1})
-	tok, err := Sign(signingKey(t), "deadbeefdeadbeef", testClaims{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = Verify[testClaims](context.Background(), ks, tok)
+	_, err := Verify[testClaims](context.Background(), ks, mustSign(t, signingKey(t), "deadbeefdeadbeef", testClaims{}))
 	if !errors.Is(err, ErrUnknownKey) || !errors.Is(err, ErrSignature) {
 		t.Fatalf("err = %v, want ErrUnknownKey wrapping ErrSignature", err)
 	}
@@ -122,23 +169,22 @@ func TestKeySet_VerifyOnlyHasNoSigningKey(t *testing.T) {
 	if _, err := ks.Sign(testClaims{}); !errors.Is(err, ErrNoSigningKey) {
 		t.Fatalf("Sign = %v, want ErrNoSigningKey", err)
 	}
-	if _, err := NewKeySet(&StaticStore{}, KeySetOptions{}).Sign(testClaims{}); !errors.Is(err, ErrNoSigningKey) {
-		t.Fatalf("Sign before any load = %v, want ErrNoSigningKey", err)
-	}
 }
 
 func TestKeySet_InvalidKeysKeepTheInstalledSet(t *testing.T) {
 	priv := signingKey(t)
 	store := NewStaticStore(Keys{Signing: priv})
 	ks := loaded(t, store, KeySetOptions{})
-	for name, bad := range map[string]Keys{
-		"short signing key":     {Signing: priv[:10]},
-		"short previous key":    {Signing: priv, Previous: []ed25519.PublicKey{{1}}},
-		"current is not signer": {Signing: priv, Current: pubOf(signingKey(t))},
+	for want, bad := range map[string]Keys{
+		"token: signing key is 10 bytes, want 64":                 {Signing: priv[:10]},
+		"token: verification key is 1 bytes, want 32":             {Signing: priv, Previous: []ed25519.PublicKey{{1}}},
+		"token: verification key is 3 bytes, want 32":             {Current: ed25519.PublicKey{1, 2, 3}},
+		"token: current key is not the signing key's public half": {Signing: priv, Current: pubOf(signingKey(t))},
 	} {
+		name := want
 		store.Set(bad)
-		if err := ks.Reload(context.Background()); err == nil {
-			t.Errorf("%s: Reload accepted it", name)
+		if err := ks.Reload(context.Background()); err == nil || err.Error() != want {
+			t.Errorf("Reload = %v, want %q", err, want)
 		}
 		if !ks.Current().Equal(pubOf(priv)) {
 			t.Fatalf("%s: the installed key was replaced", name)
@@ -151,10 +197,11 @@ func TestKeySet_StoreErrorKeepsTheKeys(t *testing.T) {
 	store := &sharedStore{keys: Keys{Signing: priv}}
 	ks := loaded(t, store, KeySetOptions{})
 	store.mu.Lock()
-	store.err = errors.New("store down")
+	down := errors.New("store down")
+	store.err = down
 	store.mu.Unlock()
-	if err := ks.Reload(context.Background()); err == nil {
-		t.Fatal("Reload hid the store error")
+	if err := ks.Reload(context.Background()); !errors.Is(err, down) {
+		t.Fatalf("Reload = %v, want it to wrap the store error", err)
 	}
 	if !ks.Current().Equal(pubOf(priv)) {
 		t.Fatal("a failed load dropped the keys")
@@ -170,18 +217,12 @@ func TestKeySet_RotationReachesAnotherReplica(t *testing.T) {
 	a := loaded(t, store, KeySetOptions{})
 	b := loaded(t, store, KeySetOptions{MinReloadInterval: time.Nanosecond})
 	old, err := a.Sign(testClaims{Sub: "user:u1"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 
 	store.set(Keys{Signing: newKey, Previous: []ed25519.PublicKey{pubOf(oldKey)}})
-	if err := a.Reload(ctx); err != nil {
-		t.Fatal(err)
-	}
+	must(t, a.Reload(ctx))
 	fresh, err := a.Sign(testClaims{Sub: "user:u2"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if _, err := Verify[testClaims](ctx, b, fresh); err != nil {
 		t.Fatalf("replica B on a token under the new key: %v", err)
 	}

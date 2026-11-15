@@ -122,7 +122,12 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 							hasText = true
 						}
 					case *v1.ImagePart:
-						contentBlocks = append(contentBlocks, canonicalImageURLToAnthropicBlock(p.ImageURL))
+						b, err := canonicalImageURLToAnthropicBlock(p.ImageURL)
+						if err != nil {
+							toolResultErr = cmp.Or(toolResultErr, err)
+							continue
+						}
+						contentBlocks = append(contentBlocks, b)
 					case *v1.FilePart:
 						b, err := canonicalPartToAnthropicBlock(p)
 						if err != nil {
@@ -245,8 +250,8 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 
 		case *v1.Reasoning:
 			flushToolResults()
-			// Replay signed thinking verbatim: Anthropic requires the thinking
-			// block back in the assistant turn that carries its tool_use, and
+			// Replay signed and redacted thinking verbatim: Anthropic requires the thinking
+			// blocks back in the assistant turn that carries its tool_use, and
 			// rejects modified or unsigned blocks. Only ProviderData payloads
 			// qualify — they hold the exact block (text may legitimately be
 			// empty under display "omitted").
@@ -256,13 +261,23 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 					Type      string `json:"type"`
 					Thinking  string `json:"thinking"`
 					Signature string `json:"signature"`
+					Data      string `json:"data"`
 				}
-				if err := json.Unmarshal(v.ProviderData, &pd); err == nil && pd.Type == "thinking" && pd.Signature != "" {
+				err := json.Unmarshal(v.ProviderData, &pd)
+				if err == nil && pd.Type == "thinking" && pd.Signature != "" {
 					seenConversation = true
 					runThinking = append(runThinking, map[string]any{
 						"type":      "thinking",
 						"thinking":  pd.Thinking,
 						"signature": pd.Signature,
+					})
+					continue
+				}
+				if err == nil && pd.Type == "redacted_thinking" && pd.Data != "" {
+					seenConversation = true
+					runThinking = append(runThinking, map[string]any{
+						"type": "redacted_thinking",
+						"data": pd.Data,
 					})
 					continue
 				}

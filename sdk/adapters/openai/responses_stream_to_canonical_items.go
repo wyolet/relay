@@ -25,7 +25,7 @@ func (s *responsesToCanonicalStream) itemCompletedFrame(data []byte) (v1.SSEFram
 	if len(evHeader.Item) == 0 || string(evHeader.Item) == "null" {
 		return v1.SSEFrame{}, false, nil
 	}
-	wireItem, err := responsesUnmarshalItem(evHeader.Item)
+	wireItem, err := responsesUnmarshalItem(evHeader.Item, false)
 	if err != nil {
 		return v1.SSEFrame{}, false, fmt.Errorf("responses stream: output_item.done: %w", err)
 	}
@@ -52,8 +52,17 @@ func (s *responsesToCanonicalStream) itemCompletedFrame(data []byte) (v1.SSEFram
 		fc.Arguments != "" && !json.Valid([]byte(fc.Arguments)) {
 		fc.Status = v1.StatusIncomplete
 	}
+	itemID := responsesItemID(wireItem)
+	if itemID == "" {
+		// Tool-result items have no typed id field; read it from the wire as output_item.added does.
+		var idProbe struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal(evHeader.Item, &idProbe)
+		itemID = idProbe.ID
+	}
 	completedData, _ := json.Marshal(v1.ItemCompletedEvent{
-		ItemID: responsesItemID(wireItem),
+		ItemID: itemID,
 		Index:  evHeader.OutputIndex,
 		Item:   ci,
 	})

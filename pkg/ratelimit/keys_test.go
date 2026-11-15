@@ -7,38 +7,8 @@ import (
 	"time"
 )
 
-// hashTagRE matches a Redis key that contains exactly one valid hash tag:
-// no curly braces outside the tag, one {...} segment with no nested braces.
-var hashTagRE = regexp.MustCompile(`^[^{}]*\{[^{}]+\}[^{}]*$`)
-
-func TestBucketKey_HashTag(t *testing.T) {
-	r := Rule{
-		Key:    "Policy:prod-policy:per-minute",
-		Meter:  "requests",
-		Amount: 100,
-		Window: time.Minute,
-	}
-	ts := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
-	key := bucketKey("policy:prod-policy", r, ts)
-
-	if !hashTagRE.MatchString(key) {
-		t.Errorf("bucketKey does not match hash-tag pattern: %q", key)
-	}
-}
-
-func TestConcurrencyKey_HashTag(t *testing.T) {
-	r := Rule{
-		Key:    "Secret:sk-abc123:max-concurrent",
-		Meter:  "concurrency",
-		Amount: 10,
-		Window: time.Minute,
-	}
-	key := concurrencyKey("policy:prod-policy", r)
-
-	if !hashTagRE.MatchString(key) {
-		t.Errorf("concurrencyKey does not match hash-tag pattern: %q", key)
-	}
-}
+// hashTagRE matches a key with exactly one hash tag, so all keys of a scope share a Redis Cluster slot.
+var hashTagRE = regexp.MustCompile(`^limit:\{[^{}]*\}[^{}]*$`)
 
 // TestKeyBuilders_Golden pins every key byte for byte: a changed key orphans live counters in the store.
 func TestKeyBuilders_Golden(t *testing.T) {
@@ -85,19 +55,16 @@ func TestKeyBuilders_Golden(t *testing.T) {
 		{"commit guard", commitGuardKey("policy:prod-policy", "res-uuid-1234"),
 			"limit:{policy:prod-policy}:committed:res-uuid-1234"},
 		{"commit guard empty", commitGuardKey("", ""), "limit:{}:committed:"},
+		{"spend east zone to utc", spendKey("policy:prod-policy", Rule{Key: "budget:day", Meter: MeterSpend}, time.Date(2026, 11, 1, 3, 0, 0, 0, plus5)),
+			"limit:{policy:prod-policy}:spend:budget:day:2026-10-31"},
 	}
 	for _, tc := range tests {
 		if tc.got != tc.want {
 			t.Errorf("%s:\n got %q\nwant %q", tc.name, tc.got, tc.want)
 		}
-	}
-}
-
-func TestCommitGuardKey_HashTag(t *testing.T) {
-	key := commitGuardKey("policy:prod-policy", "res-uuid-1234")
-
-	if !hashTagRE.MatchString(key) {
-		t.Errorf("commitGuardKey does not match hash-tag pattern: %q", key)
+		if !hashTagRE.MatchString(tc.got) {
+			t.Errorf("%s: %q does not carry exactly one hash tag", tc.name, tc.got)
+		}
 	}
 }
 

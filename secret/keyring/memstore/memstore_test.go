@@ -21,9 +21,7 @@ func primary(id byte, scope string, at time.Time) keyring.DataKey {
 func mustGet(t *testing.T, s *memstore.Store, id [16]byte) keyring.DataKey {
 	t.Helper()
 	k, err := s.Get(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return k
 }
 
@@ -33,18 +31,14 @@ func TestInsertPrimaryCAS(t *testing.T) {
 	if err := s.InsertPrimary(ctx, a, &a.ID); !errors.Is(err, keyring.ErrConflict) {
 		t.Fatalf("expected Primary on an empty scope: %v", err)
 	}
-	if err := s.InsertPrimary(ctx, a, nil); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, a, nil))
 	if err := s.InsertPrimary(ctx, b, nil); !errors.Is(err, keyring.ErrConflict) {
 		t.Fatalf("nil expected over an existing Primary: %v", err)
 	}
 	if err := s.InsertPrimary(ctx, b, &[16]byte{9}); !errors.Is(err, keyring.ErrConflict) {
 		t.Fatalf("wrong expected: %v", err)
 	}
-	if err := s.InsertPrimary(ctx, b, &a.ID); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, b, &a.ID))
 	if k := mustGet(t, s, a.ID); k.State != keyring.DecryptOnly || !k.DemotedAt.Equal(b.CreatedAt) {
 		t.Fatalf("demoted key = %+v", k)
 	}
@@ -52,9 +46,7 @@ func TestInsertPrimaryCAS(t *testing.T) {
 		t.Fatalf("Primary = %+v, %v", p, err)
 	}
 	// Scopes are independent, "" included.
-	if err := s.InsertPrimary(ctx, primary(3, "", t0), nil); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, primary(3, "", t0), nil))
 	if _, err := s.Primary(ctx, "none"); !errors.Is(err, keyring.ErrUnknownKey) {
 		t.Fatalf("Primary of an empty scope: %v", err)
 	}
@@ -84,15 +76,11 @@ func TestSetTargetKEKCAS(t *testing.T) {
 	if err := s.SetTargetKEK(ctx, a, b); !errors.Is(err, keyring.ErrConflict) {
 		t.Fatalf("wrong expected: %v", err)
 	}
-	if err := s.SetTargetKEK(ctx, a, [16]byte{}); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.SetTargetKEK(ctx, a, [16]byte{}))
 	if err := s.SetTargetKEK(ctx, b, [16]byte{}); !errors.Is(err, keyring.ErrConflict) {
 		t.Fatalf("second first-set: %v", err)
 	}
-	if err := s.SetTargetKEK(ctx, b, a); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.SetTargetKEK(ctx, b, a))
 	if got, _ := s.TargetKEK(ctx); got != b {
 		t.Fatalf("target = %x", got)
 	}
@@ -108,16 +96,12 @@ func TestUpdateWrappedCAS(t *testing.T) {
 	if err := s.UpdateWrapped(ctx, a.ID, from, to, []byte("w")); !errors.Is(err, keyring.ErrUnknownKey) {
 		t.Fatalf("unknown id: %v", err)
 	}
-	if err := s.InsertPrimary(ctx, a, nil); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, a, nil))
 	if err := s.UpdateWrapped(ctx, a.ID, to, from, []byte("w")); !errors.Is(err, keyring.ErrConflict) {
 		t.Fatalf("wrong fromKEK: %v", err)
 	}
 	w := []byte("rewrapped")
-	if err := s.UpdateWrapped(ctx, a.ID, from, to, w); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.UpdateWrapped(ctx, a.ID, from, to, w))
 	w[0] = 'X'
 	if k := mustGet(t, s, a.ID); k.KEKID != to || string(k.Wrapped) != "rewrapped" || k.State != keyring.Primary {
 		t.Fatalf("after rewrap = %+v", k)
@@ -126,12 +110,8 @@ func TestUpdateWrappedCAS(t *testing.T) {
 		t.Fatalf("stale fromKEK: %v", err)
 	}
 	b := primary(2, "s", t0)
-	if err := s.InsertPrimary(ctx, b, &a.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Destroy(ctx, a.ID, 0); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, b, &a.ID))
+	must(t, s.Destroy(ctx, a.ID, 0))
 	if err := s.UpdateWrapped(ctx, a.ID, to, from, []byte("w")); !errors.Is(err, keyring.ErrConflict) {
 		t.Fatalf("destroyed key: %v", err)
 	}
@@ -141,12 +121,8 @@ func TestDestroyMinAge(t *testing.T) {
 	now := t0
 	s := memstore.New(memstore.WithClock(func() time.Time { return now }))
 	a, b := primary(1, "s", t0), primary(2, "s", t0)
-	if err := s.InsertPrimary(ctx, a, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.InsertPrimary(ctx, b, &a.ID); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, a, nil))
+	must(t, s.InsertPrimary(ctx, b, &a.ID))
 	now = t0.Add(time.Hour - time.Second)
 	if err := s.Destroy(ctx, a.ID, time.Hour); !errors.Is(err, keyring.ErrTooRecent) {
 		t.Fatalf("1s early: %v", err)
@@ -164,23 +140,17 @@ func TestDestroy(t *testing.T) {
 	if err := s.Destroy(ctx, a.ID, 0); !errors.Is(err, keyring.ErrUnknownKey) {
 		t.Fatalf("unknown: %v", err)
 	}
-	if err := s.InsertPrimary(ctx, a, nil); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, a, nil))
 	if err := s.Destroy(ctx, a.ID, 0); !errors.Is(err, keyring.ErrIsPrimary) {
 		t.Fatalf("Primary: %v", err)
 	}
-	if err := s.InsertPrimary(ctx, b, &a.ID); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, b, &a.ID))
 	inUse[a.ID] = true
 	if err := s.Destroy(ctx, a.ID, 0); !errors.Is(err, keyring.ErrInUse) {
 		t.Fatalf("in use: %v", err)
 	}
 	inUse[a.ID] = false
-	if err := s.Destroy(ctx, a.ID, 0); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.Destroy(ctx, a.ID, 0))
 	if k := mustGet(t, s, a.ID); k.State != keyring.Destroyed || k.Wrapped != nil || k.Scope != "s" || k.KEKID != a.KEKID {
 		t.Fatalf("tombstone = %+v", k)
 	}
@@ -192,9 +162,7 @@ func TestDestroy(t *testing.T) {
 func TestRequirePrimary(t *testing.T) {
 	s := memstore.New()
 	a, b := primary(1, "s", t0), primary(2, "s", t0)
-	if err := s.InsertPrimary(ctx, a, nil); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, a, nil))
 	calls := 0
 	write := func() error { calls++; return nil }
 	if err := s.RequirePrimary(a.ID, "s", write); err != nil || calls != 1 {
@@ -212,9 +180,7 @@ func TestRequirePrimary(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
-	if err := s.InsertPrimary(ctx, b, &a.ID); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, b, &a.ID))
 	if err := s.RequirePrimary(a.ID, "s", write); !errors.Is(err, keyring.ErrNotPrimary) {
 		t.Fatalf("demoted: %v", err)
 	}
@@ -226,9 +192,7 @@ func TestRequirePrimary(t *testing.T) {
 func TestReturnsCopies(t *testing.T) {
 	s := memstore.New()
 	a := primary(1, "s", t0)
-	if err := s.InsertPrimary(ctx, a, nil); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, a, nil))
 	a.Wrapped[0] = 0xff
 	got := mustGet(t, s, a.ID)
 	got.Wrapped[0] = 0xfe
@@ -238,5 +202,12 @@ func TestReturnsCopies(t *testing.T) {
 	p.Wrapped[0] = 0xfc
 	if k := mustGet(t, s, a.ID); k.Wrapped[0] != 1 {
 		t.Fatalf("stored wrapped bytes changed: %x", k.Wrapped)
+	}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

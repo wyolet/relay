@@ -2,723 +2,205 @@ package client
 
 import (
 	"context"
-	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
-	v1 "github.com/wyolet/relay/sdk/v1"
+	"github.com/google/go-cmp/cmp"
 )
 
-func sampleReq() *v1.Request {
-	return &v1.Request{
-		Model:        v1.ModelRefs{"some-model"},
-		Instructions: "be concise",
-		CacheConfig:  &v1.CacheConfig{Instructions: true},
-		Input: []v1.Item{
-			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
-		},
+// Relay and RelayWS resolve the same configuration: explicit arguments, then WR_* variables; a bad or missing value is held back until the first call.
+func TestRelay_Config(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		base    string
+		key     string
+		opts    []Option
+		wantURL string
+		wantKey string
+		headers map[string]string
+		timeout time.Duration
+		err     string
+	}{
+		{name: "explicit arguments", base: "http://explicit.example/", key: "rk-explicit", wantURL: "http://explicit.example", wantKey: "rk-explicit"},
+		{name: "explicit arguments beat the environment", env: map[string]string{EnvBaseURL: "http://env.example", EnvAPIKey: "rk-env"},
+			base: "http://explicit.example", key: "rk-explicit", wantURL: "http://explicit.example", wantKey: "rk-explicit"},
+		{name: "environment fills what is not passed",
+			env:     map[string]string{EnvBaseURL: "http://env.example:8080", EnvAPIKey: "rk-env", EnvUsage: "full", EnvHeaders: "X-Custom=hi, X-Other = 2 ", EnvTimeout: "42s"},
+			wantURL: "http://env.example:8080", wantKey: "rk-env", timeout: 42 * time.Second,
+			headers: map[string]string{"X-WR-Usage": "full", "X-Custom": "hi", "X-Other": "2"}},
+		{name: "an explicit header beats WR_USAGE and WR_HEADERS", env: map[string]string{EnvUsage: "full", EnvHeaders: "X-Custom=env"},
+			base: "http://x.example", key: "rk", opts: []Option{WithHeader("X-WR-Usage", "off"), WithHeader("X-Custom", "explicit")},
+			wantURL: "http://x.example", wantKey: "rk", headers: map[string]string{"X-WR-Usage": "off", "X-Custom": "explicit"}},
+		{name: "nothing configured", err: "relay client: missing config — set WR_BASE_URL and WR_API_KEY or pass explicitly"},
+		{name: "key missing", base: "http://x.example", wantURL: "http://x.example", err: "relay client: missing config — set WR_API_KEY or pass explicitly"},
+		{name: "base URL missing", key: "rk", wantKey: "rk", err: "relay client: missing config — set WR_BASE_URL or pass explicitly"},
+		{name: "malformed WR_HEADERS", env: map[string]string{EnvHeaders: "X-Ok=1,no-equals-sign"}, base: "http://x.example", key: "rk",
+			wantURL: "http://x.example", wantKey: "rk", err: `relay client: invalid WR_HEADERS entry "no-equals-sign" (want k=v)`},
+		{name: "malformed WR_TIMEOUT", env: map[string]string{EnvTimeout: "soon"}, base: "http://x.example", key: "rk",
+			wantURL: "http://x.example", wantKey: "rk", err: `relay client: invalid WR_TIMEOUT "soon": time: invalid duration "soon"`},
+		{name: "every problem is reported at once", env: map[string]string{EnvHeaders: "bad", EnvTimeout: "soon"},
+			err: "relay client: missing config — set WR_BASE_URL and WR_API_KEY or pass explicitly\n" +
+				`relay client: invalid WR_HEADERS entry "bad" (want k=v)` + "\n" +
+				`relay client: invalid WR_TIMEOUT "soon": time: invalid duration "soon"`},
 	}
-}
-
-// --- Relay target (identity translator) ---
-
-func TestRelay_SerializesCanonicalAndDecodesResponse(t *testing.T) {
-	var gotBody []byte
-	var gotAuth, gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		gotAuth = r.Header.Get("Authorization")
-		gotPath = r.URL.Path
-		resp := &v1.Response{
-			ID: "resp_1", Object: "response", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop,
-			Output: []v1.Item{&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "hello"}}}},
-		}
-		b, _ := json.Marshal(resp)
-		_, _ = w.Write(b)
-	}))
-	defer srv.Close()
-
-	resp, err := Relay(srv.URL, "rk-secret").Generate(context.Background(), sampleReq())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotPath != "/v1/generate" {
-		t.Errorf("path: %q", gotPath)
-	}
-	if gotAuth != "Bearer rk-secret" {
-		t.Errorf("auth: %q", gotAuth)
-	}
-	var wire map[string]any
-	if err := json.Unmarshal(gotBody, &wire); err != nil {
-		t.Fatalf("request not JSON: %v", err)
-	}
-	if _, ok := wire["model"].(string); !ok {
-		t.Errorf("model should be a string, got %T", wire["model"])
-	}
-	if wire["output_mode"] != "sync" {
-		t.Errorf("output_mode: %v", wire["output_mode"])
-	}
-	if cc, ok := wire["cache_config"].(map[string]any); !ok || cc["instructions"] != true {
-		t.Errorf("cache_config not serialized: %v", wire["cache_config"])
-	}
-	if resp.ID != "resp_1" || len(resp.Output) != 1 {
-		t.Errorf("response: %+v", resp)
-	}
-}
-
-func TestRelay_Stream(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, f := range []v1.SSEFrame{
-			{Event: v1.EventGenerationCreated, Data: []byte(`{"id":"resp_1"}`)},
-			{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"msg_1","kind":"output_text"}`)},
-			{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"resp_1","status":"completed","finish_reason":"stop"}`)},
-		} {
-			_, _ = w.Write(f.Bytes())
-		}
-	}))
-	defer srv.Close()
-
-	got := drain(t, Relay(srv.URL, "rk"))
-	want := []string{v1.EventGenerationCreated, v1.EventItemDelta, v1.EventGenerationCompleted}
-	assertEvents(t, got, want)
-}
-
-func TestRelay_Stream_ReasoningSpan(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fl, _ := w.(http.Flusher)
-		write := func(f v1.SSEFrame) {
-			_, _ = w.Write(f.Bytes())
-			if fl != nil {
-				fl.Flush()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range []string{EnvBaseURL, EnvAPIKey, EnvUsage, EnvHeaders, EnvTimeout} {
+				t.Setenv(k, tc.env[k])
 			}
-		}
-		write(v1.SSEFrame{Event: v1.EventGenerationCreated, Data: []byte(`{"id":"r1"}`)})
-		write(v1.SSEFrame{Event: v1.EventItemStarted, Data: []byte(`{"item_id":"rs1","item_type":"reasoning","index":0}`)})
-		time.Sleep(2 * time.Millisecond)
-		write(v1.SSEFrame{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"rs1","kind":"reasoning","delta":"x"}`)})
-		write(v1.SSEFrame{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"m1","kind":"text","delta":"hi"}`)})
-		write(v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"r1","status":"completed"}`)})
-	}))
-	defer srv.Close()
-
-	stream, err := Relay(srv.URL, "rk").GenerateStream(context.Background(), sampleReq())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	for {
-		if _, err := stream.Recv(); err == io.EOF {
-			break
-		} else if err != nil {
-			t.Fatalf("recv: %v", err)
-		}
-	}
-
-	tm := stream.Timing()
-	// Upstream timing populated in the relay-identical shape: Start collapsed
-	// onto ResponseStart (TTFT), ResponseEnd at stream close.
-	if tm.Upstream.ResponseStart <= 0 {
-		t.Fatalf("TTFT not stamped: %+v", tm.Upstream)
-	}
-	if tm.Upstream.Start != tm.Upstream.ResponseStart {
-		t.Fatalf("client Start should equal ResponseStart (no relay leg): %+v", tm.Upstream)
-	}
-	if tm.Upstream.ResponseEnd < tm.Upstream.ResponseStart {
-		t.Fatalf("ResponseEnd %d before ResponseStart %d", tm.Upstream.ResponseEnd, tm.Upstream.ResponseStart)
-	}
-	if tm.Reasoning == nil {
-		t.Fatal("reasoning span not detected")
-	}
-	if tm.Reasoning.Start <= 0 || tm.Reasoning.End < tm.Reasoning.Start {
-		t.Fatalf("bad reasoning span: %+v", tm.Reasoning)
-	}
-}
-
-func TestRelay_Stream_NoReasoning_NoSpan(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		for _, f := range []v1.SSEFrame{
-			{Event: v1.EventGenerationCreated, Data: []byte(`{"id":"r1"}`)},
-			{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"m1","kind":"text","delta":"hi"}`)},
-			{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"r1","status":"completed"}`)},
-		} {
-			_, _ = w.Write(f.Bytes())
-		}
-	}))
-	defer srv.Close()
-
-	stream, err := Relay(srv.URL, "rk").GenerateStream(context.Background(), sampleReq())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	for {
-		if _, err := stream.Recv(); err == io.EOF {
-			break
-		} else if err != nil {
-			t.Fatalf("recv: %v", err)
-		}
-	}
-	tm := stream.Timing()
-	if tm.Reasoning != nil {
-		t.Fatalf("expected no reasoning span, got %+v", tm.Reasoning)
-	}
-	if tm.Upstream.ResponseStart <= 0 || tm.Upstream.ResponseEnd < tm.Upstream.ResponseStart {
-		t.Fatalf("upstream timing should still be populated: %+v", tm.Upstream)
-	}
-}
-
-func TestRelay_APIError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"code":"translate_request","message":"input is required"}}`))
-	}))
-	defer srv.Close()
-
-	_, err := Relay(srv.URL, "rk").Generate(context.Background(), sampleReq())
-	apiErr, ok := err.(*APIError)
-	if !ok {
-		t.Fatalf("want *APIError, got %T: %v", err, err)
-	}
-	if apiErr.StatusCode != 400 || apiErr.Code != "translate_request" {
-		t.Errorf("apiErr: %+v", apiErr)
-	}
-	wantHost := strings.TrimPrefix(srv.URL, "http://")
-	if apiErr.Host != wantHost {
-		t.Errorf("host: %q, want %q", apiErr.Host, wantHost)
-	}
-	if !strings.Contains(apiErr.Error(), wantHost) {
-		t.Errorf("error should name the upstream host: %q", apiErr.Error())
-	}
-}
-
-// --- OpenAI direct target (CC translator) — bypasses relay ---
-
-func TestOpenAIDirect_TranslatesToCCWireAndBack(t *testing.T) {
-	var gotBody map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			t.Errorf("path: %q", r.URL.Path)
-		}
-		if r.Header.Get("Authorization") != "Bearer sk-test" {
-			t.Errorf("auth: %q", r.Header.Get("Authorization"))
-		}
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &gotBody)
-		_, _ = w.Write([]byte(`{"id":"cc1","object":"chat.completion","model":"gpt-4o",` +
-			`"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],` +
-			`"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`))
-	}))
-	defer srv.Close()
-
-	resp, err := OpenAI(srv.URL, "sk-test").Generate(context.Background(), sampleReq())
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Canonical request was translated to CC wire (messages array, not "input").
-	if _, ok := gotBody["messages"].([]any); !ok {
-		t.Errorf("expected CC 'messages' array, got keys %v", keysOf(gotBody))
-	}
-	// CC response parsed back to canonical.
-	if resp.FinishReason != v1.FinishReasonStop || len(resp.Output) == 0 {
-		t.Errorf("canonical response: %+v", resp)
-	}
-}
-
-func TestOpenAIDirect_Stream(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Minimal CC stream: one content delta, then [DONE].
-		chunks := []string{
-			`data: {"id":"cc1","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}`,
-			`data: [DONE]`,
-		}
-		for _, c := range chunks {
-			_, _ = w.Write([]byte(c + "\n\n"))
-		}
-	}))
-	defer srv.Close()
-
-	got := drain(t, OpenAI(srv.URL, "sk"))
-	// CC stream → canonical events: at minimum a generation.completed terminates it.
-	if !contains(got, v1.EventGenerationCompleted) {
-		t.Errorf("expected %q among canonical events, got %v", v1.EventGenerationCompleted, got)
-	}
-}
-
-// --- Anthropic direct target ---
-
-func TestAnthropicDirect_HeadersAndWire(t *testing.T) {
-	var gotBody map[string]any
-	var gotVer, gotKey string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/messages" {
-			t.Errorf("path: %q", r.URL.Path)
-		}
-		gotKey = r.Header.Get("x-api-key")
-		gotVer = r.Header.Get("anthropic-version")
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &gotBody)
-		_, _ = w.Write([]byte(`{"id":"msg1","type":"message","role":"assistant",` +
-			`"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",` +
-			`"usage":{"input_tokens":2,"output_tokens":1}}`))
-	}))
-	defer srv.Close()
-
-	resp, err := Anthropic(srv.URL, "ak-test").Generate(context.Background(), sampleReq())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotKey != "ak-test" {
-		t.Errorf("x-api-key: %q", gotKey)
-	}
-	if gotVer != "2023-06-01" {
-		t.Errorf("anthropic-version: %q", gotVer)
-	}
-	if _, ok := gotBody["max_tokens"]; !ok {
-		t.Errorf("expected Anthropic 'max_tokens' in wire, got %v", keysOf(gotBody))
-	}
-	if len(resp.Output) == 0 {
-		t.Errorf("canonical response empty: %+v", resp)
-	}
-}
-
-// --- live tests (skipped unless env configured) ---
-
-// TestLive_OpenAI hits the real OpenAI API. Set OPENAI_API_KEY (and optionally
-// OPENAI_MODEL, default gpt-4o-mini) to run.
-func TestLive_OpenAI(t *testing.T) {
-	key := os.Getenv("OPENAI_API_KEY")
-	if key == "" {
-		t.Skip("set OPENAI_API_KEY to run the live OpenAI test")
-	}
-	model := envOr("OPENAI_MODEL", "gpt-4o-mini")
-	c := OpenAI("https://api.openai.com", key, WithHTTPClient(&http.Client{Timeout: 30 * time.Second}))
-	resp, err := c.Generate(context.Background(), liveReq(model))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outputText(resp) == "" {
-		t.Errorf("empty output: %+v", resp)
-	}
-	t.Logf("OpenAI %s replied: %q", model, outputText(resp))
-}
-
-// TestLive_Ollama hits a real Ollama (OpenAI-compatible) endpoint. Set
-// OLLAMA_BASE_URL (e.g. http://localhost:11434) and OLLAMA_MODEL to run.
-func TestLive_Ollama(t *testing.T) {
-	base := os.Getenv("OLLAMA_BASE_URL")
-	if base == "" {
-		t.Skip("set OLLAMA_BASE_URL (and OLLAMA_MODEL) to run the live Ollama test")
-	}
-	model := envOr("OLLAMA_MODEL", "llama3.2")
-	c := OpenAI(base, "ollama", WithHTTPClient(&http.Client{Timeout: 60 * time.Second}))
-	resp, err := c.Generate(context.Background(), liveReq(model))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outputText(resp) == "" {
-		t.Errorf("empty output: %+v", resp)
-	}
-	t.Logf("Ollama %s replied: %q", model, outputText(resp))
-
-	// Streaming through the same bridge (CC SSE → canonical events).
-	stream, err := c.GenerateStream(context.Background(), liveReq(model))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	var events, deltaText strings.Builder
-	for {
-		ev, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		events.WriteString(ev.Type + " ")
-		if ev.Type == v1.EventItemDelta {
-			var d struct {
-				Delta string `json:"delta"`
-				Text  string `json:"text"`
-			}
-			_ = json.Unmarshal(ev.Data, &d)
-			deltaText.WriteString(d.Delta + d.Text)
-		}
-	}
-	if !strings.Contains(events.String(), v1.EventGenerationCompleted) {
-		t.Errorf("stream missing generation.completed; events: %s", events.String())
-	}
-	t.Logf("Ollama %s streamed events: [%s] text=%q", model, strings.TrimSpace(events.String()), deltaText.String())
-}
-
-// --- env-var defaults ---
-
-func TestRelay_EnvDefaults(t *testing.T) {
-	var gotAuth, gotHost string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotHost = r.Host
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","status":"completed"}`))
-	}))
-	defer srv.Close()
-
-	t.Setenv(EnvBaseURL, srv.URL)
-	t.Setenv(EnvAPIKey, "rk-from-env")
-
-	if _, err := Relay("", "").Generate(context.Background(), sampleReq()); err != nil {
-		t.Fatal(err)
-	}
-	if gotAuth != "Bearer rk-from-env" {
-		t.Errorf("auth: %q", gotAuth)
-	}
-	if gotHost != strings.TrimPrefix(srv.URL, "http://") {
-		t.Errorf("host: %q want %q", gotHost, srv.URL)
-	}
-}
-
-func TestRelay_ExplicitArgsBeatEnv(t *testing.T) {
-	t.Setenv(EnvBaseURL, "http://env-host.invalid")
-	t.Setenv(EnvAPIKey, "rk-from-env")
-
-	c := Relay("http://explicit.invalid", "rk-explicit")
-	if c.baseURL != "http://explicit.invalid" || c.apiKey != "rk-explicit" {
-		t.Errorf("explicit args overridden by env: base=%q key=%q", c.baseURL, c.apiKey)
-	}
-}
-
-func TestRelay_MissingConfig_FailsOnCallNotConstruction(t *testing.T) {
-	t.Setenv(EnvBaseURL, "")
-	t.Setenv(EnvAPIKey, "")
-
-	c := Relay("", "") // must not panic / must return a client
-	if c == nil {
-		t.Fatal("Relay returned nil")
-	}
-	_, err := c.Generate(context.Background(), sampleReq())
-	if err == nil || !strings.Contains(err.Error(), "missing config") {
-		t.Fatalf("want missing-config error on call, got %v", err)
-	}
-
-	_, serr := c.GenerateStream(context.Background(), sampleReq())
-	if serr == nil || !strings.Contains(serr.Error(), "missing config") {
-		t.Fatalf("want missing-config error on stream call, got %v", serr)
-	}
-}
-
-// RelayWS is a relay target, so it resolves config exactly like Relay.
-// Construction/config level only — no websocket connection is made.
-func TestRelayWS_EnvConfig(t *testing.T) {
-	t.Run("env fallback", func(t *testing.T) {
-		t.Setenv(EnvBaseURL, "http://relay-env.example:8080")
-		t.Setenv(EnvAPIKey, "rk-env-key")
-		t.Setenv(EnvUsage, "full")
-		t.Setenv(EnvHeaders, "X-Env-Header=hello")
-		t.Setenv(EnvTimeout, "42s")
-
-		c := RelayWS("", "")
-
-		if got, want := c.baseURL, "http://relay-env.example:8080"; got != want {
-			t.Errorf("baseURL: got %q, want %q", got, want)
-		}
-		if got, want := c.apiKey, "rk-env-key"; got != want {
-			t.Errorf("apiKey: got %q, want %q", got, want)
-		}
-		if got, want := c.headers[headerUsage], "full"; got != want {
-			t.Errorf("%s header: got %q, want %q", headerUsage, got, want)
-		}
-		if got, want := c.headers["X-Env-Header"], "hello"; got != want {
-			t.Errorf("X-Env-Header: got %q, want %q", got, want)
-		}
-		if got, want := c.syncTimeout, 42*time.Second; got != want {
-			t.Errorf("syncTimeout: got %v, want %v", got, want)
-		}
-	})
-
-	t.Run("missing config fails on call", func(t *testing.T) {
-		t.Setenv(EnvBaseURL, "")
-		t.Setenv(EnvAPIKey, "")
-
-		c := RelayWS("", "")
-		defer c.Close()
-		_, err := c.Generate(context.Background(), sampleReq())
-		if err == nil || !strings.Contains(err.Error(), "missing config") {
-			t.Fatalf("want missing-config error on call, got %v", err)
-		}
-	})
-}
-
-func TestVendorClients_IgnoreRelayEnv(t *testing.T) {
-	t.Setenv(EnvBaseURL, "http://relay-env.invalid")
-	t.Setenv(EnvAPIKey, "rk-from-env")
-
-	c := OpenAI("https://api.openai.com", "")
-	if c.configErr != nil {
-		t.Errorf("vendor client should never carry relay config error: %v", c.configErr)
-	}
-	if c.baseURL != "https://api.openai.com" {
-		t.Errorf("vendor baseURL pulled from relay env: %q", c.baseURL)
-	}
-}
-
-func TestRelay_UsageAndHeaderEnv(t *testing.T) {
-	var gotUsage, gotCustom string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUsage = r.Header.Get("X-WR-Usage")
-		gotCustom = r.Header.Get("X-Custom")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","status":"completed"}`))
-	}))
-	defer srv.Close()
-
-	t.Setenv(EnvBaseURL, srv.URL)
-	t.Setenv(EnvAPIKey, "rk")
-	t.Setenv(EnvUsage, "full")
-	t.Setenv(EnvHeaders, "X-Custom=hi, X-Other=2")
-
-	if _, err := Relay("", "").Generate(context.Background(), sampleReq()); err != nil {
-		t.Fatal(err)
-	}
-	if gotUsage != "full" {
-		t.Errorf("X-WR-Usage: %q", gotUsage)
-	}
-	if gotCustom != "hi" {
-		t.Errorf("X-Custom: %q", gotCustom)
-	}
-}
-
-func TestRelay_ExplicitHeaderBeatsEnv(t *testing.T) {
-	t.Setenv(EnvBaseURL, "http://x.invalid")
-	t.Setenv(EnvAPIKey, "rk")
-	t.Setenv(EnvUsage, "full")
-
-	c := Relay("", "", WithHeader(headerUsage, "off"))
-	if c.headers[headerUsage] != "off" {
-		t.Errorf("explicit WithHeader lost to env: %q", c.headers[headerUsage])
-	}
-}
-
-func TestRelay_BadHeaderEnv_FailsOnCall(t *testing.T) {
-	t.Setenv(EnvBaseURL, "http://x.invalid")
-	t.Setenv(EnvAPIKey, "rk")
-	t.Setenv(EnvHeaders, "no-equals-sign")
-
-	_, err := Relay("", "").Generate(context.Background(), sampleReq())
-	if err == nil || !strings.Contains(err.Error(), "WR_HEADERS") {
-		t.Fatalf("want WR_HEADERS parse error on call, got %v", err)
-	}
-}
-
-func TestRelay_TimeoutEnv_AppliesToSyncNotStream(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(150 * time.Millisecond)
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","status":"completed"}`))
-	}))
-	defer srv.Close()
-
-	t.Setenv(EnvBaseURL, srv.URL)
-	t.Setenv(EnvAPIKey, "rk")
-	t.Setenv(EnvTimeout, "20ms")
-
-	_, err := Relay("", "").Generate(context.Background(), sampleReq())
-	if err == nil || !strings.Contains(err.Error(), "deadline") {
-		t.Fatalf("want deadline-exceeded on sync, got %v", err)
-	}
-
-	if c := Relay("", ""); c.syncTimeout != 20*time.Millisecond {
-		t.Errorf("syncTimeout: %v", c.syncTimeout)
-	}
-}
-
-func TestRelay_BadTimeoutEnv_FailsOnCall(t *testing.T) {
-	t.Setenv(EnvBaseURL, "http://x.invalid")
-	t.Setenv(EnvAPIKey, "rk")
-	t.Setenv(EnvTimeout, "not-a-duration")
-
-	_, err := Relay("", "").Generate(context.Background(), sampleReq())
-	if err == nil || !strings.Contains(err.Error(), "WR_TIMEOUT") {
-		t.Fatalf("want WR_TIMEOUT parse error on call, got %v", err)
-	}
-}
-
-func TestVendorClients_ConventionalKeyEnv(t *testing.T) {
-	t.Setenv(EnvOpenAIKey, "sk-openai-env")
-	t.Setenv(EnvAnthropicKey, "sk-anthropic-env")
-
-	if c := OpenAI("https://api.openai.com", ""); c.apiKey != "sk-openai-env" {
-		t.Errorf("OpenAI key not from env: %q", c.apiKey)
-	}
-	if c := Anthropic("https://api.anthropic.com", ""); c.apiKey != "sk-anthropic-env" {
-		t.Errorf("Anthropic key not from env: %q", c.apiKey)
-	}
-	// explicit wins
-	if c := OpenAI("https://api.openai.com", "sk-explicit"); c.apiKey != "sk-explicit" {
-		t.Errorf("explicit OpenAI key lost to env: %q", c.apiKey)
-	}
-}
-
-func TestVendorClients_NoKeyStaysKeyless(t *testing.T) {
-	t.Setenv(EnvOpenAIKey, "")
-	t.Setenv(EnvAPIKey, "rk-relay") // must NOT leak into a vendor client
-
-	c := OpenAI("http://localhost:11434", "") // Ollama-style keyless
-	if c.apiKey != "" {
-		t.Errorf("keyless vendor client picked up a key: %q", c.apiKey)
-	}
-	if c.configErr != nil {
-		t.Errorf("keyless vendor client must not carry a config error: %v", c.configErr)
-	}
-}
-
-func TestGemini_KeyEnvAndPathTemplating(t *testing.T) {
-	var gotPath, gotKey string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotKey = r.Header.Get("x-goog-api-key")
-		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"pong"}]}}]}`))
-	}))
-	defer srv.Close()
-
-	t.Setenv(EnvGeminiKey, "")
-	t.Setenv(EnvGoogleKey, "goog-env-key") // falls through to GOOGLE_API_KEY
-
-	c := Gemini(srv.URL, "")
-	if _, err := c.Generate(context.Background(), liveReq("gemini-2.0-flash")); err != nil {
-		t.Fatal(err)
-	}
-	if gotKey != "goog-env-key" {
-		t.Errorf("x-goog-api-key: %q", gotKey)
-	}
-	if gotPath != "/v1beta/models/gemini-2.0-flash:generateContent" {
-		t.Errorf("sync path: %q", gotPath)
-	}
-}
-
-func TestGemini_StreamPath(t *testing.T) {
-	var gotPath, gotQuery string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotQuery = r.URL.RawQuery
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"pong\"}]}}]}\n\n"))
-	}))
-	defer srv.Close()
-
-	c := Gemini(srv.URL, "k")
-	stream, err := c.GenerateStream(context.Background(), liveReq("gemini-2.0-flash"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	for {
-		if _, err := stream.Recv(); err == io.EOF {
-			break
-		} else if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if gotPath != "/v1beta/models/gemini-2.0-flash:streamGenerateContent" {
-		t.Errorf("stream path: %q", gotPath)
-	}
-	if gotQuery != "alt=sse" {
-		t.Errorf("stream query: %q", gotQuery)
-	}
-}
-
-func TestGemini_GeminiKeyBeatsGoogleKey(t *testing.T) {
-	t.Setenv(EnvGeminiKey, "gemini-env")
-	t.Setenv(EnvGoogleKey, "google-env")
-	if c := Gemini("https://x.invalid", ""); c.apiKey != "gemini-env" {
-		t.Errorf("GEMINI_API_KEY should win: %q", c.apiKey)
-	}
-}
-
-// --- helpers ---
-
-func liveReq(model string) *v1.Request {
-	mt := 64
-	return &v1.Request{
-		Model: v1.ModelRefs{model},
-		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "Reply with the single word: pong"}}}},
-		ModelConfig: map[string]*v1.ModelOpts{
-			model: {Sampling: &v1.SamplingParams{MaxTokens: &mt}},
-		},
-	}
-}
-
-func outputText(resp *Response) string {
-	var b strings.Builder
-	for _, it := range resp.Output {
-		if m, ok := it.(*v1.Message); ok {
-			for _, p := range m.Content {
-				switch tp := p.(type) {
-				case *v1.OutputTextPart:
-					b.WriteString(tp.Text)
-				case *v1.TextPart:
-					b.WriteString(tp.Text)
+			for kind, c := range map[string]*Client{"Relay": Relay(tc.base, tc.key, tc.opts...), "RelayWS": RelayWS(tc.base, tc.key, tc.opts...)} {
+				if c.baseURL != tc.wantURL || c.apiKey != tc.wantKey || c.syncTimeout != tc.timeout {
+					t.Errorf("%s: base %q key %q timeout %v; want %q %q %v", kind, c.baseURL, c.apiKey, c.syncTimeout, tc.wantURL, tc.wantKey, tc.timeout)
+				}
+				if diff := cmp.Diff(tc.headers, c.headers); diff != "" {
+					t.Errorf("%s: headers (-want +got):\n%s", kind, diff)
+				}
+				got := ""
+				if c.configErr != nil {
+					got = c.configErr.Error()
+				}
+				if got != tc.err {
+					t.Errorf("%s: config error %q, want %q", kind, got, tc.err)
+				}
+				if tc.err == "" {
+					continue
+				}
+				// The held error comes back from every call, with nothing sent.
+				ctx := context.Background()
+				_, genErr := c.Generate(ctx, sampleReq())
+				_, streamErr := c.GenerateStream(ctx, sampleReq())
+				_, modelsErr := c.Models(ctx)
+				_, catalogErr := c.Catalog(ctx)
+				for call, err := range map[string]error{"Generate": genErr, "GenerateStream": streamErr, "Models": modelsErr, "Catalog": catalogErr} {
+					if !errors.Is(err, c.configErr) {
+						t.Errorf("%s: %s err = %v, want the config error", kind, call, err)
+					}
 				}
 			}
-		}
+		})
 	}
-	return b.String()
 }
 
-func drain(t *testing.T, c *Client) []string {
-	t.Helper()
-	stream, err := c.GenerateStream(context.Background(), sampleReq())
-	if err != nil {
+func TestRelay_PathsAndTransports(t *testing.T) {
+	r, ws := Relay("http://x.example", "rk"), RelayWS("http://x.example", "rk")
+	if _, ok := r.transport.(httpTransport); !ok || r.path != "/v1/generate" || r.relay == nil {
+		t.Errorf("Relay: transport %T path %q relay %v", r.transport, r.path, r.relay)
+	}
+	if _, ok := ws.transport.(*wsTransport); !ok || ws.path != "/v1/ws" || ws.relay == nil {
+		t.Errorf("RelayWS: transport %T path %q relay %v", ws.transport, ws.path, ws.relay)
+	}
+	if err := r.Close(); err != nil {
+		t.Errorf("Close on an HTTP client = %v", err)
+	}
+	if err := ws.Close(); err != nil {
+		t.Errorf("Close on a never-dialed WS client = %v", err)
+	}
+}
+
+// WR_TIMEOUT bounds a sync call and leaves a stream alone.
+func TestRelay_TimeoutAppliesToSyncOnly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+		_, _ = w.Write([]byte(canonicalStream))
+	}))
+	defer srv.Close()
+	for _, k := range []string{EnvUsage, EnvHeaders} {
+		t.Setenv(k, "")
+	}
+	t.Setenv(EnvTimeout, "20ms")
+	c := Relay(srv.URL, "rk")
+
+	if _, err := c.Generate(context.Background(), sampleReq()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Generate err = %v, want context.DeadlineExceeded", err)
+	}
+	if got := len(drain(t, c)); got != 3 {
+		t.Errorf("stream delivered %d events past the sync timeout, want all 3", got)
+	}
+}
+
+// A vendor constructor reads only its own conventional key variables and never the relay's.
+func TestVendorClients_KeyFromEnvironment(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(key string) *Client
+		env   map[string]string
+		key   string
+		want  string
+	}{
+		{"OpenAI from OPENAI_API_KEY", func(k string) *Client { return OpenAI("https://x.example", k) }, map[string]string{EnvOpenAIKey: "sk-env"}, "", "sk-env"},
+		{"OpenAI explicit wins", func(k string) *Client { return OpenAI("https://x.example", k) }, map[string]string{EnvOpenAIKey: "sk-env"}, "sk-explicit", "sk-explicit"},
+		{"OpenAIResponses from OPENAI_API_KEY", func(k string) *Client { return OpenAIResponses("https://x.example", k) }, map[string]string{EnvOpenAIKey: "sk-env"}, "", "sk-env"},
+		{"Anthropic from ANTHROPIC_API_KEY", func(k string) *Client { return Anthropic("https://x.example", k) }, map[string]string{EnvAnthropicKey: "ak-env", EnvOpenAIKey: "sk-env"}, "", "ak-env"},
+		{"Gemini prefers GEMINI_API_KEY", func(k string) *Client { return Gemini("https://x.example", k) }, map[string]string{EnvGeminiKey: "gemini-env", EnvGoogleKey: "google-env"}, "", "gemini-env"},
+		{"Gemini falls back to GOOGLE_API_KEY", func(k string) *Client { return Gemini("https://x.example", k) }, map[string]string{EnvGoogleKey: "google-env"}, "", "google-env"},
+		{"Gemini explicit wins", func(k string) *Client { return Gemini("https://x.example", k) }, map[string]string{EnvGeminiKey: "gemini-env"}, "gk", "gk"},
+		{"no key stays keyless", func(k string) *Client { return OpenAI("http://localhost:11434", k) }, nil, "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range []string{EnvOpenAIKey, EnvAnthropicKey, EnvGeminiKey, EnvGoogleKey} {
+				t.Setenv(k, tc.env[k])
+			}
+			t.Setenv(EnvBaseURL, "http://relay-env.example")
+			t.Setenv(EnvAPIKey, "rk-relay")
+			t.Setenv(EnvHeaders, "X-Relay-Only=1")
+			c := tc.build(tc.key)
+			if c.apiKey != tc.want {
+				t.Errorf("key = %q, want %q", c.apiKey, tc.want)
+			}
+			if c.configErr != nil || c.relay != nil || c.baseURL == "http://relay-env.example" || c.headers["X-Relay-Only"] != "" {
+				t.Errorf("relay configuration leaked into a vendor client: err %v relay %v base %q headers %v", c.configErr, c.relay, c.baseURL, c.headers)
+			}
+		})
+	}
+}
+
+// A keyless client sends no auth header at all, not an empty one.
+func TestVendorClients_KeylessSendsNoAuthHeader(t *testing.T) {
+	t.Setenv(EnvOpenAIKey, "")
+	rec := newRecorder(t, http.StatusOK, ccReply)
+	if _, err := OpenAI(rec.srv.URL, "").Generate(context.Background(), sampleReq()); err != nil {
 		t.Fatal(err)
 	}
-	defer stream.Close()
-	var got []string
-	for {
-		ev, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		got = append(got, ev.Type)
-	}
-	return got
-}
-
-func assertEvents(t *testing.T, got, want []string) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Fatalf("events: got %v want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("event[%d]: got %q want %q", i, got[i], want[i])
-		}
+	if got, present := rec.only(t).Header["Authorization"]; present {
+		t.Errorf("Authorization = %q, want the header absent", got)
 	}
 }
 
-func contains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
+func TestAdapterRegistry(t *testing.T) {
+	want := map[string]struct {
+		path, provider string
+		auth           Auth
+		keyEnv         []string
+	}{
+		"openai":           {"/v1/chat/completions", "openai", Auth{Header: "Authorization", Scheme: "Bearer"}, []string{EnvOpenAIKey}},
+		"openai_responses": {"/v1/responses", "openai", Auth{Header: "Authorization", Scheme: "Bearer"}, []string{EnvOpenAIKey}},
+		"anthropic":        {"/v1/messages", "anthropic", Auth{Header: "x-api-key"}, []string{EnvAnthropicKey}},
+		"gemini":           {"", "gcp.gemini", Auth{Header: "x-goog-api-key"}, []string{EnvGeminiKey, EnvGoogleKey}},
+	}
+	names := KnownAdapterNames()
+	if len(names) != len(want) {
+		t.Errorf("KnownAdapterNames = %v, want the %d registered adapters", names, len(want))
+	}
+	for _, name := range names {
+		a, ok := AdapterByName(name)
+		w, known := want[name]
+		if !ok || !known {
+			t.Errorf("adapter %q: registered %v, expected %v", name, ok, known)
+			continue
+		}
+		if a.translator == nil || a.path != w.path || a.provider != w.provider || a.auth != w.auth || !cmp.Equal(a.keyEnv, w.keyEnv) || (a.pathFn != nil) != (w.path == "") {
+			t.Errorf("adapter %q = path %q provider %q auth %+v keyEnv %v pathFn set %v", name, a.path, a.provider, a.auth, a.keyEnv, a.pathFn != nil)
 		}
 	}
-	return false
-}
-
-func keysOf(m map[string]any) []string {
-	var ks []string
-	for k := range m {
-		ks = append(ks, k)
+	if _, ok := AdapterByName("cohere"); ok {
+		t.Error("AdapterByName(cohere) = ok, want an unknown adapter")
 	}
-	return ks
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }

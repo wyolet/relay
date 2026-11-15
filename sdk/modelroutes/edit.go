@@ -53,6 +53,11 @@ func checkAdd(f *File, ic *catalog.IndexedCatalog, m ModelRoute) error {
 	if slices.ContainsFunc(f.Models, func(x ModelRoute) bool { return x.Key == m.Key }) {
 		return f.wrap(fmt.Errorf("%s: already listed", describe(m)))
 	}
+	return checkEntry(f, ic, m)
+}
+
+// checkEntry checks m the way Resolve would: its route exists and is usable, and its model resolves on that route.
+func checkEntry(f *File, ic *catalog.IndexedCatalog, m ModelRoute) error {
 	var r *Route
 	for i := range f.Routes {
 		if f.Routes[i].Name == m.Route {
@@ -95,6 +100,41 @@ func Remove(path, key string) error {
 		}
 		f.Models = slices.Delete(f.Models, i, i+1)
 		return slices.Delete(lines, line, line+1), nil
+	})
+}
+
+// SetModelRoute points the [models] entry for key at route, checked the way Add checks a new entry. Only the route value changes, the short entry's value or the route inside a { model, route } entry; key, model, form, alignment and any trailing comment stay as written.
+func SetModelRoute(path string, ic *catalog.IndexedCatalog, key, route string) error {
+	return editFile(path, func(f *File, lines []srcLine) ([]srcLine, error) {
+		i := slices.IndexFunc(f.Models, func(m ModelRoute) bool { return m.Key == key })
+		if i < 0 {
+			return nil, f.wrap(fmt.Errorf("model %q is not listed", key))
+		}
+		m := f.Models[i]
+		m.Route = route
+		if err := checkEntry(f, ic, m); err != nil {
+			return nil, err
+		}
+		t, err := findModelsTable(lines)
+		if err != nil {
+			return nil, err
+		}
+		line, ok := t.entries[key]
+		if !ok {
+			return nil, f.wrap(fmt.Errorf("model %q: no [models] line to edit; edit by hand", key))
+		}
+		var text string
+		if _, short := lines[line].value.(string); short {
+			text, err = replaceStringValue(lines[line].text, route)
+		} else {
+			text, err = replaceInlineString(lines[line].text, "route", route)
+		}
+		if err != nil {
+			return nil, f.wrap(fmt.Errorf("line %d: %w", line+1, err))
+		}
+		lines[line].text = text
+		f.Models[i] = m
+		return lines, nil
 	})
 }
 
@@ -228,42 +268,6 @@ func entryText(m ModelRoute, like *srcLine) string {
 		}
 	}
 	return indent + key + strings.Repeat(" ", pad) + "= " + value
-}
-
-// replaceStringValue swaps the single-line string after a key line's '=' for value, keeping the key, spacing and any trailing comment.
-func replaceStringValue(text, value string) (string, error) {
-	eq := strings.Index(text, "=")
-	if eq < 0 {
-		return "", errors.New("no value to replace")
-	}
-	start := eq + 1
-	for start < len(text) && (text[start] == ' ' || text[start] == '\t') {
-		start++
-	}
-	rest := text[start:]
-	end := -1
-	switch {
-	case strings.HasPrefix(rest, `"""`), strings.HasPrefix(rest, "'''"):
-	case strings.HasPrefix(rest, `"`):
-		for i := 1; i < len(rest); i++ {
-			if rest[i] == '\\' {
-				i++
-				continue
-			}
-			if rest[i] == '"' {
-				end = i + 1
-				break
-			}
-		}
-	case strings.HasPrefix(rest, "'"):
-		if i := strings.IndexByte(rest[1:], '\''); i >= 0 {
-			end = i + 2
-		}
-	}
-	if end < 0 {
-		return "", errors.New("value is not a single-line string; edit by hand")
-	}
-	return text[:start] + quote(value) + rest[end:], nil
 }
 
 func lineEnding(lines []srcLine) string {

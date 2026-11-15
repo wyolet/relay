@@ -1,23 +1,17 @@
 package inference
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/coder/websocket"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/usage"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -41,13 +35,15 @@ func (c usageCapture) next(t *testing.T) usagelog.Event {
 	}
 }
 
+const upstreamErrorBody = `{"error":{"message":"rejected","type":"invalid_request_error"}}`
+
 // upstreamErrorDeps wires a dispatch whose one host answers every call with status, through the real retry classification and the usage producers the composition root registers.
 func upstreamErrorDeps(t *testing.T, status int) (Deps, *Principal, usageCapture) {
 	t.Helper()
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"error":{"message":"rejected","type":"invalid_request_error"}}`))
+		_, _ = w.Write([]byte(upstreamErrorBody))
 	}))
 	t.Cleanup(up.Close)
 
@@ -60,8 +56,8 @@ func upstreamErrorDeps(t *testing.T, status int) (Deps, *Principal, usageCapture
 			Name:          adapters.OpenAI,
 			DefaultPath:   "/v1/chat/completions",
 			Auth:          adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-			Translator:    openai.CCTranslator{},
-			ExtractTokens: openai.ExtractTokens,
+			Translator:    productionSpec(adapters.OpenAI).Translator,
+			ExtractTokens: productionSpec(adapters.OpenAI).ExtractTokens,
 		}).Build(),
 		(&adapter.Spec{Name: adapters.Canonical, Translator: v1.IdentityTranslator{}}).Build(),
 	)
@@ -89,11 +85,9 @@ func TestDispatch_UpstreamErrorStatusIsStoredAsUpstreamError(t *testing.T) {
 				name := fmt.Sprintf("%d %s stream=%v", status, inbound, stream)
 				d, pr, events := upstreamErrorDeps(t, status)
 
-				r := withNormalContext(httptest.NewRequest(http.MethodPost, "/", nil), pr)
-				w := httptest.NewRecorder()
-				Dispatch(d, w, r, DispatchInput{Inbound: inbound, Body: []byte(body), ModelName: "test-model", Stream: stream})
-				if w.Code != status {
-					t.Fatalf("%s: caller got %d: %s", name, w.Code, w.Body)
+				w := dispatch(d, pr, DispatchInput{Inbound: inbound, Body: []byte(body), ModelName: "test-model", Stream: stream})
+				if w.Code != status || w.Body.String() != upstreamErrorBody {
+					t.Fatalf("%s: caller got %d %s, want the provider's body verbatim", name, w.Code, w.Body)
 				}
 
 				ev := events.next(t)
@@ -110,55 +104,16 @@ func TestDispatch_UpstreamErrorStatusIsStoredAsUpstreamError(t *testing.T) {
 func TestWSFrame_UpstreamErrorStatusIsStoredAsUpstreamError(t *testing.T) {
 	for _, status := range []int{http.StatusBadRequest, http.StatusInternalServerError} {
 		d, pr, events := upstreamErrorDeps(t, status)
-		snap := d.Catalog.Current()
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := WithClassification(r.Context(), Classification{Mode: ModeNormal})
-			ctx = context.WithValue(ctx, ctxKeyT{}, pr.Key)
-			ctx = context.WithValue(ctx, ctxPrincipalT{}, pr)
-			ctx = context.WithValue(ctx, ctxSnapshotT{}, snap)
-			wsHandler(d)(w, r.WithContext(ctx))
-		}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
-		if err != nil {
-			t.Fatalf("dial: %v", err)
-		}
-
+		conn, ctx := wsConn(t, d, pr)
 		for _, stream := range []bool{false, true} {
 			id := fmt.Sprintf("f-%d-%v", status, stream)
-			frame, _ := json.Marshal(map[string]any{
-				"id":      id,
-				"payload": map[string]any{"model": "test-model", "input": "hi", "stream": stream},
-			})
-			if err := conn.Write(ctx, websocket.MessageText, frame); err != nil {
-				t.Fatalf("%s: write: %v", id, err)
+			got, body := wsExchange(t, ctx, conn, id, fmt.Sprintf(`{"model":"test-model","input":"hi","stream":%v}`, stream))
+			if got != status || body != upstreamErrorBody {
+				t.Fatalf("%s: frame answered %d %s, want the provider's %d body", id, got, body, status)
 			}
-			for {
-				_, raw, err := conn.Read(ctx)
-				if err != nil {
-					t.Fatalf("%s: read: %v", id, err)
-				}
-				var f wsFrame
-				if err := json.Unmarshal(raw, &f); err != nil {
-					t.Fatalf("%s: decode frame: %v", id, err)
-				}
-				if f.ID == id && f.Event == "end" {
-					if f.Status != status {
-						t.Fatalf("%s: end frame status %d", id, f.Status)
-					}
-					break
-				}
-			}
-
-			ev := events.next(t)
-			if ev.Status != status || ev.ErrorKind != usage.ErrorKindUpstream {
-				t.Errorf("%s: event status=%d kind=%q", id, ev.Status, ev.ErrorKind)
+			if ev := events.next(t); ev.Status != status || ev.ErrorKind != usage.ErrorKindUpstream || ev.Refusal != "" {
+				t.Errorf("%s: event status=%d kind=%q refusal=%q", id, ev.Status, ev.ErrorKind, ev.Refusal)
 			}
 		}
-
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-		cancel()
-		srv.Close()
 	}
 }

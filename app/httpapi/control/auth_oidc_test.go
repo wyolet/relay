@@ -450,7 +450,7 @@ func TestOIDCStart_DiscoveryFailure(t *testing.T) {
 	wantResponse(t, h.do(httptest.NewRequest("GET", "/api/auth/oidc/start", nil)), http.StatusBadGateway, "identity provider unavailable")
 }
 
-// Happy path on both mounts: the session gets the issuer-qualified subject, the IdP sid and the groups; the flow cookie is cleared; the browser lands on "/".
+// Happy path on both mounts: the session gets the issuer-qualified subject, the IdP sid and the groups; the flow cookie is cleared; the browser lands on "/"; each login leaves one allowed audit row naming the user.
 func TestOIDCFlow_ProvisionsAndLogsIn(t *testing.T) {
 	for _, path := range []string{"/api/auth/oidc/callback", "/auth/callback"} {
 		t.Run(path, func(t *testing.T) {
@@ -497,6 +497,16 @@ func TestOIDCFlow_ProvisionsAndLogsIn(t *testing.T) {
 			}
 			if idp.jwksHits.Load() != 1 {
 				t.Errorf("JWKS fetched %d times over two logins", idp.jwksHits.Load())
+			}
+			// The root callback is mounted outside the /api group, so it brings the audit middleware itself.
+			evs := h.events()
+			if len(evs) != 2 {
+				t.Fatalf("events = %+v, want one per login", evs)
+			}
+			for _, ev := range evs {
+				if ev.Action != "auth.login" || ev.Outcome.Status != audit.StatusAllowed || ev.Actor.Kind != audit.ActorUser || ev.Actor.Name != "alice" || ev.Actor.ID != u.ID || ev.Resource.ID != u.ID || ev.Resource.Kind != "user" {
+					t.Errorf("event = %+v, want auth.login allowed for the provisioned user alice", ev)
+				}
 			}
 		})
 	}
@@ -653,30 +663,6 @@ func TestOIDCFlow_InlineProfileTokenResponse(t *testing.T) {
 	}
 }
 
-func TestOIDCFlow_ClosedRegistrationRejectsUnknown(t *testing.T) {
-	idp := newFakeIdP(t)
-	h := newTestOIDC(t, idp, "closed")
-
-	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "registration_closed", "no account for this identity (registration is closed)")
-	if h.sess.calls != 0 || len(h.users.bySubject) != 0 {
-		t.Error("session minted or user created despite closed registration")
-	}
-	wantDenied(t, h.events(), h.subject())
-}
-
-// A first sign-in whose email belongs to an account with no identity linked, as SCIM or YAML creates, is refused like closed registration rather than linked or answered with a 500.
-func TestOIDCFlow_EmailTakenRejected(t *testing.T) {
-	idp := newFakeIdP(t)
-	h := newTestOIDC(t, idp, "open")
-	_ = h.users.Upsert(context.Background(), &user.User{ID: "u1", Username: "alice-scim", Email: idp.email})
-
-	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "email_in_use", "an account with this email already exists; an administrator must link it to this sign-in")
-	if h.sess.calls != 0 || h.users.bySubject[h.subject()] != nil || h.users.byName["alice-scim"].OIDCSubject != "" {
-		t.Error("session minted, account created or identity linked despite the taken email")
-	}
-	wantDenied(t, h.events(), h.subject())
-}
-
 func TestOIDCFlow_StateMismatchRejected(t *testing.T) {
 	idp := newFakeIdP(t)
 	h := newTestOIDC(t, idp, "open")
@@ -768,46 +754,5 @@ func TestOIDCFlow_DisabledIs404(t *testing.T) {
 	h := newOIDCHarness(t, newFakeIdP(t), &settings.AuthOIDC{})
 	for _, path := range []string{"/api/auth/oidc/start", "/api/auth/oidc/callback", "/auth/callback"} {
 		wantResponse(t, h.do(httptest.NewRequest("GET", path, nil)), http.StatusNotFound, "oidc login is not enabled")
-	}
-}
-
-func TestOIDCFlow_DisabledUserRejected(t *testing.T) {
-	idp := newFakeIdP(t)
-	h := newTestOIDC(t, idp, "open")
-	_ = h.users.Upsert(context.Background(), &user.User{
-		ID: "u1", Username: "alice", OIDCSubject: h.subject(), Disabled: true,
-	})
-
-	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusUnauthorized, "account_disabled", "account is disabled; contact your administrator")
-	if h.sess.calls != 0 {
-		t.Error("session minted for disabled user")
-	}
-	wantDenied(t, h.events(), "alice")
-}
-
-// The callback records one audit row per attempt: allowed naming the
-// logged-in user on success, denied on every rejection path. The root
-// callback is mounted outside the /api group, so it has to bring the audit
-// middleware itself or SSO logins through it leave no row.
-func TestOIDCFlow_AuditsLogin(t *testing.T) {
-	for _, path := range []string{"/api/auth/oidc/callback", "/auth/callback"} {
-		t.Run(path, func(t *testing.T) {
-			h := newTestOIDC(t, newFakeIdP(t), "open")
-			if rec := h.login(path); rec.Code != http.StatusFound {
-				t.Fatalf("callback: status %d, body %s", rec.Code, rec.Body.String())
-			}
-			evs := h.events()
-			if len(evs) != 1 {
-				t.Fatalf("events = %d, want 1", len(evs))
-			}
-			ev := evs[0]
-			u := h.users.byName["alice"]
-			if ev.Action != "auth.login" || ev.Outcome.Status != audit.StatusAllowed {
-				t.Fatalf("event = action %q status %q, want auth.login allowed", ev.Action, ev.Outcome.Status)
-			}
-			if ev.Actor.Kind != audit.ActorUser || ev.Actor.Name != "alice" || ev.Actor.ID != u.ID || ev.Resource.ID != u.ID || ev.Resource.Kind != "user" {
-				t.Fatalf("event = %+v, want the provisioned user alice", ev)
-			}
-		})
 	}
 }

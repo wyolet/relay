@@ -2,11 +2,15 @@ package aws
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // Vectors from AWS S3 SigV4 documentation (header-based auth examples).
@@ -67,22 +71,50 @@ func TestSigV4_SignRequest_IAMListUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	auth := req.Header.Get("Authorization")
-
-	hdr := req.Header.Clone()
-	hdr.Del("Authorization")
-	signed := signedHeaderNames(hdr)
-	canonical := buildCanonicalRequest(http.MethodPost, "/", "", hdr, signed, sha256Hex(body))
-	canonicalHash := sha256Hex([]byte(canonical))
-	scope := "20150830/us-east-1/iam/aws4_request"
-	stringToSign := algorithm + "\n20150830T123600Z\n" + scope + "\n" + canonicalHash
-	key := deriveSigningKey(testSecretKey, "20150830", "us-east-1", "iam")
-	wantSig := hex.EncodeToString(hmacSHA256(key, []byte(stringToSign)))
-
-	if !strings.Contains(auth, "Signature="+wantSig) {
-		t.Fatalf("signature: got auth %q want sig %s", auth, wantSig)
+	// The string to sign, written out by hand from the SigV4 rules rather than through the helpers under test.
+	const bodyHash = "44a971b53a642178e82efddce630b7115cee915577a4956398b85be69ae905ec"
+	canonical := "POST\n/\n\n" +
+		"content-type:application/x-www-form-urlencoded; charset=utf-8\n" +
+		"host:iam.amazonaws.com\n" +
+		"x-amz-content-sha256:" + bodyHash + "\n" +
+		"x-amz-date:20150830T123600Z\n\n" +
+		"content-type;host;x-amz-content-sha256;x-amz-date\n" + bodyHash
+	sum := sha256.Sum256([]byte(canonical))
+	stringToSign := "AWS4-HMAC-SHA256\n20150830T123600Z\n20150830/us-east-1/iam/aws4_request\n" + hex.EncodeToString(sum[:])
+	key := []byte("AWS4" + testSecretKey)
+	for _, part := range []string{"20150830", "us-east-1", "iam", "aws4_request", stringToSign} {
+		mac := hmac.New(sha256.New, key)
+		mac.Write([]byte(part))
+		key = mac.Sum(nil)
 	}
-	if !strings.Contains(auth, "Credential=AKIAIOSFODNN7EXAMPLE/20150830/us-east-1/iam/aws4_request") {
-		t.Fatalf("credential scope missing in %q", auth)
+
+	want := http.Header{
+		"Content-Type":         {"application/x-www-form-urlencoded; charset=utf-8"},
+		"Host":                 {"iam.amazonaws.com"},
+		"X-Amz-Date":           {"20150830T123600Z"},
+		"X-Amz-Content-Sha256": {bodyHash},
+		"Authorization": {"AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20150830/us-east-1/iam/aws4_request, " +
+			"SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date, Signature=" + hex.EncodeToString(key)},
+	}
+	if d := cmp.Diff(want, req.Header); d != "" {
+		t.Errorf("signed headers (-want +got):\n%s", d)
+	}
+
+	// A session token is sent and signed; a later time changes the scope.
+	withToken, _ := http.NewRequest(http.MethodPost, "https://iam.amazonaws.com/", nil)
+	creds.SessionToken = "sess-tok"
+	if err := SignRequest(withToken, nil, creds, "eu-west-1", "sts", fixed.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20150831/eu-west-1/sts/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature="
+	if auth := withToken.Header.Get("Authorization"); !strings.HasPrefix(auth, prefix) || len(auth) != len(prefix)+64 || withToken.Header.Get("X-Amz-Security-Token") != "sess-tok" {
+		t.Errorf("with a session token: Authorization = %q, token header %q", auth, withToken.Header.Get("X-Amz-Security-Token"))
+	}
+	if got := withToken.Header.Get("X-Amz-Content-Sha256"); got != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+		t.Errorf("empty body hash = %s", got)
+	}
+
+	if err := SignRequest(&http.Request{Header: http.Header{}}, nil, creds, "us-east-1", "iam", fixed); err == nil || err.Error() != "secret/aws: request URL is nil" {
+		t.Errorf("SignRequest without a URL: %v", err)
 	}
 }

@@ -8,51 +8,36 @@ import (
 )
 
 func TestRefValidate(t *testing.T) {
-	bad := []Ref{
-		{Kind: KindEnv},          // missing env
-		{Kind: KindStored},       // missing id
-		{Kind: "vault", ID: "x"}, // unknown kind
-		{Kind: KindEnv, ID: "x"}, // env without env name
-		{Kind: KindAWS},          // path-addressed, missing path
-		{Kind: KindBitwarden},    // path-addressed, missing path
-		{Kind: KindGCP},          // path-addressed, missing path
-		{Kind: KindAzure},        // path-addressed, missing path
-		{Kind: KindOnePassword},  // path-addressed, missing path
-	}
-	for _, r := range bad {
-		if err := r.Validate(); err == nil {
-			t.Errorf("Validate(%+v): want error", r)
-		}
-	}
-	good := []Ref{
-		{Kind: KindEnv, Env: "FOO"},
-		{Kind: KindStored, ID: "abc"},
-		{Kind: KindAWS, Path: "prod/openai-key:apiKey"},
-		{Kind: KindBitwarden, Path: "openai-key/password"},
-		{Kind: KindGCP, Path: "openai-key"},
-		{Kind: KindGCP, Path: "openai-key:3"},
-		{Kind: KindOnePassword, Path: "op://Prod/openai/credential"},
-	}
-	for _, r := range good {
-		if err := r.Validate(); err != nil {
-			t.Errorf("Validate(%+v): %v", r, err)
-		}
-	}
-}
-
-func TestRefValidateErrorText(t *testing.T) {
-	cases := map[string]Ref{
-		"secret: env ref requires a non-empty env var name": {Kind: KindEnv},
-		"secret: stored ref requires a non-empty id":        {Kind: KindStored},
-		"secret: oauth ref requires a non-empty id":         {Kind: KindOAuth, Provider: "p"},
-		"secret: oauth ref requires a non-empty provider":   {Kind: KindOAuth, ID: "x"},
-		"secret: aws ref requires a non-empty path":         {Kind: KindAWS},
-		`secret: unknown kind "vault"`:                      {Kind: "vault"},
-	}
-	for want, r := range cases {
-		err := r.Validate()
-		if err == nil || err.Error() != want {
-			t.Errorf("Validate(%+v) = %v, want %q", r, err, want)
+	for _, tc := range []struct {
+		ref  Ref
+		want string // "" = valid
+	}{
+		{Ref{Kind: KindEnv, Env: "FOO"}, ""},
+		{Ref{Kind: KindStored, ID: "abc"}, ""},
+		{Ref{Kind: KindOAuth, ID: "abc", Provider: "p"}, ""},
+		{Ref{Kind: KindAWS, Path: "prod/openai-key:apiKey"}, ""},
+		{Ref{Kind: KindBitwarden, Path: "openai-key/password"}, ""},
+		{Ref{Kind: KindGCP, Path: "openai-key:3"}, ""},
+		{Ref{Kind: KindAzure, Path: "openai-key"}, ""},
+		{Ref{Kind: KindOnePassword, Path: "op://Prod/openai/credential"}, ""},
+		{Ref{Kind: KindEnv}, "secret: env ref requires a non-empty env var name"},
+		// Each kind reads its own field only.
+		{Ref{Kind: KindEnv, ID: "x", Path: "x"}, "secret: env ref requires a non-empty env var name"},
+		{Ref{Kind: KindStored, Env: "x", Path: "x"}, "secret: stored ref requires a non-empty id"},
+		{Ref{Kind: KindOAuth, Provider: "p"}, "secret: oauth ref requires a non-empty id"},
+		{Ref{Kind: KindOAuth, ID: "x"}, "secret: oauth ref requires a non-empty provider"},
+		{Ref{Kind: KindAWS, ID: "x", Env: "x"}, "secret: aws ref requires a non-empty path"},
+		{Ref{Kind: KindBitwarden}, "secret: bitwarden ref requires a non-empty path"},
+		{Ref{Kind: KindGCP}, "secret: gcp ref requires a non-empty path"},
+		{Ref{Kind: KindAzure}, "secret: azure ref requires a non-empty path"},
+		{Ref{Kind: KindOnePassword}, "secret: onepassword ref requires a non-empty path"},
+		{Ref{Kind: "vault", ID: "x", Path: "x", Env: "x"}, `secret: unknown kind "vault"`},
+		{Ref{ID: "x"}, `secret: unknown kind ""`},
+		{Ref{Kind: "ENV", Env: "FOO"}, `secret: unknown kind "ENV"`},
+	} {
+		err := tc.ref.Validate()
+		if (tc.want == "") != (err == nil) || (err != nil && err.Error() != tc.want) {
+			t.Errorf("Validate(%+v) = %v, want %q", tc.ref, err, tc.want)
 		}
 	}
 }
@@ -74,39 +59,54 @@ func TestRefJSONShape(t *testing.T) {
 	}
 }
 
-func TestEnvResolver(t *testing.T) {
+// recording answers every ref with its own name and remembers the ref.
+type recording struct {
+	name string
+	got  *Ref
+}
+
+func (r recording) Resolve(_ context.Context, ref Ref) ([]byte, error) {
+	*r.got = ref
+	return []byte(r.name), nil
+}
+
+func TestRegistry_Resolve(t *testing.T) {
 	t.Setenv("MY_SECRET", "s3kr3t")
+	t.Setenv("MY_EMPTY", "")
+	var seen Ref
 	reg := NewRegistry()
 	reg.Register(KindEnv, EnvResolver{})
+	reg.Register(KindAWS, recording{"first", &seen})
+	reg.Register(KindAWS, recording{"aws", &seen})
 
-	got, err := reg.Resolve(context.Background(), Ref{Kind: KindEnv, Env: "MY_SECRET"})
-	if err != nil || string(got) != "s3kr3t" {
-		t.Fatalf("env resolve: got %q err %v", got, err)
+	for _, tc := range []struct {
+		ref           Ref
+		want, wantErr string
+	}{
+		{Ref{Kind: KindEnv, Env: "MY_SECRET"}, "s3kr3t", ""},
+		{Ref{Kind: KindAWS, Path: "prod/key"}, "aws", ""},
+		{Ref{Kind: KindEnv, Env: "NOPE_UNSET"}, "", `secret/env: "NOPE_UNSET" is unset or empty`},
+		{Ref{Kind: KindEnv, Env: "MY_EMPTY"}, "", `secret/env: "MY_EMPTY" is unset or empty`},
+		{Ref{Kind: KindStored, ID: "x"}, "", `secret: no resolver registered for kind "stored"`},
+		// An invalid ref never reaches its resolver.
+		{Ref{Kind: KindAWS}, "", "secret: aws ref requires a non-empty path"},
+		{Ref{Kind: KindEnv}, "", "secret: env ref requires a non-empty env var name"},
+	} {
+		seen = Ref{}
+		got, err := reg.Resolve(context.Background(), tc.ref)
+		if string(got) != tc.want || (tc.wantErr == "") != (err == nil) || (err != nil && err.Error() != tc.wantErr) {
+			t.Errorf("Resolve(%+v) = %q, %v; want %q, %q", tc.ref, got, err, tc.want, tc.wantErr)
+		}
+		if wantSeen := tc.ref; tc.want == "aws" && seen != wantSeen {
+			t.Errorf("resolver got %+v, want %+v", seen, wantSeen)
+		} else if tc.want != "aws" && seen != (Ref{}) {
+			t.Errorf("Resolve(%+v) reached the aws resolver", tc.ref)
+		}
 	}
-	// Unset → loud error.
-	if _, err := reg.Resolve(context.Background(), Ref{Kind: KindEnv, Env: "NOPE_UNSET"}); err == nil {
-		t.Fatal("unset env should error")
-	}
-	if _, err := (EnvResolver{}).Resolve(context.Background(), Ref{Kind: KindStored, ID: "x"}); err == nil {
-		t.Fatal("wrong kind should error")
-	}
-}
 
-func TestRegistry_UnknownKind(t *testing.T) {
-	reg := NewRegistry()
-	reg.Register(KindEnv, EnvResolver{})
-	// stored not registered → clear error.
-	_, err := reg.Resolve(context.Background(), Ref{Kind: KindStored, ID: "x"})
-	if err == nil || err.Error() != `secret: no resolver registered for kind "stored"` {
-		t.Fatalf("want unregistered-kind error, got %v", err)
-	}
-}
-
-func TestRegistry_InvalidRef(t *testing.T) {
-	reg := NewRegistry()
-	reg.Register(KindEnv, EnvResolver{})
-	if _, err := reg.Resolve(context.Background(), Ref{Kind: KindEnv}); err == nil {
-		t.Fatal("want validation error")
+	_, err := EnvResolver{}.Resolve(context.Background(), Ref{Kind: KindStored, ID: "x", Env: "MY_SECRET"})
+	if err == nil || err.Error() != `secret/env: wrong kind "stored"` {
+		t.Errorf("EnvResolver on a stored ref: %v", err)
 	}
 }
 

@@ -9,13 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/plan/plantest"
@@ -32,17 +29,15 @@ import (
 
 // accountsWorld is a team with a project, two members of the project with a key each, and a priced model served through a system credential. The team's account caps requests shared, the project's account gives each lane a budget and a model-scoped cap, and the first member's account has a small cap of its own.
 type accountsWorld struct {
-	w            *plantest.World
-	team         *team.Team
-	proj         *project.Project
-	u1, u2       *user.User
-	m1, m2       *account.Account
-	k1, k2       *key.Key
-	teamRL       *ratelimit.RateLimit
-	laneRL       *ratelimit.RateLimit
-	teamPol      *policy.Policy
-	lanePol      *policy.Policy
-	projBudgetID string
+	w                         *plantest.World
+	team                      *team.Team
+	proj                      *project.Project
+	u1, u2                    *user.User
+	m1, m2                    *account.Account
+	k1, k2                    *key.Key
+	teamRL, projRL, laneRL    *ratelimit.RateLimit
+	teamPol, projPol, lanePol *policy.Policy
+	projBudget                *budget.Budget
 }
 
 func fixedRule(amount int64) ratelimit.Rule {
@@ -72,14 +67,12 @@ func newAccountsWorld() *accountsWorld {
 	aw.teamPol = w.Policy("team", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: aw.teamRL.Meta.ID}}})
 	w.BindPolicy(aw.teamPol, w.TeamAccount(aw.team))
 
-	projRL := w.RateLimit(fixedRule(50))
-	b := w.Budget("10")
-	aw.projBudgetID = b.Meta.ID
-	projPol := w.Policy("project", policy.Spec{
-		RateLimits: []policy.RateLimitLink{{RateLimitID: projRL.Meta.ID, Models: []string{"prov/m1"}, Shared: &no}},
-		Budgets:    []policy.BudgetLink{{BudgetID: b.Meta.ID, Shared: &no}},
+	aw.projRL, aw.projBudget = w.RateLimit(fixedRule(50)), w.Budget("10")
+	aw.projPol = w.Policy("project", policy.Spec{
+		RateLimits: []policy.RateLimitLink{{RateLimitID: aw.projRL.Meta.ID, Models: []string{"prov/m1"}, Shared: &no}},
+		Budgets:    []policy.BudgetLink{{BudgetID: aw.projBudget.Meta.ID, Shared: &no}},
 	})
-	w.BindPolicy(projPol, w.ProjectAccount(aw.proj))
+	w.BindPolicy(aw.projPol, w.ProjectAccount(aw.proj))
 
 	aw.laneRL = w.RateLimit(fixedRule(4))
 	aw.lanePol = w.Policy("lane", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: aw.laneRL.Meta.ID}}})
@@ -102,9 +95,7 @@ func newAccountsHarness(t *testing.T, w *plantest.World, az authz.Authorizer, ac
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	lim := lua.New(pkgratelimit.New(mem, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return now }))
 
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", actors))
-	api := humachi.New(r, huma.DefaultConfig("accounts-test", "0"))
+	r, api := testAPI(t, actors)
 	d := Deps{Authz: az, PlanView: plans.Engine.View, Counters: lim}
 	registerMyAccounts(api, d, nil)
 	registerLimits(api, d, nil)

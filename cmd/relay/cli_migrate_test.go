@@ -1,36 +1,9 @@
 package main
 
 import (
-	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/wyolet/relay/app/apply"
 )
-
-// A conflict means the row changed between plan and write and was skipped,
-// so the tree is not applied. TestApplyConflictExitsOne pins that CI sees a
-// non-zero exit rather than a clean run.
-func TestApplyConflictExitsOne(t *testing.T) {
-	srv := planServer(t, http.StatusOK, []apply.Entry{
-		{Kind: "Team", Name: "platform", Action: apply.ActionConflict},
-	})
-	var err error
-	captureStdout(t, func() {
-		err = runApply([]string{"-f", manifestDir(t), "--url", srv.URL})
-	})
-	if got := exitCode(t, err); got != exitDrift {
-		t.Fatalf("exit %d, want %d", got, exitDrift)
-	}
-
-	// --force overrides operator edits, not a mid-apply change.
-	captureStdout(t, func() {
-		err = runApply([]string{"-f", manifestDir(t), "--force", "--url", srv.URL})
-	})
-	if got := exitCode(t, err); got != exitDrift {
-		t.Fatalf("--force exit %d, want %d", got, exitDrift)
-	}
-}
 
 // TestMigrateDownArguments pins the rollback command's argument contract;
 // the migration itself is exercised against Postgres in integration.

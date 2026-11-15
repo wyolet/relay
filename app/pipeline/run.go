@@ -38,6 +38,21 @@ type runState struct {
 	att attempt
 	// host is the last host called, for the reachability record of a failure.
 	host *host.Host
+	// body is what bodyHop's attempts send, with the keys HopBody dropped from it.
+	bodyHop     *plan.RouteHop
+	body        []byte
+	bodyDropped []string
+}
+
+// bodyFor sets st.body to what hop is sent, asking req.HopBody once per hop.
+func (st *runState) bodyFor(req *Request, hop *plan.RouteHop) {
+	if st.bodyHop == hop {
+		return
+	}
+	st.bodyHop, st.body, st.bodyDropped = hop, req.Body, nil
+	if req.HopBody != nil {
+		st.body, st.bodyDropped = req.HopBody(hop, req.BodyShape, req.Body)
+	}
 }
 
 // Run orchestrates one request over req.Hops. Caller MUST Close the returned Result.Body to release the connection and trigger post-flight.
@@ -149,6 +164,7 @@ hops:
 			st.cur = &st.att
 			st.host = hop.Host
 			stampAttempt(req.Lifecycle, st.cur, attempts)
+			st.bodyFor(req, hop)
 
 			canFailOver := attempts < maxAttempts && (untried(excluded, i) || slotsAfter(req.Hops, hi))
 			action, rerr := p.callSlot(ctx, req, st, hop, i, modelID, canFailOver)
@@ -226,7 +242,7 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 	for {
 		req.Lifecycle.MarkUpstreamStart()
 		call := newUpstreamCall(ctx, callTimeout(req.Adapter, req.Stream))
-		resp, err := req.Adapter.Call(call.ctx, hop.Host.Spec.BaseURL, hop.Host.Spec.Path, keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream, oauth)
+		resp, err := req.Adapter.Call(call.ctx, hop.Host.Spec.BaseURL, hop.Host.Spec.Path, keyValue, st.body, req.Headers, req.UpstreamModel, req.Stream, oauth)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			call.accepted.Store(true)
 			st.cur.reached, st.callerReached = true, true
@@ -557,6 +573,7 @@ func stampAttempt(lc *lifecycle.Context, a *attempt, attempts int) {
 	}
 	lc.Attempts = attempts
 	lc.HostKeyID = a.slot.Credential.KeyHash
+	lc.HostKeyRowID = a.slot.Credential.Meta.ID
 	lc.HostID, lc.HostName = a.hop.Host.Meta.ID, a.hop.Host.Meta.Name
 	lc.PoolID, lc.AccountID, lc.ViaAccountID = "", "", ""
 	if a.hop.Pool.Pool != nil {

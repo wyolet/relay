@@ -19,6 +19,12 @@ const (
 	kdfArgon2id = 1
 )
 
+// Upper bounds the Bitwarden clients accept; KDF settings come from the server, and argon2 allocates the memory up front.
+const (
+	argon2MaxMemoryMiB   = 1024
+	argon2MaxParallelism = 16
+)
+
 func makeMasterKey(password, email string, kdfType, iterations int, memory, parallelism *int) ([]byte, error) {
 	salt := []byte(strings.ToLower(strings.TrimSpace(email)))
 
@@ -30,15 +36,26 @@ func makeMasterKey(password, email string, kdfType, iterations int, memory, para
 		return pbkdf2.Key([]byte(password), salt, iterations, 32, sha256.New), nil
 
 	case kdfArgon2id:
-		mem := 64 * 1024
+		memMiB := 64
 		par := 4
 		if memory != nil {
-			mem = *memory * 1024
+			memMiB = *memory
 		}
 		if parallelism != nil {
 			par = *parallelism
 		}
-		return argon2.IDKey([]byte(password), salt, uint32(iterations), uint32(mem), uint8(par), 32), nil
+		if iterations < 1 {
+			return nil, fmt.Errorf("bitwarden: Argon2id iterations must be >= 1, got %d", iterations)
+		}
+		if memMiB < 1 || memMiB > argon2MaxMemoryMiB {
+			return nil, fmt.Errorf("bitwarden: Argon2id memory must be 1-%d MiB, got %d", argon2MaxMemoryMiB, memMiB)
+		}
+		if par < 1 || par > argon2MaxParallelism {
+			return nil, fmt.Errorf("bitwarden: Argon2id parallelism must be 1-%d, got %d", argon2MaxParallelism, par)
+		}
+		// Bitwarden salts Argon2id with SHA-256 of the email, PBKDF2 with the email itself.
+		saltHash := sha256.Sum256(salt)
+		return argon2.IDKey([]byte(password), saltHash[:], uint32(iterations), uint32(memMiB*1024), uint8(par), 32), nil
 
 	default:
 		return nil, fmt.Errorf("bitwarden: unsupported KDF type: %d", kdfType)

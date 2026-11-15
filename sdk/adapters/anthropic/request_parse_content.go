@@ -52,15 +52,14 @@ func anthropicMessagesToCanonical(raws []json.RawMessage, breakpoints *cacheBrea
 			}
 
 		case "assistant":
-			msgItem, toolCalls, err := anthropicAssistantContentToItems(msg.Content, breakpoints)
+			msgItem, assistantItems, err := anthropicAssistantContentToItems(msg.Content, breakpoints)
 			if err != nil {
 				return nil, err
 			}
 			if msgItem != nil {
 				msgItem.CacheConfig = breakpoints.contentAnchor(msg.Content)
-				items = append(items, msgItem)
 			}
-			items = append(items, toolCalls...)
+			items = append(items, assistantItems...)
 
 		default:
 			// Unknown roles become user messages.
@@ -208,21 +207,23 @@ func splitToolResults(parts []v1.Part, raw json.RawMessage, breakpoints *cacheBr
 	return toolResults, textParts
 }
 
-// anthropicAssistantContentToItems converts an assistant message content to canonical items.
-// Returns a Message item (for text content) and FunctionCall items (for tool_use blocks).
+// anthropicAssistantContentToItems converts an assistant message content to canonical items in wire order.
+// All text blocks join one Message, placed where the first one sits; the Message is also returned on its own (nil when there is none).
 func anthropicAssistantContentToItems(raw json.RawMessage, breakpoints *cacheBreakpoints) (*v1.Message, []v1.Item, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return &v1.Message{Role: v1.RoleAssistant}, nil, nil
+		msg := &v1.Message{Role: v1.RoleAssistant}
+		return msg, []v1.Item{msg}, nil
 	}
 	if raw[0] == '"' {
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return nil, nil, err
 		}
-		return &v1.Message{
+		msg := &v1.Message{
 			Role:    v1.RoleAssistant,
 			Content: []v1.Part{&v1.OutputTextPart{Text: s}},
-		}, nil, nil
+		}
+		return msg, []v1.Item{msg}, nil
 	}
 
 	var blocks []json.RawMessage
@@ -230,8 +231,8 @@ func anthropicAssistantContentToItems(raw json.RawMessage, breakpoints *cacheBre
 		return nil, nil, err
 	}
 
-	var textParts []v1.Part
-	var toolItems []v1.Item
+	var msgItem *v1.Message
+	var items []v1.Item
 	for _, b := range blocks {
 		var probe struct {
 			Type      string          `json:"type"`
@@ -241,19 +242,24 @@ func anthropicAssistantContentToItems(raw json.RawMessage, breakpoints *cacheBre
 			Input     json.RawMessage `json:"input,omitempty"`
 			Thinking  string          `json:"thinking,omitempty"`
 			Signature string          `json:"signature,omitempty"`
+			Data      string          `json:"data,omitempty"`
 		}
 		if err := json.Unmarshal(b, &probe); err != nil {
 			continue
 		}
 		switch probe.Type {
 		case "text":
-			textParts = append(textParts, &v1.OutputTextPart{Text: probe.Text})
+			if msgItem == nil {
+				msgItem = &v1.Message{Role: v1.RoleAssistant}
+				items = append(items, msgItem)
+			}
+			msgItem.Content = append(msgItem.Content, &v1.OutputTextPart{Text: probe.Text})
 		case "tool_use":
 			args := "{}"
 			if len(probe.Input) > 0 {
 				args = string(probe.Input)
 			}
-			toolItems = append(toolItems, &v1.FunctionCall{
+			items = append(items, &v1.FunctionCall{
 				ID:          probe.ID,
 				CallID:      probe.ID,
 				Name:        probe.Name,
@@ -261,15 +267,17 @@ func anthropicAssistantContentToItems(raw json.RawMessage, breakpoints *cacheBre
 				CacheConfig: breakpoints.blockAnchor(b),
 			})
 		case "thinking":
-			toolItems = append(toolItems, thinkingToReasoning(probe.Thinking, probe.Signature))
+			items = append(items, thinkingToReasoning(probe.Thinking, probe.Signature))
+		case "redacted_thinking":
+			items = append(items, redactedThinkingToReasoning(probe.Data))
 		}
 	}
 
-	var msgItem *v1.Message
-	if len(textParts) > 0 || len(toolItems) == 0 {
-		msgItem = &v1.Message{Role: v1.RoleAssistant, Content: textParts}
+	if len(items) == 0 {
+		msgItem = &v1.Message{Role: v1.RoleAssistant}
+		items = append(items, msgItem)
 	}
-	return msgItem, toolItems, nil
+	return msgItem, items, nil
 }
 
 // anthropicImageBlockToURL converts an Anthropic image content block to a URL string.

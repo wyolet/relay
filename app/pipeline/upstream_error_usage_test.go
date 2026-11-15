@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -55,34 +56,41 @@ func errorResp(status int) *http.Response {
 	}
 }
 
+// answering is an adapter answering every call with resp(); with retry set it reports every answer as a retryable server error.
+func answering(resp func() *http.Response, retry bool) *fakeAdapter {
+	adp := &fakeAdapter{callFn: func(context.Context, string, string, []byte, http.Header) (*http.Response, error) { return resp(), nil }}
+	if retry {
+		adp.retryFn = func(*http.Response) (bool, keypool.FailureKind, time.Duration) {
+			return true, keypool.FailureServerError, 0
+		}
+	}
+	return adp
+}
+
+// runForUsage runs one request on the key "key-hash" with the usage producers wired, drains the result, and returns it with the usage event the request emitted.
+func runForUsage(t *testing.T, adp pipeline.Adapter, stream bool) (*pipeline.Result, usagelog.Event, error) {
+	t.Helper()
+	reg, events := usageRegistry()
+	p := newPipeline()
+	p.Lifecycle = reg
+	lc := lifecycle.NewContext("req", "pipeline", time.Now())
+	lc.Translator = identityTranslator{}
+	res, err := p.Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: hopOf([]*hostkey.HostKey{makeKey("key-hash", "sk")}), Stream: stream, Lifecycle: lc})
+	if res != nil {
+		drainResult(t, res)
+	}
+	return res, events.next(t), err
+}
+
 // An error status the pipeline hands back to the caller is stored with that status and the upstream-error kind, buffered and streamed alike.
 func TestRun_PassedThroughErrorStatusIsAnUpstreamError(t *testing.T) {
 	for _, status := range []int{http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusServiceUnavailable} {
 		for _, stream := range []bool{false, true} {
-			reg, events := usageRegistry()
-			p := newPipeline()
-			p.Lifecycle = reg
-
-			lc := lifecycle.NewContext("req", "pipeline", time.Now())
-			lc.Translator = identityTranslator{}
-			res, err := p.Run(context.Background(), &pipeline.Request{
-				// The default fake adapter retries nothing, so every status is passed through.
-				Adapter: &fakeAdapter{callFn: func(context.Context, string, string, []byte, http.Header) (*http.Response, error) {
-					return errorResp(status), nil
-				}},
-				Hops:      hopOf([]*hostkey.HostKey{makeKey("h", "sk")}),
-				Stream:    stream,
-				Lifecycle: lc,
-			})
-			if err != nil {
-				t.Fatalf("status %d stream=%v: Run: %v", status, stream, err)
+			// The adapter retries nothing, so every status is passed through.
+			res, ev, err := runForUsage(t, answering(func() *http.Response { return errorResp(status) }, false), stream)
+			if err != nil || res.Status != status {
+				t.Fatalf("status %d stream=%v: result %+v, err %v; want the status passed through", status, stream, res, err)
 			}
-			if res.Status != status {
-				t.Fatalf("status %d stream=%v: result status %d", status, stream, res.Status)
-			}
-			drainResult(t, res)
-
-			ev := events.next(t)
 			if ev.Status != status || ev.ErrorKind != usage.ErrorKindUpstream || ev.Streamed != stream {
 				t.Errorf("status %d stream=%v: event status=%d kind=%q streamed=%v", status, stream, ev.Status, ev.ErrorKind, ev.Streamed)
 			}
@@ -93,40 +101,25 @@ func TestRun_PassedThroughErrorStatusIsAnUpstreamError(t *testing.T) {
 // A retryable error status that exhausts the keys reaches the usage log through the failure path with the same kind and status.
 func TestRun_ExhaustedErrorStatusIsAnUpstreamError(t *testing.T) {
 	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
-		reg, events := usageRegistry()
-		p := newPipeline()
-		p.Lifecycle = reg
-
-		_, err := p.Run(context.Background(), &pipeline.Request{
-			Adapter: &fakeAdapter{
-				callFn: func(context.Context, string, string, []byte, http.Header) (*http.Response, error) {
-					return errorResp(status), nil
-				},
-				retryFn: func(*http.Response) (bool, keypool.FailureKind, time.Duration) {
-					return true, keypool.FailureServerError, 0
-				},
-			},
-			Hops:      hopOf([]*hostkey.HostKey{makeKey("h", "sk")}),
-			Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now()),
-		})
-		if err == nil {
-			t.Fatalf("status %d: Run succeeded, want the exhausted-keys error", status)
+		_, ev, err := runForUsage(t, answering(func() *http.Response { return errorResp(status) }, true), false)
+		var failure *pipeline.UpstreamFailureError
+		if !errors.As(err, &failure) || failure.Status != status || string(failure.Body) != `{"error":{"message":"rejected"}}` {
+			t.Fatalf("status %d: Run err = %v, want the upstream failure carrying the status and body", status, err)
 		}
-		ev := events.next(t)
 		if ev.Status != status || ev.ErrorKind != usage.ErrorKindUpstream {
 			t.Errorf("status %d: event status=%d kind=%q", status, ev.Status, ev.ErrorKind)
 		}
 	}
 }
 
-// The usage event names the key the request used on every path: a stream
-// session builds its row before post-flight runs, and a failure never reaches it.
+// The usage event names the key the request used on every path: a stream session builds its row before post-flight runs, and a failure never reaches it.
 func TestRun_UsageRecordsTheHostKeyOnEveryPath(t *testing.T) {
 	completed := string(v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"r","usage":{"input":3,"output":2}}`)}.Bytes())
 	streamOK := func() *http.Response {
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(completed))}
 	}
-	cases := []struct {
+	badRequest := func() *http.Response { return errorResp(http.StatusBadRequest) }
+	for _, tc := range []struct {
 		name    string
 		stream  bool
 		resp    func() *http.Response
@@ -134,37 +127,15 @@ func TestRun_UsageRecordsTheHostKeyOnEveryPath(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "streamed success", stream: true, resp: streamOK},
-		{name: "streamed upstream error", stream: true, resp: func() *http.Response { return errorResp(http.StatusBadRequest) }},
-		{name: "buffered upstream error", resp: func() *http.Response { return errorResp(http.StatusBadRequest) }},
+		{name: "streamed upstream error", stream: true, resp: badRequest},
+		{name: "buffered upstream error", resp: badRequest},
 		{name: "keys exhausted", resp: func() *http.Response { return errorResp(http.StatusInternalServerError) }, retry: true, wantErr: true},
-	}
-	for _, tc := range cases {
-		reg, events := usageRegistry()
-		p := newPipeline()
-		p.Lifecycle = reg
-		adp := &fakeAdapter{callFn: func(context.Context, string, string, []byte, http.Header) (*http.Response, error) {
-			return tc.resp(), nil
-		}}
-		if tc.retry {
-			adp.retryFn = func(*http.Response) (bool, keypool.FailureKind, time.Duration) {
-				return true, keypool.FailureServerError, 0
-			}
-		}
-		lc := lifecycle.NewContext("req", "pipeline", time.Now())
-		lc.Translator = identityTranslator{}
-		res, err := p.Run(context.Background(), &pipeline.Request{
-			Adapter:   adp,
-			Hops:      hopOf([]*hostkey.HostKey{makeKey("key-hash", "sk")}),
-			Stream:    tc.stream,
-			Lifecycle: lc,
-		})
+	} {
+		_, ev, err := runForUsage(t, answering(tc.resp, tc.retry), tc.stream)
 		if (err != nil) != tc.wantErr {
 			t.Fatalf("%s: Run err = %v, want error %v", tc.name, err, tc.wantErr)
 		}
-		if res != nil {
-			drainResult(t, res)
-		}
-		if ev := events.next(t); ev.HostKeyID != "key-hash" {
+		if ev.HostKeyID != "key-hash" {
 			t.Errorf("%s: host_key_id = %q, want key-hash", tc.name, ev.HostKeyID)
 		}
 	}

@@ -10,7 +10,7 @@ type ResponsesURLCitationAnnotation struct {
 	StartIndex int    `json:"start_index"`
 	EndIndex   int    `json:"end_index"`
 	URL        string `json:"url"`
-	Title      string `json:"title,omitempty"`
+	Title      string `json:"title"`
 }
 
 func (*ResponsesURLCitationAnnotation) isResponsesAnnotation()          {}
@@ -22,7 +22,7 @@ func (a *ResponsesURLCitationAnnotation) MarshalJSON() ([]byte, error) {
 		StartIndex int    `json:"start_index"`
 		EndIndex   int    `json:"end_index"`
 		URL        string `json:"url"`
-		Title      string `json:"title,omitempty"`
+		Title      string `json:"title"`
 	}
 	return json.Marshal(wire{
 		Type:       "url_citation",
@@ -35,8 +35,9 @@ func (a *ResponsesURLCitationAnnotation) MarshalJSON() ([]byte, error) {
 
 // ResponsesFileCitationAnnotation is a file_citation annotation on output text.
 type ResponsesFileCitationAnnotation struct {
-	FileID string `json:"file_id"`
-	Index  int    `json:"index,omitempty"`
+	FileID   string `json:"file_id"`
+	Filename string `json:"filename,omitempty"`
+	Index    int    `json:"index"`
 }
 
 func (*ResponsesFileCitationAnnotation) isResponsesAnnotation()          {}
@@ -44,11 +45,12 @@ func (*ResponsesFileCitationAnnotation) ResponsesAnnotationType() string { retur
 
 func (a *ResponsesFileCitationAnnotation) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type   string `json:"type"`
-		FileID string `json:"file_id"`
-		Index  int    `json:"index,omitempty"`
+		Type     string `json:"type"`
+		FileID   string `json:"file_id"`
+		Filename string `json:"filename,omitempty"`
+		Index    int    `json:"index"`
 	}
-	return json.Marshal(wire{Type: "file_citation", FileID: a.FileID, Index: a.Index})
+	return json.Marshal(wire{Type: "file_citation", FileID: a.FileID, Filename: a.Filename, Index: a.Index})
 }
 
 // ResponsesRawAnnotation preserves unknown annotation types for forward compatibility.

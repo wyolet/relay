@@ -49,6 +49,20 @@ func (s Summary) isEmpty() bool {
 	return len(s.Tokens) == 0 && s.FinishReason == "" && s.ServiceTier == ""
 }
 
+// merge overwrites s's fields with o's non-empty ones, so a later
+// generation.completed carrying only a finish reason keeps earlier usage.
+func (s *Summary) merge(o Summary) {
+	if len(o.Tokens) > 0 {
+		s.Tokens = o.Tokens
+	}
+	if o.FinishReason != "" {
+		s.FinishReason = o.FinishReason
+	}
+	if o.ServiceTier != "" {
+		s.ServiceTier = o.ServiceTier
+	}
+}
+
 // ExtractSummary decodes a vendor wire response body — sync JSON or SSE
 // stream, optionally gzipped — into a canonical Summary. Returns the zero
 // Summary when the body carries no completion block; returns an error
@@ -122,9 +136,7 @@ func extractSummaryFromSSE(tr Translator, body []byte) Summary {
 		if err != nil || len(canonChunk) == 0 {
 			continue
 		}
-		if s := harvestSummaryFromCanonicalSSE(canonChunk); !s.isEmpty() {
-			found = s
-		}
+		found.merge(harvestSummaryFromCanonicalSSE(canonChunk))
 	}
 	return found
 }
@@ -182,11 +194,22 @@ func maybeUngzip(body []byte) ([]byte, error) {
 
 // looksLikeSSE sniffs the leading bytes for SSE framing.
 func looksLikeSSE(body []byte) bool {
-	head := body
-	if len(head) > 256 {
-		head = head[:256]
+	for {
+		window := body
+		if len(window) > 256 {
+			window = window[:256]
+		}
+		head := bytes.TrimLeft(window, " \t\r\n\xef\xbb\xbf")
+		// Upstreams may open a stream with comment lines (": keepalive") before the first event.
+		if len(head) == 0 || head[0] != ':' {
+			return bytes.HasPrefix(head, []byte("event:")) ||
+				bytes.HasPrefix(head, []byte("data:"))
+		}
+		comment := body[len(window)-len(head):]
+		eol := bytes.IndexAny(comment, "\r\n")
+		if eol < 0 {
+			return false
+		}
+		body = comment[eol+1:]
 	}
-	head = bytes.TrimLeft(head, " \t\r\n\xef\xbb\xbf")
-	return bytes.HasPrefix(head, []byte("event:")) ||
-		bytes.HasPrefix(head, []byte("data:"))
 }

@@ -2,494 +2,172 @@ package catalogview
 
 import (
 	"context"
+	"errors"
 	"testing"
-	"time"
 
-	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/pkg/adapters"
-	"github.com/wyolet/relay/pkg/catalogkind/binding"
-	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/pkg/catalogkind/model"
-	"github.com/wyolet/relay/pkg/catalogkind/policy"
-	"github.com/wyolet/relay/pkg/catalogkind/pricing"
-	"github.com/wyolet/relay/pkg/catalogkind/provider"
-	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
-	"github.com/wyolet/relay/pkg/meta"
 )
 
-type (
-	fModels    []*model.Model
-	fHosts     []*host.Host
-	fBindings  []*binding.Binding
-	fPricings  []*pricing.Pricing
-	fPolicies  []*policy.Policy
-	fRLs       []*ratelimit.RateLimit
-	fProviders []*provider.Provider
-	fHostKeys  []*hostkey.HostKey
-)
-
-func (f fHostKeys) List(context.Context) ([]*hostkey.HostKey, error) { return f, nil }
-
-func (f fModels) List(context.Context) ([]*model.Model, error)          { return f, nil }
-func (f fHosts) List(context.Context) ([]*host.Host, error)             { return f, nil }
-func (f fBindings) List(context.Context) ([]*binding.Binding, error)    { return f, nil }
-func (f fPricings) List(context.Context) ([]*pricing.Pricing, error)    { return f, nil }
-func (f fPolicies) List(context.Context) ([]*policy.Policy, error)      { return f, nil }
-func (f fRLs) List(context.Context) ([]*ratelimit.RateLimit, error)     { return f, nil }
-func (f fProviders) List(context.Context) ([]*provider.Provider, error) { return f, nil }
-
-func fixture() (*Service, string) {
-	provID, hostID, modID, rlID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
-	pricingID := meta.NewID()
-
-	svc := &Service{
-		Providers:  fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
-		Hosts:      fHosts{{Meta: meta.Metadata{ID: hostID, Name: "openai", DisplayName: "OpenAI"}, Spec: host.Spec{BaseURL: "https://api.openai.com"}}},
-		Models:     fModels{{Meta: meta.Metadata{ID: modID, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}}},
-		Bindings:   fBindings{{Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-4o-on-openai"}, Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI, PricingID: pricingID}}},
-		Pricings:   fPricings{{Meta: meta.Metadata{ID: pricingID, Name: "openai-gpt-4o", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}, Spec: pricing.Spec{Currency: "USD", TargetModelIDs: []string{modID}, Rates: []pricing.Rate{{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 2.5}}}}},
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{Models: []string{"openai/gpt-4o"}, RateLimits: []policy.RateLimitLink{{RateLimitID: rlID}}}}},
-		RateLimits: fRLs{{Meta: meta.Metadata{ID: rlID, Name: "rpm"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 100, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}}},
-		HostKeys:   fHostKeys{},
-	}
-	return svc, modID
-}
-
-func TestModelHosts(t *testing.T) {
-	svc, modID := fixture()
-	m, rows, err := svc.ModelHosts(context.Background(), "gpt-4o")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.ID != modID || len(rows) != 1 {
-		t.Fatalf("model=%s rows=%d, want %s/1", m.ID, len(rows), modID)
-	}
-	r := rows[0]
-	if r.Host.Name != "openai" || r.Binding.Adapter != "openai" {
-		t.Errorf("row = %+v", r)
-	}
-	if r.Pricing == nil || len(r.Pricing.Rates) != 1 || r.Pricing.Rates[0].Amount != 2.5 {
-		t.Errorf("pricing = %+v", r.Pricing)
-	}
-}
-
-func TestModelPricing_FlatHostInline(t *testing.T) {
-	svc, _ := fixture()
-	_, rows, err := svc.ModelPricing(context.Background(), "gpt-4o")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].Host.Name != "openai" || rows[0].Currency != "USD" {
-		t.Fatalf("rows = %+v", rows)
-	}
-}
-
-func TestModelPolicies_GrantAndLimits(t *testing.T) {
-	svc, _ := fixture()
-	_, rows, err := svc.ModelPolicies(context.Background(), "gpt-4o")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("policies = %d, want 1", len(rows))
-	}
-	p := rows[0]
-	if p.Name != "tier-1" || p.Owner.Kind != "user" {
-		t.Errorf("policy = %+v", p)
-	}
-	if len(p.Limits) != 1 || p.Limits[0].Meter != "requests" || p.Limits[0].Amount != 100 {
-		t.Errorf("limits = %+v", p.Limits)
-	}
-}
-
-// TestModelPolicies_Filtering is the regression for the bug where every
-// wildcard policy leaked into every model. A wildcard customer policy whose
-// keys don't reach the model's host must be EXCLUDED; a host-tier wildcard
-// policy on the serving host must be INCLUDED.
-func TestModelPolicies_Filtering(t *testing.T) {
-	provID := meta.NewID()
-	hostA, hostB := meta.NewID(), meta.NewID() // model served only on hostA
-	modID := meta.NewID()
-	keyB := meta.NewID() // a key on hostB (does NOT reach the model)
-
-	svc := &Service{
-		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
-		Hosts: fHosts{
-			{Meta: meta.Metadata{ID: hostA, Name: "openai"}, Spec: host.Spec{BaseURL: "http://a"}},
-			{Meta: meta.Metadata{ID: hostB, Name: "azure"}, Spec: host.Spec{BaseURL: "http://b"}},
-		},
-		Models:   fModels{{Meta: meta.Metadata{ID: modID, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}}},
-		Bindings: fBindings{{Meta: meta.Metadata{ID: meta.NewID(), Name: "b"}, Spec: binding.Spec{ModelID: modID, HostID: hostA, Adapter: adapters.OpenAI}}},
-		Pricings: fPricings{},
-		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyB, Name: "kb"}, Spec: hostkey.Spec{HostID: hostB}}},
-		Pools:    fPools{poolOf(hostB, keyB)},
-		Policies: fPolicies{
-			// wildcard customer policy whose only key is on hostB → cannot reach the model → EXCLUDE
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "unreachable-wildcard", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{"pool-" + keyB}}},
-			// host-tier wildcard on hostA (serves the model) → INCLUDE
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "hostA-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}, Spec: policy.Spec{}},
-			// host-tier wildcard on hostB (does NOT serve the model) → EXCLUDE
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "hostB-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostB}}, Spec: policy.Spec{}},
-		},
-		RateLimits: fRLs{},
-	}
-
-	_, rows, err := svc.ModelPolicies(context.Background(), "gpt-4o")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := map[string]bool{}
-	for _, r := range rows {
-		got[r.Name] = true
-	}
-	if !got["hostA-tier"] {
-		t.Error("hostA-tier (serves the model) should be included")
-	}
-	if got["unreachable-wildcard"] {
-		t.Error("unreachable-wildcard (no key reaches the model's host) must be excluded")
-	}
-	if got["hostB-tier"] {
-		t.Error("hostB-tier (host does not serve the model) must be excluded")
-	}
-}
-
-func TestModel_NotFound(t *testing.T) {
-	svc, _ := fixture()
-	if _, _, err := svc.ModelHosts(context.Background(), "nope"); err != ErrNotFound {
-		t.Errorf("err = %v, want ErrNotFound", err)
-	}
-}
-
-func TestPolicyModels_GrantAndLimits(t *testing.T) {
-	svc, modID := fixture()
-	p, rows, err := svc.PolicyModels(context.Background(), "tier-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Name != "tier-1" || p.Owner.Kind != "user" {
-		t.Fatalf("policy = %+v", p)
-	}
-	if len(rows) != 1 || rows[0].Model.ID != modID {
-		t.Fatalf("rows = %+v", rows)
-	}
-	if rows[0].Host.Name != "openai" || rows[0].Provider.Name != "openai" {
-		t.Errorf("provider/host = %+v / %+v", rows[0].Provider, rows[0].Host)
-	}
-	if len(rows[0].MatchedBy) != 1 || rows[0].MatchedBy[0] != "openai/gpt-4o" {
-		t.Errorf("matchedBy = %+v", rows[0].MatchedBy)
-	}
-	if len(rows[0].Limits) != 1 || rows[0].Limits[0].Amount != 100 {
-		t.Errorf("limits = %+v", rows[0].Limits)
-	}
-}
-
-func TestPolicyRateLimits_FlatDefault(t *testing.T) {
-	svc, _ := fixture()
-	_, view, err := svc.PolicyRateLimits(context.Background(), "tier-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := view.RateLimits
-	if len(rows) != 1 || rows[0].Name != "rpm" || !rows[0].Default {
-		t.Fatalf("rows = %+v", rows)
-	}
-}
-
-func TestPolicyHosts_KeysFoldedIn(t *testing.T) {
-	provID, hostA, hostB := meta.NewID(), meta.NewID(), meta.NewID()
-	modID, keyA := meta.NewID(), meta.NewID()
-	svc := &Service{
-		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
-		Hosts: fHosts{
-			{Meta: meta.Metadata{ID: hostA, Name: "host-a"}},
-			{Meta: meta.Metadata{ID: hostB, Name: "host-b"}},
-		},
-		Models:     fModels{{Meta: meta.Metadata{ID: modID, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}}},
-		Bindings:   fBindings{},
-		Pricings:   fPricings{},
-		HostKeys:   fHostKeys{{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA}}},
-		Pools:      fPools{poolOf(hostA, keyA)},
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{"pool-" + keyA}}}},
-		RateLimits: fRLs{},
-	}
-	_, rows, err := svc.PolicyHosts(context.Background(), "cust")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].Host.Name != "host-a" {
-		t.Fatalf("rows = %+v", rows)
-	}
-	if len(rows[0].HostKeys) != 1 || rows[0].HostKeys[0].Name != "ka" {
-		t.Errorf("hostKeys = %+v", rows[0].HostKeys)
-	}
-}
-
-func TestPolicy_NotFound(t *testing.T) {
-	svc, _ := fixture()
-	if _, _, err := svc.PolicyModels(context.Background(), "nope"); err != ErrNotFound {
-		t.Errorf("err = %v, want ErrNotFound", err)
-	}
-}
-
-func TestPolicyModelExclusions_HostTierNoBinding(t *testing.T) {
-	provID, hostA, hostB := meta.NewID(), meta.NewID(), meta.NewID()
-	modID := meta.NewID()
-	svc := &Service{
-		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
-		Hosts: fHosts{
-			{Meta: meta.Metadata{ID: hostA, Name: "host-a"}},
-			{Meta: meta.Metadata{ID: hostB, Name: "host-b"}},
-		},
-		Models: fModels{{Meta: meta.Metadata{ID: modID, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}}},
-		// model bound to host-a only; the policy owns host-b
-		Bindings:   fBindings{{Meta: meta.Metadata{ID: meta.NewID(), Name: "b"}, Spec: binding.Spec{ModelID: modID, HostID: hostA, Adapter: adapters.OpenAI}}},
-		Pricings:   fPricings{},
-		HostKeys:   fHostKeys{},
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "ht-b", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostB}}, Spec: policy.Spec{}}},
-		RateLimits: fRLs{},
-	}
-	_, granted, err := svc.PolicyModels(context.Background(), "ht-b")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(granted) != 0 {
-		t.Fatalf("granted = %+v, want none", granted)
-	}
-	_, excl, err := svc.PolicyModelExclusions(context.Background(), "ht-b")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(excl) != 1 || excl[0].Reason != "host-tier policy's host has no binding for this model" {
-		t.Fatalf("exclusions = %+v", excl)
-	}
-}
-
-func TestHostKeyList_SecretFreeAndScoped(t *testing.T) {
-	hostA, hostB := meta.NewID(), meta.NewID()
-	svc := &Service{
-		Providers: fProviders{},
-		Hosts: fHosts{
-			{Meta: meta.Metadata{ID: hostA, Name: "host-a"}},
-			{Meta: meta.Metadata{ID: hostB, Name: "host-b"}},
-		},
-		Models:   fModels{},
-		Bindings: fBindings{},
-		Pricings: fPricings{},
-		HostKeys: fHostKeys{
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "ka"}, Spec: hostkey.Spec{HostID: hostA, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "OPENAI_KEY"}}},
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "kb"}, Spec: hostkey.Spec{HostID: hostB, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}},
-		},
-		Policies:   fPolicies{},
-		RateLimits: fRLs{},
-	}
-	_, keys, err := svc.HostKeyList(context.Background(), "host-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(keys) != 1 || keys[0].Name != "ka" || keys[0].Kind != "env" {
-		t.Fatalf("keys = %+v", keys)
-	}
-}
-
-func TestHostPolicies_OwnTierOnly(t *testing.T) {
-	hostA := meta.NewID()
-	rlID := meta.NewID()
-	svc := &Service{
-		Providers:  fProviders{},
-		Hosts:      fHosts{{Meta: meta.Metadata{ID: hostA, Name: "host-a"}}},
-		Models:     fModels{},
-		Bindings:   fBindings{},
-		Pricings:   fPricings{},
-		HostKeys:   fHostKeys{},
-		RateLimits: fRLs{{Meta: meta.Metadata{ID: rlID, Name: "rpm"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 50, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}}},
-		Policies: fPolicies{
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "ht", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}, Spec: policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rlID}}}},
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{}},
-		},
-	}
-	_, rows, err := svc.HostPolicies(context.Background(), "host-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].Name != "ht" {
-		t.Fatalf("rows = %+v", rows)
-	}
-	if len(rows[0].RateLimits) != 1 || !rows[0].RateLimits[0].Default || rows[0].RateLimits[0].Name != "rpm" {
-		t.Errorf("rateLimits = %+v", rows[0].RateLimits)
-	}
-}
-
-func TestPolicyModels_DSLMatchedByAndCaps(t *testing.T) {
-	provID, hostID, modID := meta.NewID(), meta.NewID(), meta.NewID()
-	keyID := meta.NewID()
-	svc := &Service{
-		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
-		Hosts:     fHosts{{Meta: meta.Metadata{ID: hostID, Name: "openai"}}},
-		Models: fModels{{Meta: meta.Metadata{ID: modID, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
-			Spec: model.Spec{Capabilities: model.Capabilities{Vision: true, Tools: true}, ContextWindowTotal: 128000}}},
-		Bindings: fBindings{{Meta: meta.Metadata{ID: meta.NewID(), Name: "b"}, Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI}}},
-		Pricings: fPricings{},
-		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyID, Name: "k"}, Spec: hostkey.Spec{HostID: hostID}}},
-		Pools:    fPools{poolOf(hostID, keyID)},
-		// customer policy, DSL grant "openai/*", key reaches the host
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "dsl", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{Models: []string{"openai"}, PoolIDs: []string{"pool-" + keyID}}}},
-		RateLimits: fRLs{},
-	}
-	_, rows, err := svc.PolicyModels(context.Background(), "dsl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("rows = %+v", rows)
-	}
-	if len(rows[0].MatchedBy) != 1 || rows[0].MatchedBy[0] != "openai" {
-		t.Errorf("matchedBy = %+v, want raw stored ref", rows[0].MatchedBy)
-	}
-	caps := rows[0].Model.Capabilities
-	if len(caps) != 2 || rows[0].Model.ContextWindowTotal != 128000 {
-		t.Errorf("model caps/context = %+v / %d", caps, rows[0].Model.ContextWindowTotal)
-	}
-}
-
-func TestPolicyHosts_KeyEnrichmentAndRequirement(t *testing.T) {
-	provID, hostA, hostB := meta.NewID(), meta.NewID(), meta.NewID()
-	modSolo, modDual := meta.NewID(), meta.NewID()
-	keyA, keyB := meta.NewID(), meta.NewID()
-	disabled := false
-	svc := &Service{
-		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
-		Hosts: fHosts{
-			{Meta: meta.Metadata{ID: hostA, Name: "host-a"}},
-			{Meta: meta.Metadata{ID: hostB, Name: "host-b"}},
-		},
-		Models: fModels{
-			{Meta: meta.Metadata{ID: modSolo, Name: "solo", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
-			{Meta: meta.Metadata{ID: modDual, Name: "dual", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
-		},
-		// solo served only on host-a; dual served on both
-		Bindings: fBindings{
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}, Spec: binding.Spec{ModelID: modSolo, HostID: hostA, Adapter: adapters.OpenAI}},
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b2"}, Spec: binding.Spec{ModelID: modDual, HostID: hostA, Adapter: adapters.OpenAI}},
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b3"}, Spec: binding.Spec{ModelID: modDual, HostID: hostB, Adapter: adapters.OpenAI}},
-		},
-		Pricings: fPricings{},
-		HostKeys: fHostKeys{
-			{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA, Enabled: &disabled}},
-			{Meta: meta.Metadata{ID: keyB, Name: "kb"}, Spec: hostkey.Spec{HostID: hostB}},
-		},
-		Pools: fPools{poolOf(hostA, keyA), poolOf(hostB, keyB)},
-		Policies: fPolicies{
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{"pool-" + keyA, "pool-" + keyB}}},
-			// a second policy that also uses keyA → sharedWithPolicyCount = 1
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p2", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{"pool-" + keyA}}},
-		},
-		RateLimits: fRLs{},
-	}
-	_, rows, err := svc.PolicyHosts(context.Background(), "p1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	byHost := map[string]PolicyHostRow{}
-	for _, r := range rows {
-		byHost[r.Host.Name] = r
-	}
-	a, b := byHost["host-a"], byHost["host-b"]
-	if a.Requirement != "required" { // solo is only on host-a
-		t.Errorf("host-a requirement = %q, want required", a.Requirement)
-	}
-	if b.Requirement != "optional" { // dual is also on host-a
-		t.Errorf("host-b requirement = %q, want optional", b.Requirement)
-	}
-	if len(a.HostKeys) != 1 || a.HostKeys[0].Enabled || a.HostKeys[0].SharedWithPolicyCount != 1 {
-		t.Errorf("host-a key = %+v (want disabled, shared=1)", a.HostKeys)
-	}
-}
-
-// Every link whose scope matches applies, so a model two links cover gets
-// both caps, and a model none covers is reported unthrottled.
-func TestPolicyRateLimits_EveryMatchingLinkApplies(t *testing.T) {
-	provID, hostID := meta.NewID(), meta.NewID()
-	modA, modFree := meta.NewID(), meta.NewID()
-	keyID := meta.NewID()
-	rl1, rl2 := meta.NewID(), meta.NewID()
-	svc := &Service{
-		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
-		Hosts:     fHosts{{Meta: meta.Metadata{ID: hostID, Name: "openai"}}},
-		Models: fModels{
-			{Meta: meta.Metadata{ID: modA, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
-			{Meta: meta.Metadata{ID: modFree, Name: "free-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
-		},
-		Bindings: fBindings{
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}, Spec: binding.Spec{ModelID: modA, HostID: hostID, Adapter: adapters.OpenAI}},
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b2"}, Spec: binding.Spec{ModelID: modFree, HostID: hostID, Adapter: adapters.OpenAI}},
-		},
-		Pricings: fPricings{},
-		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyID, Name: "k"}, Spec: hostkey.Spec{HostID: hostID}}},
-		RateLimits: fRLs{
-			{Meta: meta.Metadata{ID: rl1, Name: "rl1"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}},
-			{Meta: meta.Metadata{ID: rl2, Name: "rl2"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 20, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}},
-		},
-		// two links both scoped to gpt-4o; free-model matched by neither (unthrottled)
-		Pools: fPools{poolOf(hostID, keyID)},
-		Policies: fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{
-			PoolIDs: []string{"pool-" + keyID},
-			RateLimits: []policy.RateLimitLink{
-				{Models: []string{"openai/gpt-4o"}, RateLimitID: rl1},
-				{Models: []string{"openai/gpt-4o"}, RateLimitID: rl2},
-			},
-		}}},
-	}
-	_, view, err := svc.PolicyRateLimits(context.Background(), "p")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(view.RateLimits) != 2 || view.RateLimits[0].Default || view.RateLimits[0].Name != "rl1" {
-		t.Fatalf("rateLimits = %+v", view.RateLimits)
-	}
-	if len(view.Unthrottled) != 1 || view.Unthrottled[0].Model.Name != "free-model" {
-		t.Errorf("unthrottled = %+v, want free-model only", view.Unthrottled)
-	}
-	_, rows, err := svc.PolicyModels(context.Background(), "p")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range rows {
-		if r.Model.Name == "gpt-4o" && len(r.Limits) != 2 {
-			t.Errorf("gpt-4o limits = %+v, want both links' rules", r.Limits)
+// viewed fails the test unless a projection returned exactly the wanted
+// subject and rows.
+func viewed[R, V any](t *testing.T, what string, wantRef R, wantRows V) func(R, V, error) {
+	t.Helper()
+	return func(ref R, rows V, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if diff := cmp.Diff(wantRef, ref); diff != "" {
+			t.Errorf("%s subject (-want +got):\n%s", what, diff)
+		}
+		if diff := cmp.Diff(wantRows, rows); diff != "" {
+			t.Errorf("%s rows (-want +got):\n%s", what, diff)
 		}
 	}
 }
 
-type fPools []*pool.Pool
+func TestModelHosts(t *testing.T) {
+	ctx := context.Background()
+	want := []ModelHostRow{{Host: tier1Host(), Binding: bindView("gpt-4o", "openai"), Pricing: sheetView("openai-gpt-4o", 2.5)}}
+	viewed(t, "by slug", modelRef("gpt-4o"), want)(tier1().ModelHosts(ctx, "gpt-4o"))
+	viewed(t, "by id", modelRef("gpt-4o"), want)(tier1().ModelHosts(ctx, "model:gpt-4o"))
 
-func (f fPools) List(context.Context) ([]*pool.Pool, error) { return f, nil }
+	off := false
+	m := modelOf("gpt-4o")
+	m.Meta.DisplayName = "GPT-4o"
+	m.Spec = model.Spec{
+		Capabilities:       model.Capabilities{Vision: true, Tools: true},
+		ContextWindowTotal: 128000, ContextWindowInput: 100000,
+		Deprecation: &model.Deprecation{Status: model.DeprecationDeprecated, SunsetDate: "2027-01-01", Replacement: "model:gpt-5"},
+	}
+	onAzure := bindOf("gpt-4o", "azure")
+	onAzure.Spec.Enabled, onAzure.Spec.UpstreamName, onAzure.Spec.Snapshots = &off, "gpt-4o-deploy", []string{"gpt-4o-2024"}
+	offHost := hostOf("zeta")
+	offHost.Spec.Enabled = &off
+	svc := newService(
+		provOf("openai"), m, hostOf("openai"), hostOf("azure"), offHost,
+		bindOf("gpt-4o", "zeta"), bindOf("gpt-4o", "openai"), onAzure, bindOf("gpt-4o", "deleted"),
+		// A sheet covering the pair prices a binding that names none.
+		sheetOf("azure-all", "azure", 3, "gpt-4o"),
+	)
+	wantModel := ModelRef{
+		ID: "model:gpt-4o", Name: "gpt-4o", DisplayName: "GPT-4o",
+		Capabilities:       []string{"tools", "vision"},
+		ContextWindowTotal: 128000, ContextWindowInput: 100000,
+		Deprecation: &DeprecationView{Status: "deprecated", SunsetDate: "2027-01-01", Replacement: "model:gpt-5"},
+	}
+	zeta := hostRef("zeta")
+	zeta.Enabled = false
+	viewed(t, "many hosts", wantModel, []ModelHostRow{
+		{Host: hostRef("azure"), Binding: BindingView{ID: "bind:gpt-4o@azure", Adapter: "openai", UpstreamName: "gpt-4o-deploy", Snapshots: []string{"gpt-4o-2024"}}, Pricing: sheetView("azure-all", 3)},
+		{Host: hostRef("openai"), Binding: bindView("gpt-4o", "openai")},
+		{Host: zeta, Binding: bindView("gpt-4o", "zeta")},
+	})(svc.ModelHosts(ctx, "gpt-4o"))
 
-// poolOf is a pool at host holding keys, with id "pool-" plus the first key's.
-func poolOf(host string, keys ...string) *pool.Pool {
-	return &pool.Pool{Meta: meta.Metadata{ID: "pool-" + keys[0], Name: "pool-" + keys[0]}, Spec: pool.Spec{HostID: host, CredentialIDs: keys}}
+	viewed(t, "priced hosts only", wantModel, []ModelPriceRow{
+		{Host: hostRef("azure"), ID: "pricing:azure-all", Name: "azure-all", Currency: "USD", Rates: sheetView("", 3).Rates},
+	})(svc.ModelPricing(ctx, "gpt-4o"))
 }
 
-// A policy linking a pool reaches the pool's host and its keys.
-func TestPolicyHosts_ThroughAPool(t *testing.T) {
-	hostA, hostB, keyA := meta.NewID(), meta.NewID(), meta.NewID()
-	poolID := meta.NewID()
-	svc := &Service{
-		Providers:  fProviders{},
-		Hosts:      fHosts{{Meta: meta.Metadata{ID: hostA, Name: "host-a"}}, {Meta: meta.Metadata{ID: hostB, Name: "host-b"}}},
-		Models:     fModels{},
-		Bindings:   fBindings{},
-		Pricings:   fPricings{},
-		HostKeys:   fHostKeys{{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA}}},
-		Pools:      fPools{{Meta: meta.Metadata{ID: poolID, Name: "pa"}, Spec: pool.Spec{HostID: hostA, CredentialIDs: []string{keyA}}}},
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{poolID}}}},
-		RateLimits: fRLs{},
+func TestModelPolicies(t *testing.T) {
+	ctx := context.Background()
+	svc := tier1()
+	viewed(t, "grant and limits", modelRef("gpt-4o"), []ModelPolicyRow{
+		{ID: "policy:tier-1", Name: "tier-1", Owner: OwnerRef{Kind: "user"}, Limits: []Limit{limit(100)}},
+	})(svc.ModelPolicies(ctx, "gpt-4o"))
+
+	svc.Visible = asAlice
+	viewed(t, "operator policy hidden from alice", modelRef("gpt-4o"), []ModelPolicyRow{})(svc.ModelPolicies(ctx, "gpt-4o"))
+
+	// The model is served on openai only. A policy with no model list allows
+	// it where the policy reaches a serving host, and nowhere else.
+	svc = newService(
+		provOf("openai"), hostOf("openai"), hostOf("azure"), modelOf("gpt-4o"), modelOf("o1"), bindOf("gpt-4o", "openai"),
+		keyOf("kb", "azure", operator), poolOf("azure-keys", "azure", operator, "kb"),
+		policyOf("reaches-azure-only", operator, nil, "azure-keys"),
+		policyOf("z-openai-tier", hostTier("openai"), nil),
+		policyOf("azure-tier", hostTier("azure"), nil),
+		policyOf("other-model", operator, []string{"openai/o1"}),
+		limitedBy(limitedBy(limitedBy(policyOf("any-host", operator, []string{"openai/gpt-4o"}), "wide"), "scoped", "openai/gpt-4o"), "elsewhere", "openai/o1"),
+		rlOf("wide", 10), rlOf("scoped", 20), rlOf("elsewhere", 30),
+	)
+	viewed(t, "reach", modelRef("gpt-4o"), []ModelPolicyRow{
+		{ID: "policy:any-host", Name: "any-host", Owner: OwnerRef{Kind: "user"}, Limits: []Limit{limit(10), limit(20)}},
+		{ID: "policy:z-openai-tier", Name: "z-openai-tier", Owner: OwnerRef{Kind: "host", ID: "host:openai", Name: "openai"}, Limits: []Limit{}},
+	})(svc.ModelPolicies(ctx, "gpt-4o"))
+}
+
+func TestModelPolicies_LimitsAreTheSameOnEveryCall(t *testing.T) {
+	// half is served on two hosts and the policy's one rate limit is scoped to one of them.
+	svc := newService(
+		provOf("openai"), hostOf("openai"), hostOf("azure"), modelOf("half"), bindOf("half", "openai"), bindOf("half", "azure"),
+		limitedBy(policyOf("p", operator, nil), "azure-only", "openai/half@azure"), rlOf("azure-only", 30),
+	)
+	seen := map[int]int{}
+	for range 200 {
+		_, rows, err := svc.ModelPolicies(context.Background(), "half")
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("rows = %+v, err %v", rows, err)
+		}
+		seen[len(rows[0].Limits)]++
 	}
-	_, rows, err := svc.PolicyHosts(context.Background(), "cust")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].Host.Name != "host-a" || len(rows[0].HostKeys) != 1 || rows[0].HostKeys[0].Name != "ka" {
-		t.Fatalf("rows = %+v", rows)
+	if len(seen) != 1 {
+		t.Fatalf("one policy, one model: calls answered with different numbers of limits (limits → calls): %v", seen)
 	}
 }
+
+// A link scoped to one of the model's hosts is among the limits the policy applies to the model, once.
+func TestModelPolicies_LinkScopedToOneHostApplies(t *testing.T) {
+	svc := newService(
+		provOf("openai"), hostOf("openai"), hostOf("azure"), modelOf("half"), bindOf("half", "openai"), bindOf("half", "azure"),
+		limitedBy(limitedBy(policyOf("p", operator, nil), "azure-only", "openai/half@azure"), "both", "openai/half"), rlOf("azure-only", 30), rlOf("both", 40),
+	)
+	viewed(t, "scoped to one host", modelRef("half"), []ModelPolicyRow{
+		{ID: "policy:p", Name: "p", Owner: OwnerRef{Kind: "user"}, Limits: []Limit{limit(30), limit(40)}},
+	})(svc.ModelPolicies(context.Background(), "half"))
+}
+
+func TestHostModels(t *testing.T) {
+	svc := newService(
+		provOf("openai"), hostOf("openai"), hostOf("azure"), modelOf("o1"), modelOf("gpt-4o"),
+		bindOf("o1", "openai"), bindOf("gpt-4o", "openai"), bindOf("gpt-4o", "azure"), bindOf("deleted", "openai"),
+		sheetOf("openai-o1", "openai", 15, "o1"),
+	)
+	want := []HostModelRow{
+		{Model: modelRef("gpt-4o"), Binding: bindView("gpt-4o", "openai")},
+		{Model: modelRef("o1"), Binding: bindView("o1", "openai"), Pricing: sheetView("openai-o1", 15)},
+	}
+	viewed(t, "by slug", hostRef("openai"), want)(svc.HostModels(context.Background(), "openai"))
+	viewed(t, "by id", hostRef("openai"), want)(svc.HostModels(context.Background(), "host:openai"))
+}
+
+func TestProjections_UnknownSubjectIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	svc := tier1()
+	svc.Pools, svc.Accounts = fPools{}, fAccounts{}
+	for name, err := range map[string]error{
+		"ModelHosts":            third(svc.ModelHosts(ctx, "nope")),
+		"ModelPricing":          third(svc.ModelPricing(ctx, "nope")),
+		"ModelPolicies":         third(svc.ModelPolicies(ctx, "nope")),
+		"HostModels":            third(svc.HostModels(ctx, "nope")),
+		"HostKeyList":           third(svc.HostKeyList(ctx, "nope")),
+		"HostPolicies":          third(svc.HostPolicies(ctx, "nope")),
+		"PolicyModels":          third(svc.PolicyModels(ctx, "nope")),
+		"PolicyModelExclusions": third(svc.PolicyModelExclusions(ctx, "nope")),
+		"PolicyHosts":           third(svc.PolicyHosts(ctx, "nope")),
+		"PolicyRateLimits":      third(svc.PolicyRateLimits(ctx, "nope")),
+		"PoolKeys":              third(svc.PoolKeys(ctx, "nope")),
+		"AccountKeys":           third(svc.AccountKeys(ctx, "nope")),
+		// A model is no host and a host no policy: a ref resolves within its own kind.
+		"HostModels of a model slug":  third(svc.HostModels(ctx, "gpt-4o")),
+		"PolicyModels of a host slug": third(svc.PolicyModels(ctx, "openai")),
+	} {
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: err = %v, want ErrNotFound", name, err)
+		}
+	}
+}
+
+func third[A, B any](_ A, _ B, err error) error { return err }

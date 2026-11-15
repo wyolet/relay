@@ -3,7 +3,6 @@ package stored
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/secret/kek/local"
@@ -57,14 +56,16 @@ func TestRewrapRefusesBeforeTheDatabase(t *testing.T) {
 }
 
 func TestDestroyErrorExplains(t *testing.T) {
-	for err, want := range map[error]string{
-		keyring.ErrIsPrimary: "rotate its scope first",
-		keyring.ErrInUse:     "row count reaches 0",
-		keyring.ErrTooRecent: "24h0m0s after it was demoted",
+	other := errors.New("store down")
+	for err, hint := range map[error]string{
+		keyring.ErrIsPrimary: "; rotate its scope first, then destroy the demoted key",
+		keyring.ErrInUse:     "; stored secrets still use it, wait until its row count reaches 0 (the rewriter moves them)",
+		keyring.ErrTooRecent: "; a data key can be destroyed 24h0m0s after it was demoted, and force skips the wait for a compromised key",
+		other:                "",
 	} {
 		got := destroyError("k1", err)
-		if !errors.Is(got, err) || !strings.Contains(got.Error(), want) || !strings.Contains(got.Error(), "k1") {
-			t.Errorf("destroyError(%v) = %v", err, got)
+		if want := "data key k1: " + err.Error() + hint; !errors.Is(got, err) || got.Error() != want {
+			t.Errorf("destroyError(%v) = %v, want %s", err, got, want)
 		}
 	}
 }

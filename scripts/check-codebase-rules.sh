@@ -6,7 +6,8 @@
 # These are import-graph checks — the unambiguous, automatable core of the
 # rules. (Rule 4's broader "no vendor *names* in app/" also covers error
 # strings / catalog data, which is a human-review grep, not pass/fail; here
-# we enforce the clean part: app/ never imports a concrete vendor adapter.)
+# we enforce the clean part: nothing outside the composition root imports a
+# concrete vendor adapter.)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,11 +30,10 @@ for v in $vendors; do
 done
 [ $r2 -eq 0 ] && ok "clean"
 
-echo "Rule 4 — app/ never imports a concrete vendor adapter (composition root only):"
-# Tests legitimately import a concrete adapter (e.g. gemini_integration_test);
-# the rule governs non-test app/ code.
-hits=$(grep -rnE 'wyolet/relay/sdk/adapters/(openai|anthropic|gemini)' app/ --include='*.go' | grep -v '_test.go' || true)
-if [ -n "$hits" ]; then note "app/ imports a vendor adapter (should go through the Registry):"; echo "$hits"; else ok "clean"; fi
+echo "Rule 4 & 5 — only the composition root (cmd/relay, internal/adapterspecs) imports a vendor adapter, tests included:"
+# Tests take real translators from the specs internal/adapterspecs builds.
+hits=$(grep -rnE '"github\.com/wyolet/relay/sdk/adapters/[^"]+"' app/ pkg/ internal/ cmd/ integration/ --include='*.go' | grep -vE '^(cmd/relay|internal/adapterspecs)/' || true)
+if [ -n "$hits" ]; then note "a vendor adapter imported outside the composition root (get it from internal/adapterspecs):"; echo "$hits"; else ok "clean"; fi
 
 echo "jobq purity — the jobq module imports nothing from app/, internal/, or sdk/:"
 hits=$(grep -rnE 'wyolet/relay/(app|internal|sdk)/' jobq/ --include='*.go' || true)

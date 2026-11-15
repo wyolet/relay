@@ -2,17 +2,14 @@ package control
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
@@ -42,12 +39,36 @@ func (a reachAuthz) Visible(_ context.Context, _, _ string, owner meta.Owner) bo
 	return owner != a.hidden
 }
 
+func reachRef(m meta.Metadata) ReachRef {
+	return ReachRef{ID: m.ID, Name: m.Name, DisplayName: m.DisplayName}
+}
+
+// reachHarness serves the reach reads over w as caller u.
+func reachHarness(t *testing.T, w *plantest.World, az authz.Authorizer) http.Handler {
+	t.Helper()
+	r, api := testAPI(t, map[string]*actor.Actor{"u": {UserID: meta.NewID(), Username: "u"}})
+	registerReachable(api, Deps{Authz: az, PlanView: w.Load(t).Engine.View}, nil)
+	return r
+}
+
+// wantReach reads path and compares the whole answer; an absent list and an empty one read the same.
+func wantReach(t *testing.T, h http.Handler, path string, want Reachable) {
+	t.Helper()
+	var got Reachable
+	wantJSON(t, scopeReq(t, h, "u", http.MethodGet, path, ""), http.StatusOK, &got)
+	if diff := cmp.Diff(want, got, cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("GET %s (-want +got):\n%s", path, diff)
+	}
+}
+
 type reachFixture struct {
 	h            http.Handler
 	team, other  *team.Team
 	pa, pb, hide *pool.Pool
 	saved        *policy.Policy
-	teamAcctID   string
+	teamAcct     ReachRef
+	// m1 is served at host-a and host-b, m2 at host-a alone; viaA is all pool a brings.
+	m1, m2, m1ViaA ReachedModel
 }
 
 // newReachFixture is host-a serving m1 and m2 and host-b serving m1, a pool per host, a pool of another team at host-b the caller cannot see, and a saved team policy linking pools a and b.
@@ -61,176 +82,124 @@ func newReachFixture(t *testing.T) *reachFixture {
 	w.Bind(m1, hb, adapters.OpenAI)
 	w.Bind(m2, ha, adapters.OpenAI)
 	f := &reachFixture{team: w.Team(), other: w.Team()}
-	f.pa = w.Pool(ha, w.Credential(ha, w.Account(ha), plantest.System, "sk-a"))
-	f.pb = w.Pool(hb, w.Credential(hb, w.Account(hb), plantest.System, "sk-b"))
+	accA, accB := w.Account(ha), w.Account(hb)
+	f.pa = w.Pool(ha, w.Credential(ha, accA, plantest.System, "sk-a"))
+	f.pb = w.Pool(hb, w.Credential(hb, accB, plantest.System, "sk-b"))
 	otherOwner := meta.Owner{Kind: meta.OwnerTeam, ID: f.other.Meta.ID}
 	f.hide = w.Pool(hb, w.Credential(hb, w.Account(hb), plantest.System, "sk-hidden"))
 	f.hide.Meta.Owner = otherOwner
-	teamOwner := meta.Owner{Kind: meta.OwnerTeam, ID: f.team.Meta.ID}
 	f.saved = w.Policy("team-default", policy.Spec{PoolIDs: []string{f.pa.Meta.ID, f.pb.Meta.ID}})
-	f.saved.Meta.Owner = teamOwner
+	f.saved.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: f.team.Meta.ID}
 	w.BindPolicy(f.saved, w.TeamAccount(f.team))
-	f.teamAcctID = w.TeamAccount(f.team).Meta.ID
+	f.teamAcct = reachRef(w.TeamAccount(f.team).Meta)
 
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", map[string]*actor.Actor{"u": {UserID: meta.NewID(), Username: "u"}}))
-	api := humachi.New(r, huma.DefaultConfig("reach-test", "0"))
-	registerReachable(api, Deps{Authz: reachAuthz{noCreate: otherOwner, hidden: otherOwner}, PlanView: w.Load(t).Engine.View}, nil)
-	f.h = r
+	a, b := reachRef(accA.Meta), reachRef(accB.Meta)
+	viaA, viaB := ReachVia{Pool: ptr(reachRef(f.pa.Meta)), Account: &a}, ReachVia{Pool: ptr(reachRef(f.pb.Meta)), Account: &b}
+	model := func(m meta.Metadata, hosts []ReachRef, via []ReachVia, upstream ...ReachRef) ReachedModel {
+		out := ReachedModel{Provider: reachRef(prov.Meta), Model: ReachModelRef{ReachRef: reachRef(m)}, Hosts: hosts, Via: via}
+		for _, acc := range upstream {
+			out.Upstream = append(out.Upstream, ReachUpstream{Account: acc, Allowed: true})
+		}
+		return out
+	}
+	f.m1 = model(m1.Meta, []ReachRef{reachRef(ha.Meta), reachRef(hb.Meta)}, []ReachVia{viaA, viaB}, a, b)
+	f.m2 = model(m2.Meta, []ReachRef{reachRef(ha.Meta)}, []ReachVia{viaA}, a)
+	f.m1ViaA = model(m1.Meta, []ReachRef{reachRef(ha.Meta)}, []ReachVia{viaA}, a)
+	f.h = reachHarness(t, w, reachAuthz{noCreate: otherOwner, hidden: otherOwner})
 	return f
 }
 
-func (f *reachFixture) get(t *testing.T, path string) (int, Reachable) {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("X-Test-Actor", "u")
-	rec := httptest.NewRecorder()
-	f.h.ServeHTTP(rec, req)
-	var out Reachable
-	if rec.Code == http.StatusOK {
-		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-			t.Fatalf("decode: %v", err)
+func ptr[T any](v T) *T { return &v }
+
+// boundTo is ms as a saved policy's read lists them: each with the bound accounts that reach it.
+func boundTo(acct ReachRef, ms ...ReachedModel) []ReachedModel {
+	for i := range ms {
+		ms[i].Accounts = []ReachRef{acct}
+	}
+	return ms
+}
+
+// A draft, the saved policy with the same owner and pools, and the account bound to it answer the same models, hosts and upstream verdicts.
+func TestReachable_DraftSavedAndAccountAgree(t *testing.T) {
+	f := newReachFixture(t)
+	models := []ReachedModel{f.m1, f.m2}
+	wantReach(t, f.h, "/catalog/reachable?owner=team:"+f.team.Meta.ID+"&pool="+f.pa.Meta.ID+"&pool="+f.pb.Meta.ID, Reachable{Account: &f.teamAcct, Models: models})
+	wantReach(t, f.h, "/accounts/"+f.teamAcct.ID+"/reachable", Reachable{Account: &f.teamAcct, Models: models})
+	wantReach(t, f.h, "/accounts/"+f.teamAcct.Name+"/reachable", Reachable{Account: &f.teamAcct, Models: models})
+	for _, ref := range []string{f.saved.Meta.ID, f.saved.Meta.Name} {
+		wantReach(t, f.h, "/policies/"+ref+"/reachable", Reachable{BoundAccounts: []ReachRef{f.teamAcct}, Models: boundTo(f.teamAcct, f.m1, f.m2)})
+	}
+}
+
+func TestReachable_ListsAreNeverNull(t *testing.T) {
+	f := newReachFixture(t)
+	for _, path := range []string{"/catalog/reachable?owner=team:" + f.team.Meta.ID + "&pool=" + f.pa.Meta.ID, "/policies/" + f.saved.Meta.ID + "/reachable", "/accounts/" + f.teamAcct.ID + "/reachable"} {
+		if body := scopeReq(t, f.h, "u", http.MethodGet, path, "").Body.String(); strings.Contains(body, "null") {
+			t.Errorf("GET %s: %s", path, body)
 		}
 	}
-	return rec.Code, out
 }
 
-// A draft and the saved policy with the same owner and pools answer the same models, hosts and exclusions.
-func TestReachable_DraftMatchesSaved(t *testing.T) {
+func TestReachable_Refusals(t *testing.T) {
 	f := newReachFixture(t)
-	code, draft := f.get(t, "/catalog/reachable?owner=team:"+f.team.Meta.ID+"&pool="+f.pa.Meta.ID+"&pool="+f.pb.Meta.ID)
-	if code != http.StatusOK {
-		t.Fatalf("draft = %d", code)
-	}
-	code, saved := f.get(t, "/policies/"+f.saved.Meta.ID+"/reachable")
-	if code != http.StatusOK {
-		t.Fatalf("saved = %d", code)
-	}
-	for i, m := range saved.Models {
-		if len(m.Accounts) != 1 || m.Accounts[0].ID != f.teamAcctID {
-			t.Errorf("saved %s reached by %+v, want the team account", m.Model.Name, m.Accounts)
-		}
-		saved.Models[i].Accounts = nil
-	}
-	a, _ := json.Marshal([]any{draft.Models, draft.Excluded})
-	b, _ := json.Marshal([]any{saved.Models, saved.Excluded})
-	if string(a) != string(b) {
-		t.Errorf("draft %s\nsaved %s", a, b)
-	}
-	if len(draft.Models) != 2 || draft.Account == nil || draft.Account.ID != f.teamAcctID {
-		t.Errorf("draft = %+v, want m1 and m2 in the team's account", draft)
-	}
-	if len(saved.BoundAccounts) != 1 || saved.BoundAccounts[0].ID != f.teamAcctID {
-		t.Errorf("bound = %+v, want the team account", saved.BoundAccounts)
-	}
-	if code, acct := f.get(t, "/accounts/"+f.teamAcctID+"/reachable"); code != http.StatusOK || len(acct.Models) != 2 {
-		t.Errorf("account read = %d %+v", code, acct)
+	get := func(path string) *httptest.ResponseRecorder { return scopeReq(t, f.h, "u", http.MethodGet, path, "") }
+	wantAPIError(t, get("/catalog/reachable?owner=team:"+f.other.Meta.ID), http.StatusForbidden, "", "you may not write a policy owned by team:"+f.other.Meta.ID)
+	wantAPIError(t, get("/catalog/reachable?owner=team:"+f.team.Meta.ID+"&account="+f.teamAcct.Name), http.StatusBadRequest, "", `account "`+f.teamAcct.Name+`" is no account inside team:`+f.team.Meta.ID+` that you may read`)
+	wantAPIError(t, get("/accounts/nope/reachable"), http.StatusNotFound, "", `account "nope" not found`)
+	wantAPIError(t, get("/policies/nope/reachable"), http.StatusNotFound, "", `policy "nope" not found`)
+	if w := get("/catalog/reachable?owner=host:x"); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("an owner kind policies cannot have = %d, want 422: %s", w.Code, w.Body)
 	}
 }
 
-// A draft owned where the caller may not create a policy is refused.
-func TestReachable_OwnerNeedsCreate(t *testing.T) {
-	f := newReachFixture(t)
-	if code, _ := f.get(t, "/catalog/reachable?owner=team:"+f.other.Meta.ID); code != http.StatusForbidden {
-		t.Errorf("owner the caller cannot create in = %d, want 403", code)
-	}
-	if code, _ := f.get(t, "/catalog/reachable?owner=host:x"); code != http.StatusUnprocessableEntity {
-		t.Errorf("an owner kind policies cannot have = %d, want 422", code)
-	}
-}
-
-// A pool the caller cannot read is left out of the draft, and so is everything only it brings.
+// A pool the caller cannot read is left out of the draft with everything only it brings, and is dropped by id alone.
 func TestReachable_OmitsUnreadablePools(t *testing.T) {
 	f := newReachFixture(t)
-	_, r := f.get(t, "/catalog/reachable?owner=team:"+f.team.Meta.ID+"&pool="+f.pa.Meta.ID+"&pool="+f.hide.Meta.ID)
-	for _, m := range r.Models {
-		for _, h := range m.Hosts {
-			if h.Name == "host-b" {
-				t.Errorf("%s served at host-b, which only the hidden pool reaches", m.Model.Name)
-			}
-		}
-		if slices.ContainsFunc(m.Via, func(v ReachVia) bool { return v.Pool != nil && v.Pool.ID == f.hide.Meta.ID }) {
-			t.Errorf("%s names the hidden pool", m.Model.Name)
-		}
-	}
-	if len(r.Models) != 2 {
-		t.Errorf("models = %+v, want m1 and m2 through pool a", r.Models)
-	}
-	if len(r.Dropped) != 1 || r.Dropped[0].Code != "not_found" || r.Dropped[0].Pool.ID != f.hide.Meta.ID || r.Dropped[0].Pool.Name != "" {
-		t.Errorf("dropped = %+v, want the hidden pool by id alone", r.Dropped)
-	}
+	wantReach(t, f.h, "/catalog/reachable?owner=team:"+f.team.Meta.ID+"&pool="+f.pa.Meta.ID+"&pool="+f.hide.Meta.ID+"&pool=gone", Reachable{
+		Account: &f.teamAcct, Models: []ReachedModel{f.m1ViaA, f.m2},
+		Dropped: []ReachDropped{
+			{Pool: &ReachRef{ID: f.hide.Meta.ID}, Code: "not_found", Reason: "no pool " + f.hide.Meta.ID + " that you may read"},
+			{Pool: &ReachRef{ID: "gone"}, Code: "not_found", Reason: "no pool gone that you may read"},
+		},
+	})
 }
 
-// saShareFixture is project policy web-ci bound to service account ci-bot, whose pool lists an account shared to ci-bot.
-type saShareFixture struct {
-	reachFixture
-	proj   string
-	pool   *pool.Pool
-	pol    *policy.Policy
-	saAcct string
-}
-
-func newSAShareFixture(t *testing.T) *saShareFixture {
-	t.Helper()
+// A project policy bound to a service account, whose pool lists an account shared to that service account: the share serves only its lane.
+func TestReachable_ShareHeldForAServiceAccount(t *testing.T) {
 	w := &plantest.World{}
-	h := w.Host("openai", "http://openai.example")
-	w.Bind(w.Model(w.Provider("acme"), "gpt-4o-mini"), h, adapters.OpenAI)
+	prov, h := w.Provider("acme"), w.Host("openai", "http://openai.example")
+	m := w.Model(prov, "gpt-4o-mini")
+	w.Bind(m, h, adapters.OpenAI)
 	real := w.Account(h)
 	w.Credential(h, real, plantest.System, "sk-real")
-	tm := w.Team()
-	p := w.Project(tm)
+	p := w.Project(w.Team())
 	sa := w.ServiceAccount(p)
 	projOwner := meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}
 	share := account.Share(real, account.Receiver{Kind: account.ReceiverServiceAccount, ID: sa.Meta.ID}, projOwner, sa.Meta.Name)
 	share.Meta.ID = meta.NewID()
 	w.Accounts = append(w.Accounts, share)
-	f := &saShareFixture{proj: p.Meta.ID, saAcct: w.ServiceAccountAccount(sa).Meta.ID}
-	f.pool = w.Pool(h)
-	f.pool.Meta.Owner = projOwner
-	f.pool.Spec.AccountIDs = []string{share.Meta.ID}
-	f.pol = w.Policy("web-ci", policy.Spec{PoolIDs: []string{f.pool.Meta.ID}})
-	f.pol.Meta.Owner = projOwner
-	w.BindPolicy(f.pol, w.ServiceAccountAccount(sa))
-	f.team = w.Team()
-	f.teamAcctID = w.TeamAccount(f.team).Meta.ID
+	pl := w.Pool(h)
+	pl.Meta.Owner, pl.Spec.AccountIDs = projOwner, []string{share.Meta.ID}
+	pol := w.Policy("web-ci", policy.Spec{PoolIDs: []string{pl.Meta.ID}})
+	pol.Meta.Owner = projOwner
+	w.BindPolicy(pol, w.ServiceAccountAccount(sa))
+	otherTeam := w.TeamAccount(w.Team()).Meta.ID
+	h2 := reachHarness(t, w, authz.AlwaysAllowAuthenticated{})
 
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", map[string]*actor.Actor{"u": {UserID: meta.NewID(), Username: "u"}}))
-	api := humachi.New(r, huma.DefaultConfig("reach-test", "0"))
-	registerReachable(api, Deps{Authz: authz.AlwaysAllowAuthenticated{}, PlanView: w.Load(t).Engine.View}, nil)
-	f.h = r
-	return f
-}
-
-// Read in the project's account, the share serves nothing, and dropped says why and what to pass.
-func TestReachable_SAShare_DraftInProjectAccount(t *testing.T) {
-	f := newSAShareFixture(t)
-	_, r := f.get(t, "/catalog/reachable?owner=project:"+f.proj+"&pool="+f.pool.Meta.ID)
-	if len(r.Models) != 0 {
-		t.Fatalf("models = %+v, want none in the project's account", r.Models)
+	projAcct, saAcct, shared := reachRef(w.ProjectAccount(p).Meta), reachRef(w.ServiceAccountAccount(sa).Meta), reachRef(share.Meta)
+	reached := ReachedModel{
+		Provider: reachRef(prov.Meta), Model: ReachModelRef{ReachRef: reachRef(m.Meta)}, Hosts: []ReachRef{reachRef(h.Meta)},
+		Via:      []ReachVia{{Pool: ptr(reachRef(pl.Meta)), Account: &shared}},
+		Upstream: []ReachUpstream{{Account: reachRef(real.Meta), SharedAs: &shared, Allowed: true}},
 	}
-	if len(r.Dropped) != 1 || r.Dropped[0].Code != "held_for_another_lane" || !strings.HasSuffix(r.Dropped[0].Reason, "pass account="+f.saAcct) {
-		t.Errorf("dropped = %+v, want the share held for ci-bot", r.Dropped)
-	}
-}
-
-// With account set to the service account's, the draft reaches gpt-4o-mini; an account outside the owner scope is a 400.
-func TestReachable_SAShare_DraftInItsAccount(t *testing.T) {
-	f := newSAShareFixture(t)
-	code, r := f.get(t, "/catalog/reachable?owner=project:"+f.proj+"&pool="+f.pool.Meta.ID+"&account="+f.saAcct)
-	if code != http.StatusOK || len(r.Models) != 1 || r.Models[0].Model.Name != "gpt-4o-mini" || len(r.Dropped) != 0 {
-		t.Errorf("%d models %+v dropped %+v, want gpt-4o-mini", code, r.Models, r.Dropped)
-	}
-	if code, _ := f.get(t, "/catalog/reachable?owner=project:"+f.proj+"&account="+f.teamAcctID); code != http.StatusBadRequest {
-		t.Errorf("an account of another team = %d, want 400", code)
-	}
-}
-
-// The saved policy is read in the service account it is bound to.
-func TestReachable_SAShare_Saved(t *testing.T) {
-	f := newSAShareFixture(t)
-	code, r := f.get(t, "/policies/"+f.pol.Meta.ID+"/reachable")
-	if code != http.StatusOK || len(r.Models) != 1 || len(r.Models[0].Accounts) != 1 || r.Models[0].Accounts[0].ID != f.saAcct {
-		t.Errorf("%d %+v, want gpt-4o-mini reached by ci-bot's account", code, r)
-	}
+	draft := "/catalog/reachable?owner=project:" + p.Meta.ID + "&pool=" + pl.Meta.ID
+	// Read in the project's account the share serves nothing, and dropped says why and what to pass.
+	wantReach(t, h2, draft, Reachable{Account: &projAcct, Dropped: []ReachDropped{{
+		Pool: ptr(reachRef(pl.Meta)), Account: &shared, Code: "held_for_another_lane",
+		Reason: "shared account " + share.Meta.Name + " is held for service account " + sa.Meta.Name + "; it serves only that account's lane: pass account=" + saAcct.ID,
+	}}})
+	wantReach(t, h2, draft+"&account="+saAcct.ID, Reachable{Account: &saAcct, Models: []ReachedModel{reached}})
+	wantReach(t, h2, "/policies/"+pol.Meta.ID+"/reachable", Reachable{BoundAccounts: []ReachRef{saAcct}, Models: boundTo(saAcct, reached)})
+	wantAPIError(t, scopeReq(t, h2, "u", http.MethodGet, draft+"&account="+otherTeam, ""), http.StatusBadRequest, "",
+		`account "`+otherTeam+`" is no account inside project:`+p.Meta.ID+` that you may read`)
 }

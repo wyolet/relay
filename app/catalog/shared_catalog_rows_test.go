@@ -51,9 +51,7 @@ func TestTenantOwnedHostAndBindingExcludedOnReload(t *testing.T) {
 	bnds[1] = &userBinding
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	s := c.Current()
 	for _, h := range []*host.Host{userHost, teamHost} {
 		if _, ok := s.Host(h.Meta.ID); ok {
@@ -89,17 +87,13 @@ func TestTenantOwnedHostAndBindingExcludedOnIncrementalUpsert(t *testing.T) {
 		log := captureErrorLog(t)
 		provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 		c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-		if err := c.Reload(context.Background()); err != nil {
-			t.Fatalf("reload: %v", err)
-		}
+		must(t, c.Reload(context.Background()))
 		stored := *hosts[0]
 		stored.Meta = ownedBy(meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}, stored.Meta)
 		hosts[0] = &stored
 
 		l := &Listener{cat: c, deb: newDebouncer(0), stores: listenerStores{host: hostsByID{stored.Meta.ID: &stored}}}
-		if err := l.applyEvent(context.Background(), drainedEvent{Kind: "host", Op: "update", ID: stored.Meta.ID}); err != nil {
-			t.Fatalf("applyEvent: %v", err)
-		}
+		must(t, l.applyEvent(context.Background(), drainedEvent{Kind: "host", Op: "update", ID: stored.Meta.ID}))
 		if _, ok := c.Current().Host(stored.Meta.ID); ok {
 			t.Fatal("user-owned host is in the snapshot after an incremental upsert")
 		}
@@ -112,9 +106,7 @@ func TestTenantOwnedHostAndBindingExcludedOnIncrementalUpsert(t *testing.T) {
 			Meta: meta.Metadata{ID: meta.NewID(), Name: "my-box", Owner: meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()}},
 			Spec: host.Spec{BaseURL: "http://10.0.0.5:11434"},
 		}
-		if err := c.ApplyHostUpsert(fresh); err != nil {
-			t.Fatalf("ApplyHostUpsert: %v", err)
-		}
+		must(t, c.ApplyHostUpsert(fresh))
 		if _, ok := c.Current().Host(fresh.Meta.ID); ok {
 			t.Fatal("new project-owned host is in the snapshot")
 		}
@@ -124,17 +116,13 @@ func TestTenantOwnedHostAndBindingExcludedOnIncrementalUpsert(t *testing.T) {
 		log := captureErrorLog(t)
 		provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 		c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-		if err := c.Reload(context.Background()); err != nil {
-			t.Fatalf("reload: %v", err)
-		}
+		must(t, c.Reload(context.Background()))
 		stored := *bnds[0]
 		stored.Meta = ownedBy(meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}, stored.Meta)
 		bnds[0] = &stored
 
 		l := &Listener{cat: c, deb: newDebouncer(0)}
-		if err := l.applyEvent(context.Background(), drainedEvent{Kind: "hostbinding", Op: "update", ID: stored.Meta.ID}); err != nil {
-			t.Fatalf("applyEvent: %v", err)
-		}
+		must(t, l.applyEvent(context.Background(), drainedEvent{Kind: "hostbinding", Op: "update", ID: stored.Meta.ID}))
 		s := c.Current()
 		if _, ok := s.Binding(stored.Meta.ID); ok {
 			t.Fatal("user-owned binding is in the snapshot after its NOTIFY")

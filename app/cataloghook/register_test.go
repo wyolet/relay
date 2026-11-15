@@ -81,8 +81,8 @@ func TestNewRegistrarTargetsTheIndexOrigin(t *testing.T) {
 	if err != nil || def.Endpoint != "https://catalog.wyolet.com/v1/webhooks" {
 		t.Errorf("default Endpoint = %q, %v", def.Endpoint, err)
 	}
-	if _, err := NewRegistrar("index.yaml", "https://relay.example.com", "v1alpha3"); err == nil {
-		t.Error("an index URL with no origin must be refused")
+	if _, err := NewRegistrar("index.yaml", "https://relay.example.com", "v1alpha3"); err == nil || err.Error() != `catalog webhook: the catalog index URL "index.yaml" has no origin to register at` {
+		t.Errorf("an index URL with no origin: err = %v", err)
 	}
 }
 

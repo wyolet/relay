@@ -84,9 +84,7 @@ func newWorld(t *testing.T, seed uint64) *world {
 	w.log = append(w.log, fmt.Sprint("seed ", seed))
 	for i := range w.rings {
 		r, err := keyring.New(ctx, w.rows.ms, newSet(t, w.keks[0], w.keks[1]), keyring.Options{Now: w.clock.Now})
-		if err != nil {
-			t.Fatal(err)
-		}
+		must(t, err)
 		w.rings[i] = r
 	}
 	return w

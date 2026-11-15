@@ -20,11 +20,8 @@ type anthropicStreamBlock struct {
 	sigBuf   strings.Builder
 	callID   string
 	toolName string
-	// structuredOutput marks a tool_use block that is the synthetic
-	// __relay_structured_output tool. Its input_json_delta chunks are
-	// accumulated in argsBuf but emitted as canonical text deltas so the
-	// caller sees a normal message, not a function-call stream.
-	structuredOutput bool
+	// redacted is the whole item for a redacted_thinking block: its data arrives on the start frame, never in deltas.
+	redacted *v1.Reasoning
 }
 
 func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byte, error) {
@@ -34,6 +31,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 			Type string `json:"type"`
 			ID   string `json:"id,omitempty"`
 			Name string `json:"name,omitempty"`
+			Data string `json:"data,omitempty"`
 		} `json:"content_block"`
 	}
 	if err := json.Unmarshal(data, &cbs); err != nil {
@@ -45,10 +43,24 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 		return nil, nil
 	}
 
-	// canonical: server_tool_use and redacted_thinking blocks dropped on the
-	// stream — no canonical item for a hosted tool call, and redacted thinking
-	// has no plaintext; the buffered path (ParseResponse) drops both as well.
-	if blockType == "server_tool_use" || blockType == "redacted_thinking" {
+	// canonical: server_tool_use blocks dropped on the stream — no canonical
+	// item for a hosted tool call; the buffered path drops them as well.
+	if blockType == "server_tool_use" {
+		return nil, nil
+	}
+
+	var itemType v1.ItemType
+	switch blockType {
+	case "text":
+		itemType = v1.ItemTypeMessage
+	case "tool_use":
+		itemType = v1.ItemTypeFunctionCall
+	case "thinking", "redacted_thinking":
+		itemType = v1.ItemTypeReasoning
+	default:
+		// canonical: unmodeled content blocks (tool results of hosted tools,
+		// future types) dropped — no canonical item type to start.
+		s.currentBlock = nil
 		return nil, nil
 	}
 
@@ -65,40 +77,23 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	case "tool_use":
 		b.callID = cbs.ContentBlock.ID
 		b.toolName = cbs.ContentBlock.Name
-		if b.toolName == structuredOutputToolName {
-			// Treat as a text block — input_json_delta becomes canonical text deltas.
-			b.structuredOutput = true
-		}
+	case "redacted_thinking":
+		b.redacted = redactedThinkingToReasoning(cbs.ContentBlock.Data)
 	}
 
 	s.currentBlock = b
 
-	var itemType v1.ItemType
-	switch blockType {
-	case "text":
-		itemType = v1.ItemTypeMessage
-	case "tool_use":
-		if b.structuredOutput {
-			itemType = v1.ItemTypeMessage
-		} else {
-			itemType = v1.ItemTypeFunctionCall
-		}
-	case "thinking":
-		itemType = v1.ItemTypeReasoning
-	default:
-		// canonical: unmodeled content blocks (tool results of hosted tools,
-		// future types) dropped — no canonical item type to start.
-		s.currentBlock = nil
-		return nil, nil
-	}
-
-	startData, _ := json.Marshal(v1.ItemStartedEvent{
+	started := v1.ItemStartedEvent{
 		ItemID:   b.itemID,
 		ItemType: itemType,
 		Name:     b.toolName,
 		CallID:   b.callID,
 		Index:    outputIndex,
-	})
+	}
+	if b.redacted != nil {
+		started.ProviderData = b.redacted.ProviderData
+	}
+	startData, _ := json.Marshal(started)
 	return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}}), nil
 }
 
@@ -131,12 +126,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockDelta(data []byte) ([]byt
 		deltaText = cbd.Delta.Text
 	case "input_json_delta":
 		b.argsBuf.WriteString(cbd.Delta.PartialJSON)
-		if b.structuredOutput {
-			// Emit as text delta — caller sees streaming JSON text, not function args.
-			kind = v1.DeltaKindText
-		} else {
-			kind = v1.DeltaKindArguments
-		}
+		kind = v1.DeltaKindArguments
 		deltaText = cbd.Delta.PartialJSON
 	case "thinking_delta":
 		b.thinkBuf.WriteString(cbd.Delta.Thinking)
@@ -180,23 +170,12 @@ func (s *anthropicToCanonicalStream) handleContentBlockStop(_ []byte) ([]byte, e
 			Content: []v1.Part{&v1.OutputTextPart{Text: b.textBuf.String()}},
 		}
 	case "tool_use":
-		if b.structuredOutput {
-			// Unwrap: emit as a completed Message with text content, finish_reason stop.
-			completedItem = &v1.Message{
-				ID:      b.itemID,
-				Role:    v1.RoleAssistant,
-				Status:  v1.StatusCompleted,
-				Content: []v1.Part{&v1.OutputTextPart{Text: b.argsBuf.String()}},
-			}
-			s.structuredOutputSeen = true
-		} else {
-			completedItem = &v1.FunctionCall{
-				ID:        b.itemID,
-				CallID:    b.callID,
-				Name:      b.toolName,
-				Arguments: b.argsBuf.String(),
-				Status:    functionCallStatus(b.argsBuf.String()),
-			}
+		completedItem = &v1.FunctionCall{
+			ID:        b.itemID,
+			CallID:    b.callID,
+			Name:      b.toolName,
+			Arguments: b.argsBuf.String(),
+			Status:    functionCallStatus(b.argsBuf.String()),
 		}
 	case "thinking":
 		thinkText := b.thinkBuf.String()
@@ -218,6 +197,9 @@ func (s *anthropicToCanonicalStream) handleContentBlockStop(_ []byte) ([]byte, e
 			Status:       v1.StatusCompleted,
 			ProviderData: providerData,
 		}
+	case "redacted_thinking":
+		b.redacted.ID, b.redacted.Status = b.itemID, v1.StatusCompleted
+		completedItem = b.redacted
 	default:
 		return nil, nil
 	}

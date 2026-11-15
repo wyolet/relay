@@ -17,7 +17,7 @@ func BenchmarkCallSmallBody(b *testing.B) {
 	}))
 	b.Cleanup(srv.Close)
 
-	a := newBearerSpec(b, "/v1/chat/completions").PipelineAdapter()
+	a := newBearerSpec("/v1/chat/completions").PipelineAdapter()
 	body := bytes.Repeat([]byte("x"), 3<<10)
 	hdr := http.Header{
 		"Accept":           {"application/json"},

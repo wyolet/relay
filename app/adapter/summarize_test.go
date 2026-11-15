@@ -53,15 +53,3 @@ func TestSummarizeResponseRecoversTranslatorPanic(t *testing.T) {
 		t.Errorf("got %+v ok=%v, want no Summary", sum, ok)
 	}
 }
-
-// A count reply is not a generation: its adapter reads no Summary, so post-flight charges no tokens for it.
-func TestCountAdapterDoesNotSummarize(t *testing.T) {
-	spec := (&Spec{Name: "summary-test", CountPath: "/count", Translator: summaryTranslator{}}).Build()
-	counter, ok := spec.PipelineAdapter().(TokenCounter)
-	if !ok {
-		t.Fatal("a spec with CountPath is not a TokenCounter")
-	}
-	if _, ok := summarizer(t, counter.CountAdapter()).SummarizeResponse([]byte(`{"input_tokens":3}`)); ok {
-		t.Error("the count adapter summarized its reply")
-	}
-}

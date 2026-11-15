@@ -11,12 +11,13 @@ var (
 	// emitter queue was full or a WAL dropped segments over its disk cap
 	// (usage rows, payload captures). The async contract mandates this
 	// counter: a drop you can't see is a billing or audit hole. `kind` is
-	// the emitter queue: "usage" | "usage_refused" | "payload" | "payload_refused".
+	// the emitter queue: "usage" | "usage_refused" | "payload" | "payload_refused",
+	// or "last_used" for a key the last-used recorder had no room for.
 	RecordsLost = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: Namespace,
 			Name:      "records_lost_total",
-			Help:      "Background records dropped due to a full emitter queue or a WAL over its segment cap, by kind (usage, payload, and usage_refused/payload_refused for requests that never reached an upstream).",
+			Help:      "Background records dropped due to a full emitter queue or a WAL over its segment cap, by kind (usage, payload, and usage_refused/payload_refused for requests that never reached an upstream), or a key the last-used recorder had no room for (last_used).",
 		},
 		[]string{"kind"},
 	)

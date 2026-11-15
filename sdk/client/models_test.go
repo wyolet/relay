@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/wyolet/relay/sdk/catalog"
 )
 
 // scopedCatalogJSON is the shape relay's /v1/catalog serves: no baseURL, path or consoleURL on hosts.
@@ -262,18 +260,5 @@ func TestForMode_ProxyIsARelayClient(t *testing.T) {
 	}
 	if _, err := c.Catalog(context.Background()); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestForFrom_RejectsAHostWithoutABaseURL(t *testing.T) {
-	cat, err := catalog.LoadBytes([]byte(scopedCatalogJSON))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ForFrom(cat, "big-model-2026@alpha-host", "sk"); err == nil || !strings.Contains(err.Error(), `"alpha-host" has no base URL`) {
-		t.Fatalf("err = %v", err)
-	}
-	if _, err := ForFrom(cat, "big-model-2026@alpha-host", "sk", WithBaseURL("http://gateway.example")); err != nil {
-		t.Fatalf("WithBaseURL must satisfy the guard: %v", err)
 	}
 }

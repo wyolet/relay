@@ -4,13 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/usagelog"
@@ -49,9 +46,7 @@ func (f *filteringUsageReader) Facet(context.Context, usagelog.FacetQuery) ([]us
 
 func newCompareHarness(t *testing.T, authzr authz.Authorizer, reader usagelog.Reader) http.Handler {
 	t.Helper()
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("usage-compare-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerUsage(api, Deps{Authz: authzr, UsageReader: reader}, nil)
 	return r
 }
@@ -138,62 +133,88 @@ func TestUsageSummaryOmitsThePreviousWindowWithoutCompare(t *testing.T) {
 }
 
 func TestUsageSummaryRejectsABadCompare(t *testing.T) {
-	for _, path := range []string{
-		"/usage/summary?compare=yesterday",
-		"/usage/summary?compare=previous&since=0s",
-		"/usage/summary?compare=previous&compare_from=2026-03-01T00:00:00Z&compare_to=2026-03-02T00:00:00Z",
-		"/usage/summary?compare_from=2026-03-01T00:00:00Z",
-		"/usage/summary?compare_to=2026-03-02T00:00:00Z",
-		"/usage/summary?compare_from=2026-03-02T00:00:00Z&compare_to=2026-03-02T00:00:00Z",
-		"/usage/summary?compare_from=2026-03-02T00:00:00Z&compare_to=2026-03-01T00:00:00Z",
-		"/usage/summary?compare_from=yesterday&compare_to=2026-03-01T00:00:00Z",
+	const (
+		alternatives = "`compare` and `compare_from`/`compare_to` are alternatives; give one"
+		together     = "`compare_from` and `compare_to` must be given together"
+		after        = "`compare_to` must be after `compare_from`"
+	)
+	for query, want := range map[string]string{
+		"compare=yesterday":         "`compare` must be \"previous\"",
+		"compare=previous&since=0s": usage.ErrNoPreviousWindow.Error(),
+		"compare=previous&compare_from=2026-03-01T00:00:00Z&compare_to=2026-03-02T00:00:00Z": alternatives,
+		"compare=previous&compare_to=2026-03-02T00:00:00Z":                                   alternatives,
+		"compare_from=2026-03-01T00:00:00Z":                                                  together,
+		"compare_to=2026-03-02T00:00:00Z":                                                    together,
+		"compare_from=2026-03-02T00:00:00Z&compare_to=2026-03-02T00:00:00Z":                  after,
+		"compare_from=2026-03-02T00:00:00Z&compare_to=2026-03-01T00:00:00Z":                  after,
+		"compare_from=yesterday&compare_to=2026-03-01T00:00:00Z":                             "invalid `compare_from` (want RFC3339): yesterday",
+		"compare_from=2026-03-01T00:00:00Z&compare_to=later":                                 "invalid `compare_to` (want RFC3339): later",
 	} {
 		reader := &filteringUsageReader{}
-		h := newCompareHarness(t, testRBAC(), reader)
-		w := scopeReq(t, h, "root", http.MethodGet, path, "")
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("%s: status = %d, want 400: %s", path, w.Code, w.Body)
+		w := scopeReq(t, newCompareHarness(t, testRBAC(), reader), "root", http.MethodGet, "/usage/summary?"+query, "")
+		var got struct {
+			Error struct{ Message string }
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 400 || got.Error.Message != want {
+			t.Errorf("%s: %d %q, want 400 %q", query, w.Code, got.Error.Message, want)
 		}
 	}
 }
 
+const explicitWindowParams = "compare_from=2026-02-23T00:00:00Z&compare_to=2026-02-24T06:00:00Z"
+
+// compare_to is exclusive: an event on it is left out of the previous window.
+func TestUsageSummaryComparesWithAnExplicitWindow(t *testing.T) {
+	prevFrom := time.Date(2026, 2, 23, 0, 0, 0, 0, time.UTC)
+	prevTo := time.Date(2026, 2, 24, 6, 0, 0, 0, time.UTC)
+	reader := &filteringUsageReader{events: []usagelog.Event{
+		{RequestID: "p-start", Model: "m-a", Timestamp: prevFrom, Status: 200},
+		{RequestID: "p-end", Model: "m-a", Timestamp: prevTo, Status: 200},
+		{RequestID: "c-1", Model: "m-a", Timestamp: time.Date(2026, 3, 2, 1, 0, 0, 0, time.UTC), Status: 200},
+		{RequestID: "c-2", Model: "m-a", Timestamp: time.Date(2026, 3, 2, 2, 0, 0, 0, time.UTC), Status: 200},
+	}}
+	h := newCompareHarness(t, testRBAC(), reader)
+	w := scopeReq(t, h, "root", http.MethodGet,
+		"/usage/summary?group_by=model&from=2026-03-02T00:00:00Z&to=2026-03-02T09:00:00Z&"+explicitWindowParams, "")
+	if w.Code != 200 || len(reader.queries) != 2 {
+		t.Fatalf("status = %d after %d store queries, want 200 after 2: %s", w.Code, len(reader.queries), w.Body)
+	}
+	out := decodeCompare(t, w.Body.Bytes())
+	if !out.PreviousFrom.Equal(prevFrom) || !out.PreviousTo.Equal(prevTo) {
+		t.Fatalf("previous window = %v..%v, want the given one echoed", out.PreviousFrom, out.PreviousTo)
+	}
+	if len(out.Rows) != 1 || out.Rows[0].Requests != 2 || out.Rows[0].Previous == nil || out.Rows[0].Previous.Requests != 1 {
+		t.Fatalf("rows = %+v, want m-a with 2 requests against 1 before", out.Rows)
+	}
+}
+
+// Both of a comparison's queries carry the caller's scope, and a caller scoped out of everything gets the windows echoed over no rows without the store being asked.
 func TestUsageSummaryCompareScopesBothWindows(t *testing.T) {
-	t.Run("a scoped caller's scope rides both queries", func(t *testing.T) {
+	given := [2]time.Time{time.Date(2026, 2, 23, 0, 0, 0, 0, time.UTC), time.Date(2026, 2, 24, 6, 0, 0, 0, time.UTC)}
+	for _, query := range []string{"compare=previous&since=2h", "since=2h&" + explicitWindowParams} {
 		reader := &filteringUsageReader{}
-		h := newCompareHarness(t, testRBAC(), reader)
-		w := scopeReq(t, h, "alice", http.MethodGet, "/usage/summary?compare=previous&since=2h", "")
-		if w.Code != 200 {
-			t.Fatalf("status = %d: %s", w.Code, w.Body)
-		}
-		if len(reader.queries) != 2 {
-			t.Fatalf("store queries = %d, want 2", len(reader.queries))
+		w := scopeReq(t, newCompareHarness(t, testRBAC(), reader), "alice", http.MethodGet, "/usage/summary?"+query, "")
+		if w.Code != 200 || len(reader.queries) != 2 {
+			t.Fatalf("%s: status = %d after %d store queries, want 200 after 2: %s", query, w.Code, len(reader.queries), w.Body)
 		}
 		for _, q := range reader.queries {
-			if len(q.ScopePrincipalID) != 1 || q.ScopePrincipalID[0] != "u-alice" {
-				t.Errorf("ScopePrincipalID = %v, want [u-alice]", q.ScopePrincipalID)
+			if !slices.Equal(q.ScopePrincipalID, []string{"u-alice"}) || len(q.ScopeProjectID) != 0 {
+				t.Errorf("%s: scope = principals %v projects %v, want [u-alice] alone", query, q.ScopePrincipalID, q.ScopeProjectID)
 			}
 		}
-	})
 
-	t.Run("a caller scoped out of everything gets an empty comparison", func(t *testing.T) {
-		reader := &filteringUsageReader{}
-		h := newCompareHarness(t, testRBAC(), reader)
-		w := scopeReq(t, h, "nobody", http.MethodGet, "/usage/summary?compare=previous&since=2h", "")
-		if w.Code != 200 {
-			t.Fatalf("status = %d: %s", w.Code, w.Body)
-		}
-		if len(reader.queries) != 0 {
-			t.Fatalf("store queries = %d, want 0", len(reader.queries))
-		}
+		reader = &filteringUsageReader{}
+		w = scopeReq(t, newCompareHarness(t, testRBAC(), reader), "nobody", http.MethodGet, "/usage/summary?"+query, "")
 		out := decodeCompare(t, w.Body.Bytes())
-		if out.Rows == nil || len(out.Rows) != 0 {
-			t.Fatalf("rows = %v, want []: %s", out.Rows, w.Body)
+		if w.Code != 200 || len(reader.queries) != 0 || out.Rows == nil || len(out.Rows) != 0 || out.To.Sub(out.From) != 2*time.Hour {
+			t.Fatalf("%s, scoped out: status %d after %d store queries with rows %v over %v..%v, want [] over 2h unasked", query, w.Code, len(reader.queries), out.Rows, out.From, out.To)
 		}
-		if span := out.To.Sub(out.From); span != 2*time.Hour {
-			t.Fatalf("window = %v, want 2h", span)
+		want := given
+		if query == "compare=previous&since=2h" {
+			want = [2]time.Time{out.From.Add(-2 * time.Hour), out.From}
 		}
-		if !out.PreviousTo.Equal(out.From) || out.PreviousTo.Sub(out.PreviousFrom) != 2*time.Hour {
-			t.Fatalf("previous window = %v..%v, want the 2h before %v", out.PreviousFrom, out.PreviousTo, out.From)
+		if !out.PreviousFrom.Equal(want[0]) || !out.PreviousTo.Equal(want[1]) {
+			t.Errorf("%s, scoped out: previous window = %v..%v, want %v..%v", query, out.PreviousFrom, out.PreviousTo, want[0], want[1])
 		}
-	})
+	}
 }

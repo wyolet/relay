@@ -376,6 +376,14 @@ func (h *harness) issues(k engine.Kind, id string) []engine.Issue {
 	return h.e.View().Issues(engine.Ref{Kind: k, ID: id})
 }
 
+// wantIssue checks whether the row carries an issue of code.
+func (h *harness) wantIssue(k engine.Kind, id, code string, want bool) {
+	h.t.Helper()
+	if is := h.issues(k, id); hasIssue(is, code) != want {
+		h.t.Errorf("%s %s: issue %s present = %v, want %v (%+v)", k, id, code, !want, want, is)
+	}
+}
+
 func hasIssue(is []engine.Issue, code string) bool {
 	for _, i := range is {
 		if i.Code == code {
@@ -407,6 +415,8 @@ func ids(cs ...*hostkey.HostKey) []string {
 }
 
 func clone[T any](x *T) *T { c := *x; return &c }
+
+func boolp(v bool) *bool { return &v }
 
 // basic is one provider, two hosts serving model m1, an account per host and two credentials each, all system-owned.
 type basic struct {

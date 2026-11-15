@@ -87,7 +87,10 @@ func registerReachable(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, err
 		}
-		out.Body.Dropped = append(unseen, out.Body.Dropped...)
+		// Appending to a nil unseen would turn the empty list into null.
+		if len(unseen) > 0 {
+			out.Body.Dropped = append(unseen, out.Body.Dropped...)
+		}
 		return out, nil
 	})
 

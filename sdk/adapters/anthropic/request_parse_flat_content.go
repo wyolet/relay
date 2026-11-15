@@ -121,12 +121,11 @@ func appendMessageItems(items []v1.Item, role string, raw []byte, breakpoints *c
 		if c.mistyped {
 			return nil, false
 		}
-		msgItem, toolCalls := c.assistantItems(breakpoints)
+		msgItem, assistantItems := c.assistantItems(breakpoints)
 		if msgItem != nil {
 			msgItem.CacheConfig = c.anchor(breakpoints)
-			items = append(items, msgItem)
 		}
-		items = append(items, toolCalls...)
+		items = append(items, assistantItems...)
 
 	default:
 		if parts := c.parts(); len(parts) > 0 {
@@ -194,20 +193,25 @@ func toolResultOutput(raw []byte) (string, []v1.Part, bool) {
 // assistantItems mirrors anthropicAssistantContentToItems.
 func (c *messageContent) assistantItems(breakpoints *cacheBreakpoints) (*v1.Message, []v1.Item) {
 	if c.isText {
-		return &v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: c.text}}}, nil
+		msg := &v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: c.text}}}
+		return msg, []v1.Item{msg}
 	}
-	var textParts []v1.Part
-	var toolItems []v1.Item
+	var msgItem *v1.Message
+	var items []v1.Item
 	for i := range c.blocks {
 		switch b := &c.blocks[i]; b.typ {
 		case "text":
-			textParts = append(textParts, &v1.OutputTextPart{Text: b.text})
+			if msgItem == nil {
+				msgItem = &v1.Message{Role: v1.RoleAssistant}
+				items = append(items, msgItem)
+			}
+			msgItem.Content = append(msgItem.Content, &v1.OutputTextPart{Text: b.text})
 		case "tool_use":
 			args := "{}"
 			if b.input != nil {
 				args = string(b.input)
 			}
-			toolItems = append(toolItems, &v1.FunctionCall{
+			items = append(items, &v1.FunctionCall{
 				ID:          b.id,
 				CallID:      b.id,
 				Name:        b.name,
@@ -215,11 +219,14 @@ func (c *messageContent) assistantItems(breakpoints *cacheBreakpoints) (*v1.Mess
 				CacheConfig: breakpoints.anchorIfMarked(b.cacheControl),
 			})
 		case "thinking":
-			toolItems = append(toolItems, thinkingToReasoning(b.thinking, b.signature))
+			items = append(items, thinkingToReasoning(b.thinking, b.signature))
+		case "redacted_thinking":
+			items = append(items, redactedThinkingToReasoning(b.data))
 		}
 	}
-	if len(textParts) > 0 || len(toolItems) == 0 {
-		return &v1.Message{Role: v1.RoleAssistant, Content: textParts}, toolItems
+	if len(items) == 0 {
+		msgItem = &v1.Message{Role: v1.RoleAssistant}
+		items = append(items, msgItem)
 	}
-	return nil, toolItems
+	return msgItem, items
 }

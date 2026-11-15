@@ -26,6 +26,8 @@ type responsesToCanonicalStream struct {
 	// item id, so the item's terminal output_item.done (which arrives with an
 	// empty summary on gpt-5.5) can be backfilled with what was streamed.
 	reasoningSummary map[string][]byte
+	// customInputOpen holds the custom_tool_call item ids whose `{"input":"` argument prefix has been emitted and not yet closed.
+	customInputOpen map[string]struct{}
 }
 
 func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
@@ -143,6 +145,49 @@ func (s *responsesToCanonicalStream) translateEvent(event, data []byte) ([]byte,
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemDelta, Data: deltaData})
 
+	// Canonical arguments of a custom call are {"input":"<text>"}, so the freeform deltas stream as the escaped body of that string.
+	case ResponsesEventCustomToolCallInputDelta:
+		var ev ResponsesCustomToolCallInputDeltaEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, fmt.Errorf("responses stream: custom_tool_call_input.delta: %w", err)
+		}
+		quoted, _ := json.Marshal(ev.Delta)
+		delta := string(quoted[1 : len(quoted)-1])
+		if _, open := s.customInputOpen[ev.ItemID]; !open {
+			if s.customInputOpen == nil {
+				s.customInputOpen = map[string]struct{}{}
+			}
+			s.customInputOpen[ev.ItemID] = struct{}{}
+			delta = `{"` + responsesCustomInputArg + `":"` + delta
+		}
+		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
+			ItemID: ev.ItemID,
+			Index:  ev.OutputIndex,
+			Kind:   v1.DeltaKindArguments,
+			Delta:  delta,
+		})
+		frames = append(frames, v1.SSEFrame{Event: v1.EventItemDelta, Data: deltaData})
+
+	case ResponsesEventCustomToolCallInputDone:
+		var ev ResponsesCustomToolCallInputDoneEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, fmt.Errorf("responses stream: custom_tool_call_input.done: %w", err)
+		}
+		delta := `"}`
+		if _, open := s.customInputOpen[ev.ItemID]; open {
+			delete(s.customInputOpen, ev.ItemID)
+		} else {
+			args, _ := json.Marshal(map[string]string{responsesCustomInputArg: ev.Input})
+			delta = string(args)
+		}
+		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
+			ItemID: ev.ItemID,
+			Index:  ev.OutputIndex,
+			Kind:   v1.DeltaKindArguments,
+			Delta:  delta,
+		})
+		frames = append(frames, v1.SSEFrame{Event: v1.EventItemDelta, Data: deltaData})
+
 	case ResponsesEventReasoningTextDelta:
 		var ev ResponsesReasoningTextDeltaEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -234,6 +279,12 @@ func (s *responsesToCanonicalStream) translateEvent(event, data []byte) ([]byte,
 			break
 		}
 		cr := responsesResponseToCanonical(resp)
+		// The upstream error is the failure's terminal frame: canonical error ends the stream, so no generation.completed follows it.
+		if cr.Error != nil {
+			errData, _ := json.Marshal(v1.ErrorEvent{Code: cr.Error.Code, Message: cr.Error.Message})
+			frames = append(frames, v1.SSEFrame{Event: v1.EventError, Data: errData})
+			break
+		}
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
 			ID:                cr.ID,
 			Status:            v1.StatusFailed,
@@ -265,7 +316,6 @@ func (s *responsesToCanonicalStream) translateEvent(event, data []byte) ([]byte,
 		//     file_search_call.*, code_interpreter_call.*, image_generation_call.*,
 		//     mcp_call.*, output_text.annotation.added, audio.*) — no canonical
 		//     representation exists yet.
-		//  3. custom_tool_call_input.delta/.done — canonical arguments are a JSON object, so a freeform text delta cannot be re-encoded chunk by chunk; the full input arrives on the item's output_item.done instead.
 		//
 		// canonical: hosted-tool / annotation / audio stream events dropped — no
 		// canonical event. Note mcp_call.failed / mcp_list_tools.failed carry an

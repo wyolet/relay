@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -12,6 +11,7 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
@@ -26,38 +26,14 @@ type stubPinger struct{ err error }
 
 func (p stubPinger) Ping(context.Context) error { return p.err }
 
-// /livez is process-only: it must return 200 regardless of backend health, so a
-// PG/DNS blip never trips the liveness probe and gets a healthy pod killed.
-func TestLivez_ProcessOnly_IgnoresBackend(t *testing.T) {
-	_, api := humatest.New(t)
-	registerHealth(api, Deps{Pinger: stubPinger{err: errors.New("pg down")}})
+// togglePinger fails with whatever error is stored, and answers while none is.
+type togglePinger struct{ err atomic.Pointer[error] }
 
-	resp := api.Get("/livez")
-	if resp.Code != http.StatusOK {
-		t.Fatalf("/livez with a failing backend: got %d, want 200", resp.Code)
+func (p *togglePinger) Ping(context.Context) error {
+	if e := p.err.Load(); e != nil {
+		return *e
 	}
-}
-
-// /healthz is readiness: a failing backend degrades it to 503 so the pod is
-// pulled from the Service endpoints (but NOT killed).
-func TestHealthz_BackendFailure_Is503(t *testing.T) {
-	_, api := humatest.New(t)
-	registerHealth(api, Deps{Pinger: stubPinger{err: errors.New("pg down")}})
-
-	resp := api.Get("/healthz")
-	if resp.Code != http.StatusServiceUnavailable {
-		t.Fatalf("/healthz with a failing backend: got %d, want 503", resp.Code)
-	}
-}
-
-func TestHealthz_BackendOK_Is200(t *testing.T) {
-	_, api := humatest.New(t)
-	registerHealth(api, Deps{Pinger: stubPinger{}})
-
-	resp := api.Get("/healthz")
-	if resp.Code != http.StatusOK {
-		t.Fatalf("/healthz with a healthy backend: got %d, want 200", resp.Code)
-	}
+	return nil
 }
 
 type emptyRows[T any] struct{}
@@ -70,67 +46,85 @@ func emptyCatalog() *appcatalog.Catalog {
 		emptyRows[key.Key]{}, emptyRows[pricing.Pricing]{}, emptyRows[binding.Binding]{})
 }
 
-// Inference answers 503 catalog_unavailable until the first snapshot is installed, so readiness
-// must fail until then; liveness must not, or a slow catalog load gets the pod killed.
-func TestHealthz_NotReadyUntilCatalogLoads(t *testing.T) {
-	cat := emptyCatalog()
-	_, api := humatest.New(t)
-	registerHealth(api, Deps{Pinger: stubPinger{}, Catalog: cat})
+// healthProbe is one GET /healthz: what changed before it, and the answer. A 503's body is the error envelope, checked on its own below.
+type healthProbe struct {
+	load   bool  // install the first snapshot before the probe
+	pg     error // what Postgres answers to this probe
+	status int
+	body   string
+}
 
-	if resp := api.Get("/healthz"); resp.Code != http.StatusServiceUnavailable {
-		t.Fatalf("/healthz before the first snapshot: got %d, want 503", resp.Code)
-	}
-	if resp := api.Get("/livez"); resp.Code != http.StatusOK {
-		t.Fatalf("/livez before the first snapshot: got %d, want 200", resp.Code)
-	}
-
-	// An empty catalog (seeding off, no rows) still installs a snapshot and is ready.
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if resp := api.Get("/healthz"); resp.Code != http.StatusOK {
-		t.Fatalf("/healthz after the first snapshot: got %d, want 200 (body %s)", resp.Code, resp.Body.String())
+// /healthz is readiness: 503 until the first snapshot is installed (an empty catalog still installs one) and while Postgres fails before the pod was first ready. After that a PG outage must not pull the pod from the Service, since the data plane serves from the snapshot, so pg is no longer pinged or reported. /livez answers ok throughout: a backend blip must never get a healthy pod killed.
+func TestHealth(t *testing.T) {
+	pgDown := errors.New("pg down")
+	for _, tc := range []struct {
+		name    string
+		catalog bool // the deployment has a catalog
+		pinger  bool
+		probes  []healthProbe
+	}{
+		{name: "no backends", probes: []healthProbe{{status: 200, body: `{"status":"ok","backends":{}}`}}},
+		{name: "postgres alone", pinger: true, probes: []healthProbe{
+			{pg: pgDown, status: 503},
+			{status: 200, body: `{"status":"ok","backends":{"pg":"ok"}}`},
+			{pg: pgDown, status: 200, body: `{"status":"ok","backends":{}}`},
+		}},
+		{name: "catalog alone", catalog: true, probes: []healthProbe{
+			{status: 503},
+			{load: true, status: 200, body: `{"status":"ok","backends":{"catalog":"ok"}}`},
+		}},
+		{name: "catalog and postgres", catalog: true, pinger: true, probes: []healthProbe{
+			{status: 503},
+			{load: true, pg: pgDown, status: 503},
+			{status: 200, body: `{"status":"ok","backends":{"catalog":"ok","pg":"ok"}}`},
+			{pg: pgDown, status: 200, body: `{"status":"ok","backends":{"catalog":"ok"}}`},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var d Deps
+			cat, pg := emptyCatalog(), &togglePinger{}
+			if tc.catalog {
+				d.Catalog = cat
+			}
+			if tc.pinger {
+				d.Pinger = pg
+			}
+			_, api := humatest.New(t)
+			registerHealth(api, d)
+			for i, probe := range tc.probes {
+				if probe.load {
+					if err := cat.Reload(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				pg.err.Store(nil)
+				if probe.pg != nil {
+					pg.err.Store(&probe.pg)
+				}
+				resp := api.Get("/healthz")
+				if resp.Code != probe.status {
+					t.Fatalf("probe %d: status %d, want %d", i, resp.Code, probe.status)
+				}
+				if probe.body != "" {
+					wantJSON(t, "healthz", resp.Body.String(), probe.body)
+				}
+				live := api.Get("/livez")
+				if live.Code != http.StatusOK {
+					t.Fatalf("probe %d: /livez = %d, want 200", i, live.Code)
+				}
+				wantJSON(t, "livez", live.Body.String(), `{"status":"ok"}`)
+			}
+		})
 	}
 }
 
-type togglePinger struct{ err atomic.Pointer[error] }
-
-func (p *togglePinger) Ping(context.Context) error {
-	if e := p.err.Load(); e != nil {
-		return *e
-	}
-	return nil
-}
-
-func (p *togglePinger) fail(err error) { p.err.Store(&err) }
-
-// Postgres gates readiness during startup only: once the pod has been ready, a PG
-// outage must not pull it from the Service, since the data plane serves from the snapshot.
-func TestHealthz_PGIgnoredAfterFirstReady(t *testing.T) {
-	cat := emptyCatalog()
-	pg := &togglePinger{}
-	pg.fail(errors.New("pg down"))
+func TestHealthz_NotReadyIsAServerError(t *testing.T) {
+	t.Skip(`bug: /healthz before the first snapshot → 503 {"error":{"type":"invalid_request_error","message":…}}, no code: relay's own unreadiness typed as the caller's fault`)
+	httpapi.InstallErrorRewriter()
 	_, api := humatest.New(t)
-	registerHealth(api, Deps{Pinger: pg, Catalog: cat})
-
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if resp := api.Get("/healthz"); resp.Code != http.StatusServiceUnavailable {
-		t.Fatalf("/healthz with PG down before first ready: got %d, want 503", resp.Code)
-	}
-
-	pg.err.Store(nil)
-	if resp := api.Get("/healthz"); resp.Code != http.StatusOK {
-		t.Fatalf("/healthz once PG answers: got %d, want 200", resp.Code)
-	}
-
-	pg.fail(errors.New("pg down"))
+	registerHealth(api, Deps{Catalog: emptyCatalog()})
 	resp := api.Get("/healthz")
-	if resp.Code != http.StatusOK {
-		t.Fatalf("/healthz with PG down after first ready: got %d, want 200 (body %s)", resp.Code, resp.Body.String())
-	}
-	if strings.Contains(resp.Body.String(), `"pg"`) {
-		t.Fatalf("/healthz after first ready still reports pg: %s", resp.Body.String())
+	if env := decodeEnvelope(t, resp.Body.Bytes()); resp.Code != http.StatusServiceUnavailable || env.Type != "server_error" || env.Code == "" {
+		t.Fatalf("status %d, envelope %+v, want a 503 server_error with a code", resp.Code, env)
 	}
 }

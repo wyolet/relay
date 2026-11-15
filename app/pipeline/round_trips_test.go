@@ -3,10 +3,8 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,12 +21,6 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
-
-// hostReached signals post-flight's last step, which runs after the settle.
-type hostReached chan struct{}
-
-func (h hostReached) Reachable(context.Context, string)         { h <- struct{}{} }
-func (hostReached) Unreachable(context.Context, string, string) {}
 
 // A round-robin request on a healthy key with only caller counters: before the upstream call, one round trip carrying the caller hold and the pick's breaker reads with the rotation counter; the credential has no counters, so its hold costs none. Post-flight writes no success for a key that never failed, and settles in one more round trip only when a rule has something to settle.
 func TestRunRoundTrips(t *testing.T) {
@@ -61,7 +53,8 @@ func runCallerRefusalMakesNoPick(t *testing.T, s kvtest.ScriptStore) {
 	now := time.Now()
 	sel := keypool.New(store, slog.Default(), func() time.Time { return now }, nil)
 	lim := lua.New(pkgratelimit.New(store, slog.Default(), nil))
-	p := &Pipeline{Limiter: lim, Selector: sel, Logger: slog.Default()}
+	reached := make(hostReached, 1)
+	p := &Pipeline{Limiter: lim, Selector: sel, Logger: slog.Default(), HostHealth: reached}
 
 	key := testKey("key-a")
 	sel.RecordFailure(context.Background(), key.KeyHash, keypool.FailureAuth, 0)
@@ -77,7 +70,7 @@ func runCallerRefusalMakesNoPick(t *testing.T, s kvtest.ScriptStore) {
 	var called atomic.Int32
 	adapter := reservationTestAdapter{call: func(context.Context) (*http.Response, error) {
 		called.Add(1)
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
+		return ok200(), nil
 	}}
 	run := func(caller []limits.Counter) error {
 		res, err := p.Run(context.Background(), &Request{Adapter: adapter, Hops: []plan.RouteHop{buildHop(keypool.KeySelectionPrioritized, caller, testSlot{key: key, upstream: account})}})
@@ -103,6 +96,7 @@ func runCallerRefusalMakesNoPick(t *testing.T, s kvtest.ScriptStore) {
 	if err := run(callerCounter(perMinute("rl-open", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 100))); err != nil {
 		t.Fatalf("Run with room: %v", err)
 	}
+	reached.await(t)
 	if len(store.Named("keypool.claim_probe")) != 1 || called.Load() != 1 {
 		t.Fatalf("probe claims = %d, upstream calls = %d; want 1 each", len(store.Named("keypool.claim_probe")), called.Load())
 	}
@@ -169,11 +163,7 @@ func runServedProbe(t *testing.T, store *kvtest.Recording, arm func()) (postFlig
 	arm()
 	before := store.RoundTrips()
 	_ = res.Body.Close()
-	select {
-	case <-reached:
-	case <-time.After(5 * time.Second):
-		t.Fatal("post-flight never finished")
-	}
+	reached.await(t)
 	postFlightTrips = store.RoundTrips() - before
 	if rec, found := sel.ReadCircuit(context.Background(), key.KeyHash); !found || rec.State != keypool.CircuitClosed {
 		t.Fatalf("record after the served probe = %+v (found %v), want closed", rec, found)
@@ -206,7 +196,7 @@ func runWarmMakesNoStoreCall(t *testing.T, s kvtest.ScriptStore) {
 		res, err := p.Run(context.Background(), &Request{
 			Adapter: reservationTestAdapter{call: func(context.Context) (*http.Response, error) {
 				atCall = store.RoundTrips() - before
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
+				return ok200(), nil
 			}},
 			Hops: []plan.RouteHop{hop},
 		})
@@ -230,10 +220,7 @@ func runWarmMakesNoStoreCall(t *testing.T, s kvtest.ScriptStore) {
 }
 
 func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
-	mem := kv.NewMem()
-	t.Cleanup(func() { _ = mem.Close() })
-	pkgratelimit.RegisterScripts(mem)
-	keypool.RegisterScripts(mem)
+	mem := memScriptStore(t)
 	store := kvtest.NewRecording(mem)
 
 	rl := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-inbound", Name: "inbound"}, Spec: appratelimit.Spec{Rules: rules}}
@@ -250,7 +237,7 @@ func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
 	res, err := p.Run(context.Background(), &Request{
 		Adapter: reservationTestAdapter{call: func(context.Context) (*http.Response, error) {
 			tripsAtCall = store.RoundTrips()
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
+			return ok200(), nil
 		}},
 		Hops: []plan.RouteHop{hop},
 	})
@@ -261,11 +248,7 @@ func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
 		t.Fatalf("kv round trips before the upstream call = %d, want 1 (%v)", tripsAtCall, store.Batches())
 	}
 	_ = res.Body.Close()
-	select {
-	case <-reached:
-	case <-time.After(5 * time.Second):
-		t.Fatal("post-flight never finished")
-	}
+	reached.await(t)
 	if trips := store.RoundTrips(); trips != want {
 		t.Fatalf("kv round trips for the request = %d, want %d (%d scripts: %v)", trips, want, len(store.Scripts()), store.Batches())
 	}

@@ -2,14 +2,18 @@ package valkey_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/usage"
 	"github.com/wyolet/relay/pkg/usage/valkey"
-	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
+
+// Query semantics are pinned by the conformance suite; the tests here cover what is this backend's own: how events are keyed, expired and scanned.
 
 func newSink(t *testing.T) *valkey.Sink {
 	t.Helper()
@@ -18,199 +22,126 @@ func newSink(t *testing.T) *valkey.Sink {
 	return valkey.New(mem, valkey.Config{TTL: time.Minute})
 }
 
-func event(requestID string, ts time.Time, status int, source string) usage.Event {
-	return usage.Event{
-		RequestID:  requestID,
-		Timestamp:  ts,
-		Status:     status,
-		Source:     source,
-		DurationMs: 10,
+// recordingStore records Set calls and serves Range from them, or fails it.
+type recordingStore struct {
+	entries  []kv.Entry
+	ttls     []time.Duration
+	prefixes []string
+	rangeErr error
+}
+
+func (s *recordingStore) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
+	s.entries = append(s.entries, kv.Entry{Key: key, Value: value})
+	s.ttls = append(s.ttls, ttl)
+	return nil
+}
+
+func (s *recordingStore) Range(_ context.Context, prefix string) ([]kv.Entry, error) {
+	s.prefixes = append(s.prefixes, prefix)
+	return s.entries, s.rangeErr
+}
+
+func TestWriteKeysEventsByTimestampUnderOneHashTag(t *testing.T) {
+	ts := time.Date(2026, 1, 5, 10, 0, 0, 123, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		cfg     valkey.Config
+		wantKey string
+		wantTTL time.Duration
+	}{
+		{"defaults", valkey.Config{}, "usagevk:{u}:01767607200000000123:req-1", 24 * time.Hour},
+		{"configured", valkey.Config{TTL: time.Minute, KeyPrefix: "other"}, "other:{u}:01767607200000000123:req-1", time.Minute},
+		{"a negative ttl falls back to the default", valkey.Config{TTL: -time.Second}, "usagevk:{u}:01767607200000000123:req-1", 24 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &recordingStore{}
+			want := usage.Event{RequestID: "req-1", Timestamp: ts, Status: 200, Source: "pipeline", Model: "m",
+				CostNanos: new(int64), CostBreakdown: map[string]int64{"tokens.input": 7}}
+			sk := valkey.New(store, tc.cfg)
+			if err := sk.Write(want); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			if len(store.entries) != 1 || store.entries[0].Key != tc.wantKey || store.ttls[0] != tc.wantTTL {
+				t.Fatalf("stored %d entries, key %q ttl %v; want key %q ttl %v", len(store.entries), store.entries[0].Key, store.ttls[0], tc.wantKey, tc.wantTTL)
+			}
+			got, err := sk.Events(context.Background(), usage.EventQuery{})
+			if err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			if diff := cmp.Diff([]usage.Event{want}, got); diff != "" {
+				t.Errorf("event read back (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff([]string{tc.wantKey[:len(tc.wantKey)-len("01767607200000000123:req-1")]}, store.prefixes); diff != "" {
+				t.Errorf("range prefix (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
-func TestWriteThenEvents(t *testing.T) {
-	sk := newSink(t)
-	ctx := context.Background()
-	now := time.Now()
-	ev := event("req-1", now, 200, "pipeline")
-	ev.Model, ev.Host, ev.Policy = "gpt-4o", "openai", "default"
-	ev.Provider, ev.Pricing = "openai", "openai-gpt-4o"
-	cost := int64(7_500_000)
-	ev.CostNanos = &cost
-	ev.CostBreakdown = map[string]int64{"tokens.input": 7_500_000}
-
-	if err := sk.Write(ev); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-
-	got, err := sk.Events(ctx, usage.EventQuery{})
-	if err != nil {
-		t.Fatalf("Events: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 event, got %d", len(got))
-	}
-	if got[0].RequestID != "req-1" {
-		t.Errorf("wrong request_id: %s", got[0].RequestID)
-	}
-	if got[0].Model != "gpt-4o" || got[0].Host != "openai" || got[0].Policy != "default" {
-		t.Errorf("slug round-trip: %+v", got[0])
-	}
-	if got[0].Provider != "openai" || got[0].Pricing != "openai-gpt-4o" {
-		t.Errorf("provider/pricing round-trip: %+v", got[0])
-	}
-	if got[0].CostNanos == nil || *got[0].CostNanos != 7_500_000 ||
-		got[0].CostBreakdown["tokens.input"] != 7_500_000 {
-		t.Errorf("cost round-trip: %+v", got[0])
-	}
-}
-
-func TestEventsNewestFirstAndLimit(t *testing.T) {
-	sk := newSink(t)
-	ctx := context.Background()
-	base := time.Now()
-
-	for i := 0; i < 5; i++ {
-		ts := base.Add(time.Duration(i) * time.Second)
-		if err := sk.Write(event("req-"+string(rune('A'+i)), ts, 200, "pipeline")); err != nil {
-			t.Fatalf("Write: %v", err)
-		}
-	}
-
-	got, err := sk.Events(ctx, usage.EventQuery{Limit: 3})
-	if err != nil {
-		t.Fatalf("Events: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("want 3, got %d", len(got))
-	}
-	// Newest first: req-E (i=4) should be first.
-	if got[0].RequestID != "req-E" {
-		t.Errorf("want req-E first, got %s", got[0].RequestID)
-	}
-	if !got[0].Timestamp.After(got[1].Timestamp) {
-		t.Error("events not in descending time order")
-	}
-}
-
-func TestTimeSeries(t *testing.T) {
-	sk := newSink(t)
-	ctx := context.Background()
-	base := time.Unix(1_700_000_000, 0).UTC().Truncate(time.Hour)
-
-	evs := []usage.Event{
-		{RequestID: "a", Timestamp: base, Status: 200, ModelID: "m1", Tokens: sdkusage.Tokens{"input": 10}},
-		{RequestID: "b", Timestamp: base.Add(5 * time.Minute), Status: 200, ModelID: "m1", Tokens: sdkusage.Tokens{"input": 20}},
-		{RequestID: "c", Timestamp: base.Add(2 * time.Hour), Status: 500, ModelID: "m1"},
-		{RequestID: "d", Timestamp: base.Add(time.Minute), Status: 200, ModelID: "m2", Tokens: sdkusage.Tokens{"input": 5}},
-	}
-	for _, ev := range evs {
-		if err := sk.Write(ev); err != nil {
-			t.Fatalf("Write: %v", err)
-		}
-	}
-
-	ts, err := sk.TimeSeries(ctx, usage.TimeSeriesQuery{Interval: time.Hour})
-	if err != nil {
-		t.Fatalf("TimeSeries: %v", err)
-	}
-	if len(ts.Rows) != 1 {
-		t.Fatalf("want single series, got %d rows", len(ts.Rows))
-	}
-	pts := ts.Rows[0].Points
-	if len(pts) != 2 || pts[0].Requests != 3 || pts[0].Tokens["input"] != 35 || pts[1].ErrorCount != 1 {
-		t.Fatalf("unexpected buckets: %+v", pts)
-	}
-
-	tsg, err := sk.TimeSeries(ctx, usage.TimeSeriesQuery{Interval: time.Hour, GroupBy: "model_id"})
-	if err != nil {
-		t.Fatalf("TimeSeries grouped: %v", err)
-	}
-	if len(tsg.Rows) != 2 || tsg.Rows[0].Group["model_id"] != "m1" {
-		t.Fatalf("grouped series wrong: %+v", tsg.Rows)
-	}
-}
-
-func TestDimensionFilter(t *testing.T) {
-	sk := newSink(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	if err := sk.Write(event("r1", now, 200, "pipeline")); err != nil {
+// An event without a timestamp is keyed at the write instant, and still stored as written.
+func TestWriteKeysAZeroTimestampAtNow(t *testing.T) {
+	store := &recordingStore{}
+	before := time.Now().UnixNano()
+	if err := valkey.New(store, valkey.Config{}).Write(usage.Event{RequestID: "r"}); err != nil {
 		t.Fatal(err)
 	}
-	ev2 := event("r2", now.Add(time.Millisecond), 200, "proxy")
-	if err := sk.Write(ev2); err != nil {
-		t.Fatal(err)
+	var nanos int64
+	for _, c := range store.entries[0].Key[len("usagevk:{u}:") : len("usagevk:{u}:")+20] {
+		nanos = nanos*10 + int64(c-'0')
 	}
-
-	got, err := sk.Events(ctx, usage.EventQuery{Source: []string{"proxy"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].RequestID != "r2" {
-		t.Errorf("source filter: want [r2], got %v", got)
-	}
-}
-
-func TestStatusFilter(t *testing.T) {
-	sk := newSink(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	_ = sk.Write(event("ok", now, 200, "pipeline"))
-	_ = sk.Write(event("err", now.Add(time.Millisecond), 500, "pipeline"))
-
-	got, err := sk.Events(ctx, usage.EventQuery{StatusMin: 400})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].RequestID != "err" {
-		t.Errorf("status filter: want [err], got %v", got)
-	}
-}
-
-func TestSummaryGrouping(t *testing.T) {
-	sk := newSink(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	_ = sk.Write(event("r1", now, 200, "pipeline"))
-	_ = sk.Write(event("r2", now.Add(time.Millisecond), 200, "pipeline"))
-	_ = sk.Write(event("r3", now.Add(2*time.Millisecond), 500, "proxy"))
-
-	res, err := sk.Summary(ctx, usage.SummaryQuery{GroupBy: "source"})
-	if err != nil {
-		t.Fatalf("Summary: %v", err)
-	}
-	if len(res.Rows) != 2 {
-		t.Fatalf("want 2 rows, got %d", len(res.Rows))
-	}
-	// First row should be pipeline (2 requests > 1).
-	if res.Rows[0].Group["source"] != "pipeline" {
-		t.Errorf("want pipeline first, got %v", res.Rows[0].Group)
-	}
-	if res.Rows[0].Requests != 2 {
-		t.Errorf("pipeline: want 2 requests, got %d", res.Rows[0].Requests)
+	if nanos < before || nanos > time.Now().UnixNano() {
+		t.Errorf("key %q is not stamped between the write's start and end", store.entries[0].Key)
 	}
 }
 
 func TestMalformedValueSkipped(t *testing.T) {
-	mem := kv.NewMem()
-	t.Cleanup(func() { _ = mem.Close() })
-	ctx := context.Background()
-
-	// Inject a bad value directly at the expected key prefix.
-	_ = mem.Set(ctx, "usagevk:{u}:00000000000000000001:bad", []byte("not-json"), time.Minute)
-
-	sk := valkey.New(mem, valkey.Config{TTL: time.Minute})
-	_ = sk.Write(usage.Event{RequestID: "good", Timestamp: time.Now(), Status: 200, Source: "pipeline"})
-
-	got, err := sk.Events(ctx, usage.EventQuery{})
+	store := &recordingStore{entries: []kv.Entry{
+		{Key: "usagevk:{u}:00000000000000000001:bad", Value: []byte("not-json")},
+		{Key: "usagevk:{u}:00000000000000000002:good", Value: []byte(`{"request_id":"good","status":200}`)},
+	}}
+	sk := valkey.New(store, valkey.Config{})
+	got, err := sk.Events(context.Background(), usage.EventQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].RequestID != "good" {
-		t.Errorf("want only good event, got %v", got)
+	if diff := cmp.Diff([]usage.Event{{RequestID: "good", Status: 200}}, got); diff != "" {
+		t.Errorf("events (-want +got):\n%s", diff)
+	}
+	if n, err := sk.Count(context.Background(), usage.EventQuery{}, 0); err != nil || n != 1 {
+		t.Errorf("Count = %d, %v; want 1", n, err)
+	}
+}
+
+func TestStoreErrorFailsEveryRead(t *testing.T) {
+	down := errors.New("store down")
+	sk := valkey.New(&recordingStore{rangeErr: down}, valkey.Config{})
+	ctx := context.Background()
+	for name, call := range map[string]func() error{
+		"Events":     func() error { _, err := sk.Events(ctx, usage.EventQuery{}); return err },
+		"Count":      func() error { _, err := sk.Count(ctx, usage.EventQuery{}, 0); return err },
+		"Summary":    func() error { _, err := sk.Summary(ctx, usage.SummaryQuery{}); return err },
+		"TimeSeries": func() error { _, err := sk.TimeSeries(ctx, usage.TimeSeriesQuery{Interval: time.Hour}); return err },
+		"Facet":      func() error { _, err := sk.Facet(ctx, usage.FacetQuery{Dim: "model"}); return err },
+	} {
+		if err := call(); !errors.Is(err, down) {
+			t.Errorf("%s: err = %v, want the store's", name, err)
+		}
+	}
+}
+
+func TestInvalidQueriesAreRejected(t *testing.T) {
+	sk := newSink(t)
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		call func() error
+		want string
+	}{
+		"summary group_by":    {func() error { _, err := sk.Summary(ctx, usage.SummaryQuery{GroupBy: "bogus"}); return err }, `usage.Summarize: invalid group_by "bogus"`},
+		"timeseries interval": {func() error { _, err := sk.TimeSeries(ctx, usage.TimeSeriesQuery{}); return err }, "usage.Bucketize: interval must be > 0"},
+		"facet dim":           {func() error { _, err := sk.Facet(ctx, usage.FacetQuery{Dim: "bogus"}); return err }, `usage.TopValues: invalid dim "bogus"`},
+	} {
+		if err := tc.call(); err == nil || err.Error() != tc.want {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
 	}
 }

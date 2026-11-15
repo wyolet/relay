@@ -12,8 +12,7 @@ func (AnthropicTranslator) NewSummaryStream() (func([]byte) ([]byte, error), fun
 // stream's Summary. content_block_delta only grows the open block's buffers
 // and ping does nothing, so those are skipped. Every other event passes:
 // message_start and message_delta carry usage, stop reason and service tier,
-// message_stop emits the completion, and content_block_start/stop decide
-// whether a structured-output block pins the stop reason.
+// and message_stop emits the completion.
 func anthropicAffectsSummary(frame []byte) bool {
 	for sc := sse.NewScanner(frame); sc.Next(); {
 		switch string(sc.Event()) {

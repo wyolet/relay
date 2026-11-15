@@ -25,8 +25,10 @@ func UnmarshalResponse(data []byte) (*Response, error) {
 		FinishReason      FinishReason               `json:"finish_reason"`
 		Output            []json.RawMessage          `json:"output"`
 		Usage             usage.Tokens               `json:"usage"`
+		ServiceTier       string                     `json:"service_tier"`
 		Error             *Error                     `json:"error"`
 		IncompleteDetails *IncompleteDetails         `json:"incomplete_details"`
+		RelayUsage        *RelayUsage                `json:"relay_usage"`
 		Extensions        map[string]json.RawMessage `json:"extensions"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -51,8 +53,10 @@ func UnmarshalResponse(data []byte) (*Response, error) {
 		FinishReason:      wire.FinishReason,
 		Output:            output,
 		Usage:             wire.Usage,
+		ServiceTier:       wire.ServiceTier,
 		Error:             wire.Error,
 		IncompleteDetails: wire.IncompleteDetails,
+		RelayUsage:        wire.RelayUsage,
 		Extensions:        wire.Extensions,
 	}, nil
 }

@@ -12,6 +12,7 @@
       "role": "model",
       "parts": [
         {
+          "thoughtSignature": "skip_thought_signature_validator",
           "functionCall": {
             "name": "get_weather",
             "args": {
@@ -49,7 +50,7 @@
         {
           "name": "get_weather",
           "description": "Current weather for a city.",
-          "parameters": {
+          "parametersJsonSchema": {
             "type": "object",
             "properties": {
               "city": {

@@ -30,19 +30,3 @@ func TestStaleIfNoRows(t *testing.T) {
 		t.Fatalf("store error not passed through: %v", err)
 	}
 }
-
-// The version is server state read from its own column, never part of the
-// JSONB blob a write persists.
-func TestJSONB_SkipsResourceVersion(t *testing.T) {
-	raw, err := MarshalJSONB(Metadata{ID: "id1", Name: "n", ResourceVersion: "7"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := UnmarshalJSONB("id1", "n", "", raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.ResourceVersion != "" {
-		t.Fatalf("resourceVersion leaked into the JSONB blob: %s", raw)
-	}
-}

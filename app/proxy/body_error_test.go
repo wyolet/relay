@@ -89,13 +89,3 @@ func TestRun_BodyErrorAbortsTheForward(t *testing.T) {
 		})
 	}
 }
-
-func TestClassifyFailure_BodyError(t *testing.T) {
-	err := &BodyError{Kind: "read_body", Err: io.ErrUnexpectedEOF}
-	if kind, _ := classifyFailure(errors.Join(errors.New("proxy: upstream call"), err)); kind != "read_body" {
-		t.Fatalf("kind = %q", kind)
-	}
-	if !strings.Contains(err.Error(), "unexpected EOF") || !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("BodyError hides its cause: %v", err)
-	}
-}

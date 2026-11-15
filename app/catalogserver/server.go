@@ -37,20 +37,49 @@ type asset int
 const (
 	assetCatalog asset = iota
 	assetData
+	assetMCP
+	assetCount
 )
 
-var assets = [...]asset{assetCatalog, assetData}
+var allAssets = [...]asset{assetCatalog, assetData, assetMCP}
+
+// indexedFiles is what one channel index requires of a tag: its files, and
+// the channel it files the tag under ("" keeps the tag out).
+type indexedFiles struct {
+	assets  []asset
+	channel func(*tagState) string
+}
+
+var (
+	// relayFiles back /index.yaml, which relays and the SDK read.
+	relayFiles = indexedFiles{
+		assets:  []asset{assetCatalog, assetData},
+		channel: func(st *tagState) string { return st.channel },
+	}
+	// mcpFiles back /mcp/index.yaml, a separate index so no relay or SDK
+	// client ever sees its channels.
+	mcpFiles = indexedFiles{
+		assets:  []asset{assetMCP},
+		channel: func(st *tagState) string { return st.mcpChannel },
+	}
+)
 
 func (a asset) label() string {
-	if a == assetData {
+	switch a {
+	case assetData:
 		return "data"
+	case assetMCP:
+		return "mcp"
 	}
 	return "catalog"
 }
 
 func (a asset) fileName(tag string) string {
-	if a == assetData {
+	switch a {
+	case assetData:
 		return DataAsset(tag)
+	case assetMCP:
+		return MCPAsset(tag)
 	}
 	return CatalogAsset
 }
@@ -61,6 +90,8 @@ func assetNamed(tag, name string) (asset, bool) {
 		return assetCatalog, true
 	case DataAsset(tag):
 		return assetData, true
+	case MCPAsset(tag):
+		return assetMCP, true
 	}
 	return 0, false
 }
@@ -84,15 +115,28 @@ type verifiedFile struct {
 
 type tagState struct {
 	Tag
-	channel  string // "" when the tree has no single apiVersion
-	moved    bool
-	sums     [2]publishedSum
-	verified [2]*verifiedFile
-	failedAt [2]time.Time
+	channel    string // "" when the tree has no single apiVersion
+	hasMCP     bool   // the tree has an mcp/ directory
+	mcpChannel string // "" without one, or when mcp/ has no single apiVersion
+	moved      bool
+	sums       [assetCount]publishedSum
+	verified   [assetCount]*verifiedFile
+	failedAt   [assetCount]time.Time
 }
 
-func (t *tagState) published() bool {
-	return t.sums[assetCatalog].sum != "" && t.sums[assetData].sum != ""
+// expects reports whether the tag's release can have a's file at all; a
+// tree without mcp/ never publishes the MCP tarball, so its sum isn't asked for.
+func (t *tagState) expects(a asset) bool {
+	return a != assetMCP || t.hasMCP
+}
+
+func (t *tagState) published(f indexedFiles) bool {
+	for _, a := range f.assets {
+		if t.sums[a].sum == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // Config configures a Server.
@@ -142,6 +186,10 @@ type Server struct {
 	index     []byte
 	indexETag string
 	synced    bool
+
+	mcpLatest    map[string]string // channel → tag, for /mcp/index.yaml
+	mcpIndex     []byte
+	mcpIndexETag string
 }
 
 // New validates cfg and returns a Server; Run starts it.
@@ -267,7 +315,8 @@ func (s *Server) addTags(ctx context.Context, tags []Tag) {
 		if known != nil {
 			continue
 		}
-		channel, err := s.channelOf(ctx, t)
+		st := &tagState{Tag: t}
+		err := s.readChannels(ctx, st)
 		if ctx.Err() != nil {
 			return
 		}
@@ -275,21 +324,36 @@ func (s *Server) addTags(ctx context.Context, tags []Tag) {
 			s.log.Warn("catalog-server: tag has no single schema channel; never indexed", "tag", t.Name, "err", err)
 		}
 		s.mu.Lock()
-		s.tags[t.Name] = &tagState{Tag: t, channel: channel}
+		s.tags[t.Name] = st
 		s.mu.Unlock()
 	}
 }
 
-func (s *Server) channelOf(ctx context.Context, t Tag) (string, error) {
+// readChannels sets st's data channel and, when its tree has mcp/, its MCP
+// channel. An mcp/ problem is only logged: it must never keep the tag out of
+// /index.yaml.
+func (s *Server) readChannels(ctx context.Context, st *tagState) error {
 	if err := s.acquire(ctx); err != nil {
-		return "", err
+		return err
 	}
 	defer s.release()
-	archive, err := s.mirror.Archive(ctx, t.Commit)
-	if err != nil {
-		return "", err
+	mcp, err := s.mirror.MCPArchive(ctx, st.Commit)
+	switch {
+	case errors.Is(err, ErrNoMCPTree):
+	case err != nil:
+		s.log.Warn("catalog-server: read mcp tree; its MCP tarball is never served", "tag", st.Name, "err", err)
+	default:
+		st.hasMCP = true
+		if st.mcpChannel, err = MCPArchiveChannel(mcp); err != nil {
+			s.log.Warn("catalog-server: mcp tree has no single schema channel; never indexed", "tag", st.Name, "err", err)
+		}
 	}
-	return ArchiveChannel(archive)
+	archive, err := s.mirror.Archive(ctx, st.Commit)
+	if err != nil {
+		return err
+	}
+	st.channel, err = ArchiveChannel(archive)
+	return err
 }
 
 // sumDue retries a missing sum every sync while the tag is fresh, hourly after.
@@ -306,8 +370,8 @@ func (s *Server) fetchSums(ctx context.Context) {
 	var jobs []job
 	s.mu.RLock()
 	for _, st := range s.tags {
-		for _, a := range assets {
-			if st.sums[a].sum == "" && sumDue(st.Committed, st.sums[a].checkedAt, now) {
+		for _, a := range allAssets {
+			if st.expects(a) && st.sums[a].sum == "" && sumDue(st.Committed, st.sums[a].checkedAt, now) {
 				jobs = append(jobs, job{st, a})
 			}
 		}
@@ -350,41 +414,29 @@ func (s *Server) fetchSum(ctx context.Context, st *tagState, a asset) {
 }
 
 // updateIndex makes each channel's latest the highest tag whose files are
-// published and verify, building them now, and pins those files.
+// published and verify, building them now, and pins those files. The two
+// indexes move independently: an MCP tarball never holds back /index.yaml.
 func (s *Server) updateIndex(ctx context.Context) {
-	byChannel := map[string][]string{}
-	s.mu.RLock()
-	for name, st := range s.tags {
-		if st.channel != "" && st.published() {
-			byChannel[st.channel] = append(byChannel[st.channel], name)
-		}
+	latest := s.latestVerified(ctx, relayFiles)
+	mcpLatest := s.latestVerified(ctx, mcpFiles)
+	if ctx.Err() != nil {
+		return
 	}
-	s.mu.RUnlock()
-
-	latest := map[string]string{}
-	for channel, names := range byChannel {
-		slices.SortFunc(names, func(a, b string) int { return semver.Compare(b, a) })
-		for _, name := range names {
-			if ctx.Err() != nil {
-				return
-			}
-			if s.verifyTag(ctx, name) {
-				latest[channel] = name
-				break
+	relayPins, mcpPins := pinsOf(latest, relayFiles), pinsOf(mcpLatest, mcpFiles)
+	s.cache.setPinned(append(slices.Clone(relayPins), mcpPins...))
+	if s.holdFiles(ctx, mcpPins) {
+		index := renderIndex(mcpLatest)
+		s.mu.Lock()
+		for channel, tag := range mcpLatest {
+			if s.mcpLatest[channel] != tag {
+				s.log.Info("catalog-server: mcp channel latest", "channel", channel, "tag", tag)
 			}
 		}
+		s.mcpLatest, s.mcpIndex, s.mcpIndexETag = mcpLatest, index, `"`+sha256Hex(index)+`"`
+		s.mu.Unlock()
 	}
-	pins := make([]fileKey, 0, 2*len(latest))
-	for _, tag := range latest {
-		for _, a := range assets {
-			pins = append(pins, fileKey{tag, a})
-		}
-	}
-	s.cache.setPinned(pins)
-	for _, k := range pins {
-		if _, err := s.file(ctx, k.tag, k.asset); err != nil {
-			return
-		}
+	if !s.holdFiles(ctx, relayPins) {
+		return
 	}
 
 	index := renderIndex(latest)
@@ -408,8 +460,56 @@ func (s *Server) updateIndex(ctx context.Context) {
 	}
 }
 
-func (s *Server) verifyTag(ctx context.Context, tag string) bool {
-	for _, a := range assets {
+// latestVerified maps each channel of f to its highest tag whose f files are
+// published and verify. It stops early, with a partial map, when ctx ends.
+func (s *Server) latestVerified(ctx context.Context, f indexedFiles) map[string]string {
+	byChannel := map[string][]string{}
+	s.mu.RLock()
+	for name, st := range s.tags {
+		if channel := f.channel(st); channel != "" && st.published(f) {
+			byChannel[channel] = append(byChannel[channel], name)
+		}
+	}
+	s.mu.RUnlock()
+
+	latest := map[string]string{}
+	for channel, names := range byChannel {
+		slices.SortFunc(names, func(a, b string) int { return semver.Compare(b, a) })
+		for _, name := range names {
+			if ctx.Err() != nil {
+				return latest
+			}
+			if s.verifyTag(ctx, name, f) {
+				latest[channel] = name
+				break
+			}
+		}
+	}
+	return latest
+}
+
+func pinsOf(latest map[string]string, f indexedFiles) []fileKey {
+	pins := make([]fileKey, 0, len(f.assets)*len(latest))
+	for _, tag := range latest {
+		for _, a := range f.assets {
+			pins = append(pins, fileKey{tag, a})
+		}
+	}
+	return pins
+}
+
+// holdFiles loads pinned files evicted since they verified.
+func (s *Server) holdFiles(ctx context.Context, pins []fileKey) bool {
+	for _, k := range pins {
+		if _, err := s.file(ctx, k.tag, k.asset); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) verifyTag(ctx context.Context, tag string, f indexedFiles) bool {
+	for _, a := range f.assets {
 		if _, err := s.file(ctx, tag, a); err != nil {
 			return false
 		}
@@ -446,6 +546,8 @@ func (s *Server) publishedSum(tag string, a asset) (file []byte, catchUp bool) {
 		return nil, true
 	case st.sums[a].file != nil:
 		return st.sums[a].file, false
+	case !st.expects(a):
+		return nil, false
 	}
 	return nil, sumDue(st.Committed, st.sums[a].checkedAt, s.now())
 }

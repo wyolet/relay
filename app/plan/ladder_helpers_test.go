@@ -78,18 +78,6 @@ func callerCredentials(cp *plan.CallerPlan) []string {
 	return out
 }
 
-func sameList(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func mustRoute(t *testing.T, cp *plan.CallerPlan, ref string) *plan.Route {
 	t.Helper()
 	r := cp.Routes.Get(ref)
@@ -113,13 +101,15 @@ func wantRefusal(t *testing.T, r *plan.Route, code string, rung limits.Rung, pol
 	}
 }
 
-func hasIssue(v *engine.View, ref engine.Ref, code string) bool {
+// issueFields lists the fields of ref's issues carrying code.
+func issueFields(v *engine.View, ref engine.Ref, code string) []string {
+	var out []string
 	for _, is := range v.Issues(ref) {
 		if is.Code == code {
-			return true
+			out = append(out, is.Field)
 		}
 	}
-	return false
+	return out
 }
 
 // tokenCaller is the lane a relay-minted token of the user carries inside the project: the user's member account there.

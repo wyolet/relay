@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/meta"
 )
@@ -86,13 +87,16 @@ type HostSpec struct {
 	NoAuth  bool              `json:"noAuth,omitempty"      yaml:"noAuth,omitempty"`
 	// PricingStrategies is the host's menu of offered billing modes
 	// (api | sub). Empty defaults to ["api"].
-	PricingStrategies []string   `json:"pricingStrategies,omitempty" yaml:"pricingStrategies,omitempty"`
-	Enabled           *bool      `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
-	HomepageURL       string     `json:"homepageURL,omitempty" yaml:"homepageURL,omitempty"`
-	DocsURL           string     `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`
-	ConsoleURL        string     `json:"consoleURL,omitempty"  yaml:"consoleURL,omitempty"`
-	StatusPageURL     string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
-	Icon              *meta.Icon `json:"icon,omitempty"        yaml:"icon,omitempty"`
+	PricingStrategies []string `json:"pricingStrategies,omitempty" yaml:"pricingStrategies,omitempty"`
+	// RequestParamRenames maps an adapter name to the top-level request-body
+	// keys the host expects under another name.
+	RequestParamRenames map[adapters.Name]map[string]string `json:"requestParamRenames,omitempty" yaml:"requestParamRenames,omitempty"`
+	Enabled             *bool                               `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
+	HomepageURL         string                              `json:"homepageURL,omitempty" yaml:"homepageURL,omitempty"`
+	DocsURL             string                              `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`
+	ConsoleURL          string                              `json:"consoleURL,omitempty"  yaml:"consoleURL,omitempty"`
+	StatusPageURL       string                              `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
+	Icon                *meta.Icon                          `json:"icon,omitempty"        yaml:"icon,omitempty"`
 }
 
 // ModelDTO is the wire form of a Model.

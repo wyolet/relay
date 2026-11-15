@@ -11,20 +11,23 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/settings"
 )
 
 func TestCatalogSyncAnswersTheCheck(t *testing.T) {
 	d := Deps{
 		Authz: authz.AlwaysAllowAuthenticated{},
 		CatalogSync: func(context.Context) (appcatalog.CheckResult, error) {
-			return appcatalog.CheckResult{Previous: "v0.2.1", Current: "v0.2.2", Changed: true}, nil
+			return appcatalog.CheckResult{Previous: "v0.2.1", Current: "v0.2.2", Changed: true,
+				Pruned: &settings.CatalogPrune{Pruned: 412, KeptDetached: 3}}, nil
 		},
 	}
-	out, err := syncCatalog(rotateCtx(), d)
+	out, err := syncCatalog(asAdminToken(), d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Body.Previous != "v0.2.1" || out.Body.Current != "v0.2.2" || !out.Body.Changed {
+	if out.Body.Previous != "v0.2.1" || out.Body.Current != "v0.2.2" || !out.Body.Changed ||
+		out.Body.Prune == nil || *out.Body.Prune != (settings.CatalogPrune{Pruned: 412, KeptDetached: 3}) {
 		t.Fatalf("body = %+v", out.Body)
 	}
 }
@@ -34,7 +37,7 @@ func TestCatalogSyncIsAuthorized(t *testing.T) {
 		t.Fatal("the check ran for a denied caller")
 		return appcatalog.CheckResult{}, nil
 	}}
-	if got := statusOf(t, errOf(syncCatalog(rotateCtx(), d))); got != http.StatusForbidden {
+	if got := statusOf(t, errOf(syncCatalog(asAdminToken(), d))); got != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", got)
 	}
 }
@@ -53,7 +56,7 @@ func TestCatalogSyncStatuses(t *testing.T) {
 		}, http.StatusBadGateway},
 	} {
 		d := Deps{Authz: authz.AlwaysAllowAuthenticated{}, CatalogSync: tc.sync}
-		if got := statusOf(t, errOf(syncCatalog(rotateCtx(), d))); got != tc.want {
+		if got := statusOf(t, errOf(syncCatalog(asAdminToken(), d))); got != tc.want {
 			t.Errorf("%s: status = %d, want %d", name, got, tc.want)
 		}
 	}

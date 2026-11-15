@@ -13,13 +13,11 @@ import (
 func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	out := &geminiRequest{}
 
-	// Resolve model opts: prefer entry keyed by req.Model[0], fall back to
-	// single entry when ModelConfig has exactly one key.
 	modelKey := ""
 	if len(req.Model) > 0 {
 		modelKey = req.Model[0]
 	}
-	opts := resolveModelOpts(req.ModelConfig, modelKey)
+	opts := req.ModelOptsFor(modelKey)
 
 	// canonical: User dropped — generateContent has no end-user identifier.
 	// canonical: Metadata dropped — generateContent takes no request metadata
@@ -67,19 +65,22 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 		// canonical: Output.Verbosity dropped — generateContent has no
 		// verbosity control.
-		// canonical: Format.Name/Description/Strict dropped — responseSchema
+		// canonical: Format.Name/Description/Strict dropped — responseJsonSchema
 		// takes the bare schema only.
 		if o := opts.Output; o != nil && o.Format != nil {
 			switch o.Format.Type {
+			case "text":
 			case "json_object":
 				gc.ResponseMIMEType = "application/json"
 				hasGC = true
 			case "json_schema":
 				gc.ResponseMIMEType = "application/json"
 				if len(o.Format.Schema) > 0 {
-					gc.ResponseSchema = o.Format.Schema
+					gc.ResponseJSONSchema = o.Format.Schema
 				}
 				hasGC = true
+			default:
+				return nil, fmt.Errorf("gemini serialize_request: %w: response format type %q", v1.ErrUnsupportedRequest, o.Format.Type)
 			}
 		}
 		if hasGC {
@@ -89,11 +90,15 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 
 	// Tools are task-level (req.Tools), shared across models — not per-model.
 	if tc := req.Tools; tc != nil {
+		autoAllowed := autoAllowedNames(tc.Choice)
 		var decls []functionDeclaration
 		for _, tool := range tc.Definitions {
 			ft, ok := tool.(*v1.FunctionTool)
 			if !ok {
 				return nil, fmt.Errorf("gemini serialize_request: unsupported tool type %T", tool)
+			}
+			if autoAllowed != nil && !autoAllowed[ft.Name] {
+				continue
 			}
 			schema := ft.Parameters
 			if schema == nil {
@@ -104,9 +109,9 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			// canonical: FunctionTool.ProviderData dropped — it holds another
 			// vendor's original tool definition; Gemini gets the lowered schema.
 			decls = append(decls, functionDeclaration{
-				Name:        ft.Name,
-				Description: ft.Description,
-				Parameters:  schema,
+				Name:                 ft.Name,
+				Description:          ft.Description,
+				ParametersJSONSchema: schema,
 			})
 		}
 		if len(decls) > 0 {
@@ -128,6 +133,9 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gemini serialize_request: %w", err)
 	}
+	if len(contents) == 0 {
+		return nil, fmt.Errorf("gemini serialize_request: %w: no contents to send", v1.ErrUnsupportedRequest)
+	}
 	out.Contents = contents
 	for _, extra := range []string{extraSys, hoistedSys} {
 		if extra == "" {
@@ -143,6 +151,18 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// autoAllowedNames returns the tools an auto choice is limited to, or nil when it is not. Gemini takes allowedFunctionNames only with ANY or VALIDATED (which adds constrained decoding auto lacks), so an auto choice is limited by sending only these declarations.
+func autoAllowedNames(tc *v1.ToolChoice) map[string]bool {
+	if tc == nil || tc.Mode != "auto" || len(tc.Allowed) == 0 {
+		return nil
+	}
+	names := make(map[string]bool, len(tc.Allowed))
+	for _, n := range tc.Allowed {
+		names[n] = true
+	}
+	return names
+}
+
 // canonicalChoiceToGemini maps canonical ToolChoice to Gemini toolConfig.
 func canonicalChoiceToGemini(tc *v1.ToolChoice) *toolConfig {
 	if tc == nil {
@@ -154,6 +174,7 @@ func canonicalChoiceToGemini(tc *v1.ToolChoice) *toolConfig {
 		cfg.Mode = "AUTO"
 	case "required":
 		cfg.Mode = "ANY"
+		cfg.AllowedFunctionNames = tc.Allowed
 	case "none":
 		cfg.Mode = "NONE"
 	case "function":

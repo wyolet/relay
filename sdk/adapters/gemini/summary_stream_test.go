@@ -1,10 +1,11 @@
 package gemini
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -28,6 +29,11 @@ func TestGeminiSummaryFrame(t *testing.T) {
 		{"finish named in text", `data: {"candidates":[{"content":{"parts":[{"text":"\"finishReason\":\"STOP\""}]}}]}`, false},
 		{"functionCall null", `data: {"candidates":[{"content":{"parts":[{"text":"hi","functionCall":null}]}}]}`, false},
 		{"second candidate finishing", `data: {"candidates":[{"content":{"parts":[{"text":"a"}]}},{"finishReason":"STOP"}]}`, false},
+		{"promptFeedback null", `data: {"promptFeedback":null,"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`, false},
+		{"prompt feedback beside a candidate", `data: {"promptFeedback":{"safetyRatings":[]},"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`, true},
+		{"functionCall after role", `data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"f","args":{}}}]}}]}`, true},
+		{"unreadable part", `data: {"candidates":[{"content":{"parts":[{"text"}]}}]}`, true},
+		{"parts not an array", `data: {"candidates":[{"content":{"parts":{}}}]}`, true},
 		{"finish", `data: {"candidates":[{"content":{"parts":[{"text":""}]},"finishReason":"STOP"}],` + geminiUsage + `}`, true},
 		{"finish key case", `data: {"candidates":[{"content":{"parts":[]},"FinishReason":"STOP"}]}`, true},
 		{"content null", `data: {"candidates":[{"content":null}],` + geminiUsage + `}`, true},
@@ -37,8 +43,8 @@ func TestGeminiSummaryFrame(t *testing.T) {
 		{"error", `data: {"error":{"code":429,"message":"quota","status":"RESOURCE_EXHAUSTED"}}`, true},
 		{"no candidates", `data: {` + geminiUsage + `}`, true},
 		{"empty candidates", `data: {"candidates":[]}`, true},
-		{"duplicate candidates", `data: {"candidates":[{"content":{"parts":[]}}],"candidates":[{"index":0}]}`, true},
-		{"duplicate content", `data: {"candidates":[{"content":{"parts":[]},"content":null}]}`, true},
+		{"duplicate candidates", `data: {"candidates":[{"content":{"parts":[]}}],"candidates":[{"content":{"parts":[]}}]}`, true},
+		{"duplicate content", `data: {"candidates":[{"content":{"parts":[]},"content":{"parts":[]}}]}`, true},
 		{"truncated", `data: {"candidates":[{"content":{"parts":[{"text":"h`, true},
 	}
 	for _, tc := range cases {
@@ -54,28 +60,33 @@ func TestGeminiSummaryFrame(t *testing.T) {
 // A function call early in the stream turns the final STOP into tool_calls,
 // and a content-less frame carries the completion's usage.
 func TestGeminiSummaryFrameSequences(t *testing.T) {
-	streams := map[string][]string{
-		"function call then stop": {
+	cases := []struct {
+		name   string
+		frames []string
+		want   v1.Summary
+	}{
+		{"function call then stop", []string{
 			`data: {"candidates":[{"content":{"parts":[{"text":"let me check"}]}}],` + geminiUsage + `}`,
 			`data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"f","args":{"a":1}}}]}}],` + geminiUsage + `}`,
 			`data: {"candidates":[{"content":{"parts":[{"text":"done"}]}}],` + geminiUsage + `}`,
 			`data: {"candidates":[{"content":{"parts":[{"text":""}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":4,"totalTokenCount":12}}`,
-		},
-		"usage on a content-less frame": {
+		}, v1.Summary{Tokens: usage.Tokens{"input": 8, "output": 4}, FinishReason: v1.FinishReasonToolCalls}},
+		{"usage on a content-less frame", []string{
 			`data: {"candidates":[{"content":{"parts":[{"text":"a"}]}}],` + geminiUsage + `}`,
 			`data: {"candidates":[{"index":0}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3,"totalTokenCount":11}}`,
-		},
+		}, v1.Summary{Tokens: usage.Tokens{"input": 8, "output": 3}, FinishReason: v1.FinishReasonStop}},
 	}
-	for name, frames := range streams {
-		t.Run(name, func(t *testing.T) {
-			body := []byte(strings.Join(frames, "\n\n") + "\n\n")
-			filtered, _ := v1.ExtractSummary(GeminiTranslator{}, body)
-			all, _ := v1.ExtractSummary(translateAll{GeminiTranslator{}}, body)
-			if !reflect.DeepEqual(filtered, all) {
-				t.Fatalf("filtered %+v, unfiltered %+v", filtered, all)
-			}
-			if len(filtered.Tokens) == 0 {
-				t.Errorf("no usage harvested: %+v", filtered)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := []byte(strings.Join(c.frames, "\n\n") + "\n\n")
+			for _, translator := range []v1.Translator{GeminiTranslator{}, translateAll{GeminiTranslator{}}} {
+				got, err := v1.ExtractSummary(translator, body)
+				if err != nil {
+					t.Fatalf("%T: %v", translator, err)
+				}
+				if diff := cmp.Diff(c.want, got); diff != "" {
+					t.Errorf("%T summary (-want +got):\n%s", translator, diff)
+				}
 			}
 		})
 	}

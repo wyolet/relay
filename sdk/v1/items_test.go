@@ -3,311 +3,170 @@ package v1
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestMessageRoundTrip(t *testing.T) {
+func TestUnmarshalItem(t *testing.T) {
+	anchor := &ItemCacheConfig{Anchor: true}
 	tests := []struct {
 		name string
 		wire string
+		want Item
+		// rewire is what the item marshals back to; empty means wire itself.
+		rewire string
 	}{
 		{
-			name: "string content normalizes to TextPart",
-			wire: `{"type":"message","role":"user","content":"hello world"}`,
+			name:   "message with string content becomes one input_text part",
+			wire:   `{"type":"message","role":"user","content":"hello"}`,
+			want:   &Message{Role: RoleUser, Content: []Part{&TextPart{Text: "hello"}}},
+			rewire: `{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}`,
 		},
 		{
-			name: "array content with input_text",
-			wire: `{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`,
+			name: "message with every field",
+			wire: `{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}],"cache_config":{"anchor":true},"hoist":true,"provider_data":{"sig":"abc"}}`,
+			want: &Message{ID: "msg_1", Status: StatusCompleted, Role: RoleAssistant, Content: []Part{&OutputTextPart{Text: "ok"}},
+				CacheConfig: anchor, Hoist: true, ProviderData: json.RawMessage(`{"sig":"abc"}`)},
 		},
 		{
-			name: "assistant message with status",
-			wire: `{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}`,
+			name: "message with mixed parts keeps their order",
+			wire: `{"type":"message","role":"developer","content":[{"type":"input_text","text":"a"},{"type":"input_image","image_url":"u"},{"type":"input_text","text":"b"}]}`,
+			want: &Message{Role: RoleDeveloper, Content: []Part{&TextPart{Text: "a"}, &ImagePart{ImageURL: "u"}, &TextPart{Text: "b"}}},
 		},
 		{
-			name: "system message",
-			wire: `{"type":"message","role":"system","content":[{"type":"input_text","text":"you are helpful"}]}`,
+			name:   "message without content",
+			wire:   `{"type":"message","role":"system"}`,
+			want:   &Message{Role: RoleSystem},
+			rewire: `{"type":"message","role":"system","content":null}`,
 		},
 		{
-			name: "developer message",
-			wire: `{"type":"message","role":"developer","content":[{"type":"input_text","text":"debug mode"}]}`,
+			name: "message with empty content array",
+			wire: `{"type":"message","role":"user","content":[]}`,
+			want: &Message{Role: RoleUser, Content: []Part{}},
+		},
+		{
+			name: "function_call with every field",
+			wire: `{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"get_weather","arguments":"{\"city\":\"NYC\"}","status":"completed","cache_config":{"anchor":true},"provider_data":{"k":1}}`,
+			want: &FunctionCall{ID: "fc_1", CallID: "call_abc", Name: "get_weather", Arguments: `{"city":"NYC"}`, Status: StatusCompleted,
+				CacheConfig: anchor, ProviderData: json.RawMessage(`{"k":1}`)},
+		},
+		{
+			name: "function_call minimal keeps required members on the wire",
+			wire: `{"type":"function_call","call_id":"","name":"","arguments":""}`,
+			want: &FunctionCall{},
+		},
+		{
+			name: "function_call_output string form",
+			wire: `{"type":"function_call_output","call_id":"call_abc","output":"sunny","cache_config":{"anchor":true}}`,
+			want: &FunctionCallOutput{CallID: "call_abc", Output: "sunny", CacheConfig: anchor},
+		},
+		{
+			name: "function_call_output content form",
+			wire: `{"type":"function_call_output","call_id":"call_abc","content":[{"type":"input_text","text":"done"},{"type":"input_image","image_url":"u"}]}`,
+			want: &FunctionCallOutput{CallID: "call_abc", Content: []Part{&TextPart{Text: "done"}, &ImagePart{ImageURL: "u"}}},
+		},
+		{
+			name:   "function_call_output null output and content",
+			wire:   `{"type":"function_call_output","call_id":"c","output":null,"content":null}`,
+			want:   &FunctionCallOutput{CallID: "c"},
+			rewire: `{"type":"function_call_output","call_id":"c"}`,
+		},
+		{
+			name: "reasoning with every field",
+			wire: `{"type":"reasoning","id":"rs_1","summary":[{"text":"step 1"},{"text":"step 2"}],"content":"raw","status":"completed","provider_data":{"encrypted":"xyz"}}`,
+			want: &Reasoning{ID: "rs_1", Summary: []SummaryText{{Text: "step 1"}, {Text: "step 2"}}, Content: "raw", Status: StatusCompleted,
+				ProviderData: json.RawMessage(`{"encrypted":"xyz"}`)},
+		},
+		{
+			name: "reasoning minimal",
+			wire: `{"type":"reasoning"}`,
+			want: &Reasoning{},
 		},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			item, err := UnmarshalItem([]byte(tc.wire))
+			got, err := UnmarshalItem([]byte(tc.wire))
 			if err != nil {
 				t.Fatalf("UnmarshalItem: %v", err)
 			}
-			msg, ok := item.(*Message)
-			if !ok {
-				t.Fatalf("expected *Message, got %T", item)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("item (-want +got):\n%s", diff)
 			}
-			if len(msg.Content) == 0 {
-				t.Fatal("expected non-empty Content")
+			if got.ItemType() != tc.want.ItemType() {
+				t.Errorf("ItemType = %q, want %q", got.ItemType(), tc.want.ItemType())
 			}
-			got, err := json.Marshal(msg)
-			if err != nil {
-				t.Fatalf("marshal: %v", err)
+			rewire := tc.rewire
+			if rewire == "" {
+				rewire = tc.wire
 			}
-			item2, err := UnmarshalItem(got)
-			if err != nil {
-				t.Fatalf("re-unmarshal: %v", err)
-			}
-			msg2 := item2.(*Message)
-			if msg2.Role != msg.Role {
-				t.Errorf("role: got %q, want %q", msg2.Role, msg.Role)
-			}
-			if len(msg2.Content) != len(msg.Content) {
-				t.Errorf("content length: got %d, want %d", len(msg2.Content), len(msg.Content))
-			}
+			wantJSON(t, got, rewire)
 		})
 	}
 }
 
-func TestMessageStringContentNormalization(t *testing.T) {
-	wire := `{"type":"message","role":"user","content":"hello"}`
-	item, err := UnmarshalItem([]byte(wire))
-	if err != nil {
-		t.Fatal(err)
+func TestUnmarshalItem_Errors(t *testing.T) {
+	tests := []struct {
+		name, wire, want string
+	}{
+		{"not an object", `[]`, "item: json: cannot unmarshal array…"},
+		{"missing type", `{"role":"user"}`, `unsupported item type ""`},
+		{"vendor built-in call", `{"type":"web_search_call"}`, `unsupported item type "web_search_call"`},
+		{"compaction", `{"type":"compaction"}`, `unsupported item type "compaction"`},
+		{"type is case-sensitive", `{"type":"Message","role":"user"}`, `unsupported item type "Message"`},
+		{"message with unknown part", `{"type":"message","role":"user","content":[{"type":"audio"}]}`, `message item: unsupported part type "audio"`},
+		{"message with object content", `{"type":"message","role":"user","content":{}}`, "message item: content array: json: cannot unmarshal object…"},
+		{"message with numeric role", `{"type":"message","role":1}`, "message item: json: cannot unmarshal number…"},
+		{"function_call with numeric name", `{"type":"function_call","name":1}`, "function_call item: json: cannot unmarshal number…"},
+		{"function_call_output with object output", `{"type":"function_call_output","output":{}}`, "function_call_output item: function_call_output.output: json: cannot unmarshal object…"},
+		{"function_call_output with unknown part", `{"type":"function_call_output","content":[{"type":"x"}]}`, `function_call_output item: unsupported part type "x"`},
+		{"function_call_output with numeric call_id", `{"type":"function_call_output","call_id":1}`, "function_call_output item: json: cannot unmarshal number…"},
+		{"reasoning with string summary", `{"type":"reasoning","summary":"x"}`, "reasoning item: json: cannot unmarshal string…"},
 	}
-	msg := item.(*Message)
-	if len(msg.Content) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(msg.Content))
-	}
-	tp, ok := msg.Content[0].(*TextPart)
-	if !ok {
-		t.Fatalf("expected *TextPart, got %T", msg.Content[0])
-	}
-	if tp.Text != "hello" {
-		t.Errorf("text: got %q, want %q", tp.Text, "hello")
-	}
-}
-
-func TestMessageProviderDataRoundTrip(t *testing.T) {
-	wire := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}],"provider_data":{"sig":"abc123"}}`
-	item, err := UnmarshalItem([]byte(wire))
-	if err != nil {
-		t.Fatalf("UnmarshalItem: %v", err)
-	}
-	msg := item.(*Message)
-	if len(msg.ProviderData) == 0 {
-		t.Fatal("expected provider_data to be preserved")
-	}
-	b, err := json.Marshal(msg)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	item2, err := UnmarshalItem(b)
-	if err != nil {
-		t.Fatalf("re-unmarshal: %v", err)
-	}
-	msg2 := item2.(*Message)
-	if string(msg2.ProviderData) != string(msg.ProviderData) {
-		t.Errorf("provider_data mismatch: %s vs %s", msg2.ProviderData, msg.ProviderData)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := UnmarshalItem([]byte(tc.wire))
+			if err == nil {
+				t.Fatalf("UnmarshalItem = %#v, want an error", got)
+			}
+			wantErr(t, err, tc.want)
+		})
 	}
 }
 
-func TestFunctionCallRoundTrip(t *testing.T) {
-	wire := `{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"get_weather","arguments":"{\"city\":\"NYC\"}","status":"completed"}`
-	item, err := UnmarshalItem([]byte(wire))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fc, ok := item.(*FunctionCall)
-	if !ok {
-		t.Fatalf("expected *FunctionCall, got %T", item)
-	}
-	if fc.Name != "get_weather" {
-		t.Errorf("name: %q", fc.Name)
-	}
-	if fc.CallID != "call_abc" {
-		t.Errorf("call_id: %q", fc.CallID)
-	}
-	b, _ := json.Marshal(fc)
-	item2, err := UnmarshalItem(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fc2 := item2.(*FunctionCall)
-	if fc2.Arguments != fc.Arguments {
-		t.Errorf("arguments mismatch: %q vs %q", fc2.Arguments, fc.Arguments)
-	}
-}
-
-func TestFunctionCallOutputRoundTrip(t *testing.T) {
-	t.Run("string output", func(t *testing.T) {
-		wire := `{"type":"function_call_output","call_id":"call_abc","output":"sunny"}`
-		item, err := UnmarshalItem([]byte(wire))
-		if err != nil {
-			t.Fatal(err)
-		}
-		fco := item.(*FunctionCallOutput)
-		if fco.Output != "sunny" {
-			t.Errorf("output: %q", fco.Output)
-		}
-		b, _ := json.Marshal(fco)
-		item2, _ := UnmarshalItem(b)
-		fco2 := item2.(*FunctionCallOutput)
-		if fco2.Output != fco.Output {
-			t.Errorf("output mismatch after round-trip")
-		}
-	})
-
-	t.Run("content array output", func(t *testing.T) {
-		wire := `{"type":"function_call_output","call_id":"call_abc","content":[{"type":"input_text","text":"done"}]}`
-		item, err := UnmarshalItem([]byte(wire))
-		if err != nil {
-			t.Fatal(err)
-		}
-		fco := item.(*FunctionCallOutput)
-		if len(fco.Content) != 1 {
-			t.Fatalf("expected 1 content part, got %d", len(fco.Content))
-		}
-	})
-}
-
-func TestReasoningRoundTrip(t *testing.T) {
-	wire := `{"type":"reasoning","id":"rs_1","summary":[{"text":"step 1"},{"text":"step 2"}],"status":"completed"}`
-	item, err := UnmarshalItem([]byte(wire))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, ok := item.(*Reasoning)
-	if !ok {
-		t.Fatalf("expected *Reasoning, got %T", item)
-	}
-	if len(r.Summary) != 2 {
-		t.Errorf("summary length: %d", len(r.Summary))
-	}
-	b, _ := json.Marshal(r)
-	item2, err := UnmarshalItem(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r2 := item2.(*Reasoning)
-	if r2.ID != r.ID {
-		t.Errorf("id mismatch: %q vs %q", r2.ID, r.ID)
-	}
-	if len(r2.Summary) != len(r.Summary) {
-		t.Errorf("summary length mismatch: %d vs %d", len(r2.Summary), len(r.Summary))
-	}
-}
-
-func TestReasoningProviderDataRoundTrip(t *testing.T) {
-	wire := `{"type":"reasoning","id":"rs_1","summary":[{"text":"thinking"}],"provider_data":{"encrypted":"xyz"}}`
-	item, err := UnmarshalItem([]byte(wire))
-	if err != nil {
-		t.Fatalf("UnmarshalItem: %v", err)
-	}
-	r := item.(*Reasoning)
-	if len(r.ProviderData) == 0 {
-		t.Fatal("expected provider_data to be preserved")
-	}
-	b, err := json.Marshal(r)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	item2, err := UnmarshalItem(b)
-	if err != nil {
-		t.Fatalf("re-unmarshal: %v", err)
-	}
-	r2 := item2.(*Reasoning)
-	if string(r2.ProviderData) != string(r.ProviderData) {
-		t.Errorf("provider_data mismatch: %s vs %s", r2.ProviderData, r.ProviderData)
-	}
-}
-
-func TestMixedItemsArrayRoundTrip(t *testing.T) {
-	wire := `[
+func TestUnmarshalItems(t *testing.T) {
+	got, err := UnmarshalItems([]byte(`[
 		{"type":"message","role":"user","content":"what is the weather?"},
 		{"type":"function_call","id":"fc_1","call_id":"call_1","name":"weather","arguments":"{}"},
-		{"type":"function_call_output","call_id":"call_1","output":"sunny"}
-	]`
-	items, err := UnmarshalItems([]byte(wire))
+		{"type":"function_call_output","call_id":"call_1","output":"sunny"},
+		{"type":"reasoning","id":"rs_1"}
+	]`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 3 {
-		t.Fatalf("expected 3 items, got %d", len(items))
+	want := []Item{
+		&Message{Role: RoleUser, Content: []Part{&TextPart{Text: "what is the weather?"}}},
+		&FunctionCall{ID: "fc_1", CallID: "call_1", Name: "weather", Arguments: "{}"},
+		&FunctionCallOutput{CallID: "call_1", Output: "sunny"},
+		&Reasoning{ID: "rs_1"},
 	}
-	if items[0].ItemType() != ItemTypeMessage {
-		t.Errorf("item[0]: %v", items[0].ItemType())
-	}
-	if items[1].ItemType() != ItemTypeFunctionCall {
-		t.Errorf("item[1]: %v", items[1].ItemType())
-	}
-	if items[2].ItemType() != ItemTypeFunctionCallOutput {
-		t.Errorf("item[2]: %v", items[2].ItemType())
-	}
-}
-
-func TestUnsupportedItemTypeReturnsError(t *testing.T) {
-	unsupported := []string{
-		"file_search_call",
-		"web_search_call",
-		"computer_call",
-		"computer_call_output",
-		"code_interpreter_call",
-		"image_generation_call",
-		"mcp_call",
-		"mcp_list_tools",
-		"compaction",
-	}
-	for _, typ := range unsupported {
-		wire := `{"type":"` + typ + `"}`
-		_, err := UnmarshalItem([]byte(wire))
-		if err == nil {
-			t.Errorf("expected error for type %q, got nil", typ)
-		}
-	}
-}
-
-func TestItemCompletedEventUnmarshal(t *testing.T) {
-	wire := `{"item_id":"msg_1","index":2,"item":{"type":"message","role":"assistant","content":"hi"}}`
-	var ev ItemCompletedEvent
-	if err := json.Unmarshal([]byte(wire), &ev); err != nil {
-		t.Fatal(err)
-	}
-	if ev.ItemID != "msg_1" || ev.Index != 2 {
-		t.Errorf("header: %+v", ev)
-	}
-	msg, ok := ev.Item.(*Message)
-	if !ok {
-		t.Fatalf("want *Message, got %T", ev.Item)
-	}
-	if msg.Role != RoleAssistant {
-		t.Errorf("role: %v", msg.Role)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("items (-want +got):\n%s", diff)
 	}
 
-	var nullItem ItemCompletedEvent
-	if err := json.Unmarshal([]byte(`{"item_id":"x","index":0,"item":null}`), &nullItem); err != nil {
-		t.Fatal(err)
-	}
-	if nullItem.Item != nil {
-		t.Errorf("null item should stay nil, got %T", nullItem.Item)
-	}
-
-	var bad ItemCompletedEvent
-	if err := json.Unmarshal([]byte(`{"item_id":"x","index":0,"item":{"type":"computer_call"}}`), &bad); err == nil {
-		t.Error("expected error for unsupported item type, got nil")
-	}
-}
-
-func TestToolItemCacheConfigRoundTrip(t *testing.T) {
-	for _, wire := range []string{
-		`{"type":"function_call","call_id":"call_abc","name":"read","arguments":"{}","cache_config":{"anchor":true}}`,
-		`{"type":"function_call_output","call_id":"call_abc","output":"ok","cache_config":{"anchor":true}}`,
+	for _, tc := range []struct{ name, wire, want string }{
+		{"not an array", `{"type":"message"}`, "input array: json: cannot unmarshal object…"},
+		{"second element unsupported", `[{"type":"reasoning"},{"type":"mcp_call"}]`, `unsupported item type "mcp_call"`},
 	} {
-		item, err := UnmarshalItem([]byte(wire))
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, err := json.Marshal(item)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(b) != wire {
-			t.Errorf("round trip:\n got %s\nwant %s", b, wire)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			items, err := UnmarshalItems([]byte(tc.wire))
+			if items != nil {
+				t.Errorf("items = %v, want nil on error", items)
+			}
+			wantErr(t, err, tc.want)
+		})
+	}
+
+	if got, err := UnmarshalItems([]byte(`[]`)); err != nil || got == nil || len(got) != 0 {
+		t.Errorf("empty array = %v, %v; want an empty non-nil slice", got, err)
 	}
 }

@@ -1,110 +1,79 @@
 package usagelog
 
 import (
+	"fmt"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/google/go-cmp/cmp"
+
+	"github.com/wyolet/relay/pkg/usage"
 )
 
-func TestParseTags_Happy(t *testing.T) {
-	tags, ok := ParseTags(`{"session_id":"0988342e","leg":"translate"}`)
-	if !ok {
-		t.Fatal("want ok")
+func tagObject(n int) string {
+	pairs := make([]string, n)
+	for i := range pairs {
+		pairs[i] = fmt.Sprintf(`"k%d":"v"`, i)
 	}
-	if len(tags) != 2 || tags["session_id"] != "0988342e" || tags["leg"] != "translate" {
-		t.Fatalf("tags: %+v", tags)
-	}
+	return "{" + strings.Join(pairs, ",") + "}"
 }
 
-func TestParseTags_Violations(t *testing.T) {
-	manyKeys := "{"
-	for i := 0; i < maxTagCount+1; i++ {
-		if i > 0 {
-			manyKeys += ","
-		}
-		manyKeys += `"k` + string(rune('a'+i)) + `":"v"`
-	}
-	manyKeys += "}"
+func TestParseTags(t *testing.T) {
+	longKey, longValue := strings.Repeat("k", usage.MaxTagKeyLen), strings.Repeat("v", maxTagValueLen)
+	padded := func(size int) string { return `{"k":"v"}` + strings.Repeat(" ", size-len(`{"k":"v"}`)) }
 
-	cases := map[string]string{
+	accepted := map[string]struct {
+		raw  string
+		want map[string]string
+	}{
+		"two tags":            {`{"session_id":"0988342e","leg":"translate"}`, map[string]string{"session_id": "0988342e", "leg": "translate"}},
+		"empty value":         {`{"k":""}`, map[string]string{"k": ""}},
+		"key at the limit":    {`{"` + longKey + `":"v"}`, map[string]string{longKey: "v"}},
+		"value at the limit":  {`{"k":"` + longValue + `"}`, map[string]string{"k": longValue}},
+		"count at the limit":  {tagObject(maxTagCount), nil},
+		"duplicate key":       {`{"k":"a","k":"b"}`, map[string]string{"k": "b"}},
+		"surrounding spaces":  {` {"k":"v"} `, map[string]string{"k": "v"}},
+		"blob at the max len": {padded(MaxTagsHeaderBytes), map[string]string{"k": "v"}},
+	}
+	for name, tc := range accepted {
+		tags, ok := ParseTags(tc.raw)
+		if !ok {
+			t.Errorf("%s: dropped", name)
+			continue
+		}
+		if tc.want != nil {
+			if diff := cmp.Diff(tc.want, tags); diff != "" {
+				t.Errorf("%s (-want +got):\n%s", name, diff)
+			}
+		}
+	}
+	if tags, _ := ParseTags(tagObject(maxTagCount)); len(tags) != maxTagCount {
+		t.Errorf("count at the limit: %d tags, want %d", len(tags), maxTagCount)
+	}
+
+	dropped := map[string]string{
 		"invalid json":     `{not json`,
+		"trailing data":    `{"k":"v"} x`,
 		"top-level array":  `["a","b"]`,
 		"top-level string": `"a"`,
+		"top-level null":   `null`,
 		"number value":     `{"a":1}`,
 		"bool value":       `{"a":true}`,
 		"null value":       `{"a":null}`,
 		"nested object":    `{"a":{"b":"c"}}`,
 		"array value":      `{"a":["b"]}`,
-		"too many keys":    manyKeys,
+		"one bad value":    `{"a":"ok","b":2}`,
+		"too many keys":    tagObject(maxTagCount + 1),
 		"empty key":        `{"":"v"}`,
-		"key too long":     `{"` + strings.Repeat("k", 65) + `":"v"}`,
-		"value too long":   `{"k":"` + strings.Repeat("v", 257) + `"}`,
+		"key too long":     `{"` + longKey + `k":"v"}`,
+		"value too long":   `{"k":"` + longValue + `v"}`,
 		"empty object":     `{}`,
 		"empty string":     ``,
-		"oversized blob":   `{"k":"` + strings.Repeat("v", MaxTagsHeaderBytes) + `"}`,
+		"oversized blob":   padded(MaxTagsHeaderBytes + 1),
 	}
-	for name, raw := range cases {
-		if tags, ok := ParseTags(raw); ok {
-			t.Errorf("%s: want drop, got %+v", name, tags)
+	for name, raw := range dropped {
+		if tags, ok := ParseTags(raw); ok || tags != nil {
+			t.Errorf("%s: want the blob dropped, got %v", name, tags)
 		}
-	}
-}
-
-func TestBuildEvent_EventTimeAndTags(t *testing.T) {
-	start := time.Now().UTC()
-	lc := lifecycle.NewContext("req-1", "pipeline", start)
-	lc.Metadata["client_ip"] = "10.0.0.1"
-	lc.Metadata[MetadataKeyRequestTags] = `{"session_id":"s1"}`
-
-	ev := buildEvent(lc, 200, "", "", nil, nil)
-	if !ev.Timestamp.Equal(start) {
-		t.Fatalf("timestamp: want Timing.Start %v, got %v", start, ev.Timestamp)
-	}
-	if ev.Tags["session_id"] != "s1" {
-		t.Fatalf("tags: %+v", ev.Tags)
-	}
-	if ev.Extras["client_ip"] != "10.0.0.1" {
-		t.Fatalf("extras: %+v", ev.Extras)
-	}
-	if _, ok := ev.Extras[MetadataKeyRequestTags]; ok {
-		t.Fatalf("raw tags leaked into extras: %+v", ev.Extras)
-	}
-
-	// EventTime set overrides the timestamp; durations stay anchored on Start.
-	eventTime := time.Date(2025, 11, 3, 9, 30, 0, 0, time.UTC)
-	lc.EventTime = eventTime
-	ev = buildEvent(lc, 200, "", "", nil, nil)
-	if !ev.Timestamp.Equal(eventTime) {
-		t.Fatalf("timestamp: want EventTime %v, got %v", eventTime, ev.Timestamp)
-	}
-
-	// Invalid tag blob drops Tags, leaves the event intact.
-	lc.Metadata[MetadataKeyRequestTags] = `{"a":1}`
-	ev = buildEvent(lc, 200, "", "", nil, nil)
-	if ev.Tags != nil {
-		t.Fatalf("invalid blob: want nil tags, got %+v", ev.Tags)
-	}
-	if ev.Status != 200 || ev.RequestID != "req-1" {
-		t.Fatalf("event damaged: %+v", ev)
-	}
-}
-
-func TestBuildEvent_AttributionSlugs(t *testing.T) {
-	lc := lifecycle.NewContext("req-2", "pipeline", time.Now())
-	lc.PolicyID, lc.PolicyName = "pid", "default"
-	lc.ModelID, lc.ModelName = "mid", "gpt-4o"
-	lc.HostID, lc.HostName = "hid", "openai"
-
-	ev := buildEvent(lc, 200, "", "", nil, nil)
-	if ev.PolicyID != "pid" || ev.Policy != "default" {
-		t.Fatalf("policy: %q/%q", ev.PolicyID, ev.Policy)
-	}
-	if ev.ModelID != "mid" || ev.Model != "gpt-4o" {
-		t.Fatalf("model: %q/%q", ev.ModelID, ev.Model)
-	}
-	if ev.HostID != "hid" || ev.Host != "openai" {
-		t.Fatalf("host: %q/%q", ev.HostID, ev.Host)
 	}
 }

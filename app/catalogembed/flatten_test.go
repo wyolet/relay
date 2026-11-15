@@ -1,6 +1,8 @@
 package catalogembed
 
 import (
+	"github.com/google/go-cmp/cmp"
+	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 	"testing"
 	"time"
 
@@ -51,40 +53,41 @@ func flattenFixture() (snap *catalog.Snapshot, keptBinding string) {
 	return snap, bindA
 }
 
-func TestFlattenScoped_KeepFiltersBindings(t *testing.T) {
-	snap, kept := flattenFixture()
-
-	all := FlattenScoped(snap, time.Time{}, nil)
-	if len(all.Hosts) != 2 {
-		t.Fatalf("nil keep: hosts = %d, want 2", len(all.Hosts))
+// row is the document row of one served snapshot; amount 0 is unpriced.
+func row(snapshot string, amount float64) sdkcatalog.Binding {
+	b := sdkcatalog.Binding{Name: snapshot, MetadataName: snapshot, Adapter: "openai", Providers: []string{"prov"}}
+	if amount != 0 {
+		b.Pricing = []sdkcatalog.Rate{{Meter: "tokens.input", Unit: "per_million", Amount: amount}}
 	}
-
-	scoped := FlattenScoped(snap, time.Time{}, func(_ *model.Model, b *binding.Binding) bool { return b.Meta.ID == kept })
-	if len(scoped.Hosts) != 1 || scoped.Hosts[0].Name != "host-a" {
-		t.Fatalf("hosts = %+v, want host-a alone", scoped.Hosts)
-	}
-	if len(scoped.Models) != 1 || scoped.Models[0].MetadataName != "m-snap" {
-		t.Errorf("models sidecar = %+v, want m-snap", scoped.Models)
-	}
-
-	none := FlattenScoped(snap, time.Time{}, func(*model.Model, *binding.Binding) bool { return false })
-	if len(none.Hosts) != 0 || len(none.Models) != 0 || len(none.Providers) != 0 {
-		t.Errorf("keep refusing everything left hosts=%d models=%d providers=%d", len(none.Hosts), len(none.Models), len(none.Providers))
-	}
+	return b
 }
 
-// The document must show the rate sheet relay bills, which is the binding's explicit one ahead of the sheet covering the pair.
-func TestFlattenScoped_PricingFollowsTheBindingsSheet(t *testing.T) {
-	snap, _ := flattenFixture()
-	for _, h := range FlattenScoped(snap, time.Time{}, nil).Hosts {
-		if h.Name != "host-a" {
-			continue
+func TestFlattenScoped_KeepFiltersBindings(t *testing.T) {
+	snap, kept := flattenFixture()
+	// host-a shows the binding's explicit sheet (7), not the later sheet covering the pair (1).
+	hostA := sdkcatalog.Host{Name: "host-a", BaseURL: "http://a.example", Models: []sdkcatalog.Binding{row("m-snap", 7)}}
+	hostB := sdkcatalog.Host{Name: "host-b", BaseURL: "http://b.example", Models: []sdkcatalog.Binding{row("m-snap", 0)}}
+	doc := func(hosts ...sdkcatalog.Host) *sdkcatalog.Catalog {
+		c := &sdkcatalog.Catalog{Version: "relay-catalog@v1alpha3", Hosts: hosts}
+		if hosts != nil {
+			c.Models = []sdkcatalog.ModelInfo{{MetadataName: "m-snap", Provider: "prov"}}
+			c.Providers = []sdkcatalog.ProviderInfo{{Name: "prov"}}
 		}
-		rates := h.Models[0].Pricing
-		if len(rates) != 1 || rates[0].Amount != 7 {
-			t.Fatalf("host-a rates = %+v, want the explicit sheet's 7", rates)
-		}
-		return
+		return c
 	}
-	t.Fatal("host-a missing")
+	for _, c := range []struct {
+		name string
+		keep func(*model.Model, *binding.Binding) bool
+		want *sdkcatalog.Catalog
+	}{
+		{"nil keeps all", nil, doc(hostA, hostB)},
+		{"one binding", func(_ *model.Model, b *binding.Binding) bool { return b.Meta.ID == kept }, doc(hostA)},
+		{"none", func(*model.Model, *binding.Binding) bool { return false }, doc()},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if diff := cmp.Diff(c.want, FlattenScoped(snap, time.Time{}, c.keep)); diff != "" {
+				t.Fatalf("(-want +got):\n%s", diff)
+			}
+		})
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -19,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalogprune"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/license"
@@ -97,6 +99,11 @@ type Deps struct {
 	// CatalogSync runs one catalog check for POST /catalog/sync. nil means the
 	// relay doesn't follow the catalog, and the endpoint answers 409.
 	CatalogSync func(ctx context.Context) (appcatalog.CheckResult, error)
+
+	// CatalogPrune judges the detached catalog rows for POST /catalog/prune and,
+	// with apply, deletes the ones nothing holds; idle 0 uses the configured
+	// window. nil answers 503.
+	CatalogPrune func(ctx context.Context, idle time.Duration, apply bool) (catalogprune.Report, error)
 
 	// Plans lets a token mint or key create answer once this pod serves what it wrote; nil answers at once.
 	Plans PlanWaiter
@@ -222,6 +229,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerAuthOIDC(r, d)        // raw chi (browser redirects + cookies): /auth/oidc/{start,callback}
 	registerMisc(api, d, protect) // /master-key/generate, /reload
 	registerCatalogSync(api, d, protect)
+	registerCatalogPrune(api, d, protect)
 	registerSecretKeys(api, d, protect)
 	// Generic CRUD for every registered kind; the rows are how each kind finds one.
 	rows := registerCRUD(api, d, protect)
@@ -241,7 +249,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerLimits(api, d, protect)
 	registerReachable(api, d, protect)
 	registerAccountPolicy(api, d, protect)
-	registerPolicyAccounts(api, d, protect)
+	registerPolicyDuplicate(api, d, protect)
 	registerPlanIssues(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
@@ -268,6 +276,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 		s.Description = "Measurement period, in whole seconds."
 	})
 	documentDomainSchemas(api)
+	describePolicyInUse(api)
 	entityEnvelope(api)
 	describeErrors(api)
 	api.OpenAPI().Tags = controlTags

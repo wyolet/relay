@@ -1,359 +1,249 @@
 package openai
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
-
-	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-func TestCCParseRequest_SimpleMessage(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":    "gpt-4o",
-		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Model) != 1 || req.Model[0] != "gpt-4o" {
-		t.Errorf("model: %v", req.Model)
-	}
-	if len(req.Input) != 1 {
-		t.Fatalf("input len: got %d want 1", len(req.Input))
-	}
-	msg, ok := req.Input[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("input[0] is %T, want *v1.Message", req.Input[0])
-	}
-	if msg.Role != v1.RoleUser {
-		t.Errorf("role: %q", msg.Role)
-	}
-	if len(msg.Content) != 1 {
-		t.Fatalf("content len: %d", len(msg.Content))
-	}
-	tp, ok := msg.Content[0].(*v1.TextPart)
-	if !ok {
-		t.Fatalf("content[0] is %T", msg.Content[0])
-	}
-	if tp.Text != "hi" {
-		t.Errorf("text: %q", tp.Text)
-	}
-}
-
-func TestCCParseRequest_SystemUserAssistantTurns(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model": "gpt-4o",
-		"messages": []any{
-			map[string]any{"role": "system", "content": "be helpful"},
-			map[string]any{"role": "user", "content": "hello"},
-			map[string]any{"role": "assistant", "content": "hi there"},
+// Each case parses a Chat Completions body to canonical and serializes that back to the wire; the recorded chat-* goldens cover the plain request forms.
+func TestCCParseRequest(t *testing.T) {
+	cases := []struct {
+		name, body, canon, wire string
+	}{
+		{
+			name: "system messages after the first become developer messages",
+			body: `{"model":"m","messages":[{"role":"system","content":"A"},{"role":"user","content":"hi"},{"role":"system","content":[{"type":"text","text":"B"},{"type":"audio","text":"x"},{"type":"video","text":"y"},{"type":"text","text":"C"}]},{"role":"developer","content":"D"}]}`,
+			canon: `{"model":"m","instructions":"A","output_mode":"sync","input":[
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"BC"}]},
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"D"}]}]}`,
+			wire: `{"model":"m","messages":[{"role":"system","content":"A"},{"role":"user","content":"hi"},{"role":"system","content":"BC"},{"role":"system","content":"D"}]}`,
 		},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Instructions != "be helpful" {
-		t.Errorf("instructions: %q", req.Instructions)
-	}
-	// user + assistant → 2 input items
-	if len(req.Input) != 2 {
-		t.Fatalf("input len: got %d want 2", len(req.Input))
-	}
-	userMsg, ok := req.Input[0].(*v1.Message)
-	if !ok || userMsg.Role != v1.RoleUser {
-		t.Errorf("input[0] role: %T %v", req.Input[0], userMsg)
-	}
-	assistantMsg, ok := req.Input[1].(*v1.Message)
-	if !ok || assistantMsg.Role != v1.RoleAssistant {
-		t.Errorf("input[1] role: %T", req.Input[1])
-	}
-}
-
-func TestCCParseRequest_Tools(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`)
-	body := mustJSON(map[string]any{
-		"model":    "gpt-4o",
-		"messages": []any{map[string]any{"role": "user", "content": "search"}},
-		"tools": []any{map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        "search",
-				"description": "Search the web",
-				"parameters":  json.RawMessage(schema),
-			},
-		}},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Tools == nil {
-		t.Fatal("expected tools config")
-	}
-	if len(req.Tools.Definitions) != 1 {
-		t.Fatalf("tools len: %d", len(req.Tools.Definitions))
-	}
-	ft, ok := req.Tools.Definitions[0].(*v1.FunctionTool)
-	if !ok {
-		t.Fatalf("tool is %T", req.Tools.Definitions[0])
-	}
-	if ft.Name != "search" {
-		t.Errorf("tool name: %q", ft.Name)
-	}
-	if ft.Description != "Search the web" {
-		t.Errorf("tool description: %q", ft.Description)
-	}
-}
-
-func TestCCParseRequest_ToolChoice(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":    "gpt-4o",
-		"messages": []any{map[string]any{"role": "user", "content": "x"}},
-		"tools": []any{map[string]any{
-			"type":     "function",
-			"function": map[string]any{"name": "f", "parameters": map[string]any{}},
-		}},
-		"tool_choice": map[string]any{"type": "function", "function": map[string]any{"name": "f"}},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Tools == nil || req.Tools.Choice == nil {
-		t.Fatal("expected tool choice")
-	}
-	if c := req.Tools.Choice; c.Mode != "function" || c.FunctionName != "f" {
-		t.Errorf("choice = %+v, want function f", c)
-	}
-
-	wire, err := (CCTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(wire), `"tool_choice":{"type":"function","function":{"name":"f"}}`) {
-		t.Errorf("CC tool_choice shape lost: %s", wire)
-	}
-}
-
-func TestCCParseRequest_ParallelToolCalls(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":    "gpt-4o",
-		"messages": []any{map[string]any{"role": "user", "content": "x"}},
-		"tools": []any{map[string]any{
-			"type":     "function",
-			"function": map[string]any{"name": "f", "parameters": map[string]any{}},
-		}},
-		"parallel_tool_calls": false,
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Tools == nil {
-		t.Fatal("expected tools")
-	}
-	if req.Tools.Parallel == nil || *req.Tools.Parallel != false {
-		t.Errorf("parallel_tool_calls: %v", req.Tools.Parallel)
-	}
-}
-
-func TestCCParseRequest_SamplingFields(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":             "gpt-4o",
-		"messages":          []any{map[string]any{"role": "user", "content": "x"}},
-		"temperature":       0.7,
-		"top_p":             0.9,
-		"max_tokens":        512,
-		"frequency_penalty": 0.1,
-		"presence_penalty":  0.2,
-		"seed":              int64(42),
-		"stop":              []string{"END"},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["gpt-4o"]
-	if opts == nil || opts.Sampling == nil {
-		t.Fatal("expected sampling")
-	}
-	s := opts.Sampling
-	if s.Temperature == nil || *s.Temperature != 0.7 {
-		t.Errorf("temperature: %v", s.Temperature)
-	}
-	if s.TopP == nil || *s.TopP != 0.9 {
-		t.Errorf("top_p: %v", s.TopP)
-	}
-	if s.MaxTokens == nil || *s.MaxTokens != 512 {
-		t.Errorf("max_tokens: %v", s.MaxTokens)
-	}
-	if s.FrequencyPenalty == nil || *s.FrequencyPenalty != 0.1 {
-		t.Errorf("frequency_penalty: %v", s.FrequencyPenalty)
-	}
-	if s.PresencePenalty == nil || *s.PresencePenalty != 0.2 {
-		t.Errorf("presence_penalty: %v", s.PresencePenalty)
-	}
-	if s.Seed == nil || *s.Seed != 42 {
-		t.Errorf("seed: %v", s.Seed)
-	}
-	if len(s.Stop) != 1 || s.Stop[0] != "END" {
-		t.Errorf("stop: %v", s.Stop)
-	}
-}
-
-func TestCCParseRequest_ResponseFormatJSONSchema(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":    "gpt-4o",
-		"messages": []any{map[string]any{"role": "user", "content": "x"}},
-		"response_format": map[string]any{
-			"type": "json_schema",
-			"json_schema": map[string]any{
-				"name":   "my_schema",
-				"schema": map[string]any{"type": "object"},
-			},
+		{
+			name: "user content parts",
+			body: `{"model":"m","messages":[{"role":"user","content":[
+				{"type":"text","text":"look"},
+				{"type":"image_url","image_url":{"url":"https://x/a.png","detail":"low"}},
+				{"type":"file","file":{"file_id":"file-1","filename":"a.pdf"}},
+				{"type":"image_url"},
+				{"type":"input_audio","input_audio":{"data":"AAA","format":"wav"}}]},{"role":"user"}]}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[
+				{"type":"input_text","text":"look"},
+				{"type":"input_image","image_url":"https://x/a.png","detail":"low"},
+				{"type":"input_file","file_id":"file-1","filename":"a.pdf"}]},{"type":"message","role":"user","content":null}]}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":[
+				{"type":"text","text":"look"},
+				{"type":"image_url","image_url":{"url":"https://x/a.png","detail":"low"}},
+				{"type":"file","file":{"file_id":"file-1","filename":"a.pdf"}}]},{"role":"user","content":null}]}`,
 		},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["gpt-4o"]
-	if opts == nil || opts.Output == nil || opts.Output.Format == nil {
-		t.Fatal("expected output format")
-	}
-	if opts.Output.Format.Type != "json_schema" {
-		t.Errorf("format type: %q", opts.Output.Format.Type)
-	}
-	if opts.Output.Format.Name != "my_schema" {
-		t.Errorf("format name: %q", opts.Output.Format.Name)
-	}
-}
-
-func TestCCParseRequest_StreamTrue(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":    "gpt-4o",
-		"messages": []any{map[string]any{"role": "user", "content": "x"}},
-		"stream":   true,
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.OutputMode != v1.OutputModeStream {
-		t.Errorf("output_mode: %q", req.OutputMode)
-	}
-}
-
-func TestCCParseRequest_UserAndMetadata(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":    "gpt-4o",
-		"messages": []any{map[string]any{"role": "user", "content": "x"}},
-		"user":     "user-123",
-		"metadata": map[string]string{"session": "abc"},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.User != "user-123" {
-		t.Errorf("user: %q", req.User)
-	}
-	if req.Metadata["session"] != "abc" {
-		t.Errorf("metadata: %v", req.Metadata)
-	}
-}
-
-func TestCCParseRequest_ImageContentPart(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model": "gpt-4o",
-		"messages": []any{map[string]any{
-			"role": "user",
-			"content": []any{
-				map[string]any{"type": "text", "text": "describe"},
-				map[string]any{
-					"type":      "image_url",
-					"image_url": map[string]any{"url": "https://example.com/img.png"},
-				},
-			},
-		}},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Input) != 1 {
-		t.Fatalf("input len: %d", len(req.Input))
-	}
-	msg := req.Input[0].(*v1.Message)
-	if len(msg.Content) != 2 {
-		t.Fatalf("content len: %d", len(msg.Content))
-	}
-	img, ok := msg.Content[1].(*v1.ImagePart)
-	if !ok {
-		t.Fatalf("content[1] is %T, want *v1.ImagePart", msg.Content[1])
-	}
-	if img.ImageURL != "https://example.com/img.png" {
-		t.Errorf("image url: %q", img.ImageURL)
-	}
-}
-
-func TestCCParseRequest_MissingModel(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"messages": []any{map[string]any{"role": "user", "content": "x"}},
-	})
-	_, err := (CCTranslator{}).ParseRequest(body)
-	if err == nil {
-		t.Fatal("expected error for missing model")
-	}
-}
-
-func TestCCParseRequest_ToolMessage(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model": "gpt-4o",
-		"messages": []any{
-			map[string]any{"role": "user", "content": "use tool"},
-			map[string]any{
-				"role":    "assistant",
-				"content": nil,
-				"tool_calls": []any{map[string]any{
-					"id":       "tc_1",
-					"type":     "function",
-					"function": map[string]any{"name": "f", "arguments": `{"x":1}`},
-				}},
-			},
-			map[string]any{
-				"role":         "tool",
-				"tool_call_id": "tc_1",
-				"content":      "result",
-			},
+		{
+			name: "assistant history with refusal, tool calls and tool results",
+			body: `{"model":"m","messages":[
+				{"role":"assistant","content":"Sure","refusal":"but no","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+				{"role":"tool","tool_call_id":"call_1","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]},
+				{"role":"tool","tool_call_id":"call_1","content":[{"type":"text","text":"shot"},{"type":"image_url","image_url":{"url":"https://x/s.png"}}]},
+				{"role":"assistant","content":null}]}`,
+			canon: `{"model":"m","output_mode":"sync","input":[
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Sure"},{"type":"output_text","text":"but no"}]},
+				{"type":"function_call","id":"call_1","call_id":"call_1","name":"f","arguments":"{}"},
+				{"type":"function_call_output","call_id":"call_1","output":"ab"},
+				{"type":"function_call_output","call_id":"call_1","content":[{"type":"input_text","text":"shot"},{"type":"input_image","image_url":"https://x/s.png"}]},
+				{"type":"message","role":"assistant","content":null}]}`,
+			wire: `{"model":"m","messages":[
+				{"role":"assistant","content":"Surebut no","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+				{"role":"tool","tool_call_id":"call_1","content":"ab"},
+				{"role":"tool","tool_call_id":"call_1","content":"shot"},
+				{"role":"assistant","content":null}]}`,
 		},
-	})
-	req, err := (CCTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
+		{
+			name: "legacy function calls pair with their function results under minted ids",
+			body: `{"model":"m","messages":[
+				{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{}"}},
+				{"role":"function","name":"f","content":"sunny"},
+				{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{\"d\":2}"}},
+				{"role":"function","name":"f","content":"rain"}]}`,
+			canon: `{"model":"m","output_mode":"sync","input":[
+				{"type":"function_call","id":"f_0","call_id":"f_0","name":"f","arguments":"{}"},
+				{"type":"function_call_output","call_id":"f_0","output":"sunny"},
+				{"type":"function_call","id":"f_2","call_id":"f_2","name":"f","arguments":"{\"d\":2}"},
+				{"type":"function_call_output","call_id":"f_2","output":"rain"}]}`,
+			wire: `{"model":"m","messages":[
+				{"role":"assistant","content":null,"tool_calls":[{"id":"f_0","type":"function","function":{"name":"f","arguments":"{}"}}]},
+				{"role":"tool","tool_call_id":"f_0","content":"sunny"},
+				{"role":"assistant","content":null,"tool_calls":[{"id":"f_2","type":"function","function":{"name":"f","arguments":"{\"d\":2}"}}]},
+				{"role":"tool","tool_call_id":"f_2","content":"rain"}]}`,
+		},
+		{
+			name: "sampling with stop string and max_completion_tokens over max_tokens",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0.5,"top_p":0.9,"max_tokens":10,"max_completion_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":"END","reasoning_effort":"low"}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{
+				"sampling":{"temperature":0.5,"top_p":0.9,"max_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":["END"]},
+				"reasoning":{"effort":"low"}}}}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0.5,"top_p":0.9,"max_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":["END"],"reasoning_effort":"low"}`,
+		},
+		{
+			name: "tools with the flat tool_choice form and no parameters",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","description":"d"}}],"tool_choice":{"type":"function","name":"f"},"parallel_tool_calls":false}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"tools":{
+				"definitions":[{"type":"function","name":"f","description":"d","parameters":{}}],
+				"choice":{"type":"function","name":"f"},"parallel":false}}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","description":"d","parameters":{}}}],
+				"tool_choice":{"type":"function","function":{"name":"f"}},"parallel_tool_calls":false}`,
+		},
+		{
+			name:  "tools without a tool_choice",
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"tools":{"definitions":[{"type":"function","name":"f","parameters":{"type":"object"}}]}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`,
+		},
+		{
+			name: "string tool_choice",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"tool_choice":"required"}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"tools":{
+				"definitions":[{"type":"function","name":"f","parameters":{"type":"object"}}],"choice":"required"}}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"tool_choice":"required"}`,
+		},
+		{
+			name: "allowed_tools tool_choice",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}},{"type":"function","function":{"name":"g"}}],
+				"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"g"}}]}}}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"tools":{
+				"definitions":[{"type":"function","name":"f","parameters":{}},{"type":"function","name":"g","parameters":{}}],
+				"choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"g"}]}}}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{}}},{"type":"function","function":{"name":"g","parameters":{}}}],
+				"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"g"}}]}}}`,
+		},
+		{
+			name: "json_schema response format with verbosity",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"verbosity":"high","response_format":{"type":"json_schema","json_schema":{"name":"out","description":"d","schema":{"type":"object"},"strict":true}}}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{"output":{"verbosity":"high",
+				"format":{"type":"json_schema","name":"out","description":"d","schema":{"type":"object"},"strict":true}}}}}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"verbosity":"high","response_format":{"type":"json_schema","json_schema":{"name":"out","description":"d","schema":{"type":"object"},"strict":true}}}`,
+		},
+		{
+			name:  "verbosity without a response format",
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"verbosity":"low"}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{"output":{"verbosity":"low"}}}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"verbosity":"low"}`,
+		},
+		{
+			name:  "json_object response format",
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{"output":{"format":{"type":"json_object"}}}}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
+		},
+		{
+			name:  "text response format is the default and goes unsent",
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"text"}}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{"output":{"format":{"type":"text"}}}}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
+		},
+		{
+			name:  "in_memory cache retention maps to a 5m TTL",
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_retention":"in_memory","stream":true}`,
+			canon: `{"model":"m","output_mode":"stream","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"cache_config":{"ttl":"5m"}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_retention":"in_memory","stream":true,"stream_options":{"include_usage":true}}`,
+		},
+		{
+			name:  "unknown cache retention is dropped, the cache key stays",
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"k","prompt_cache_retention":"forever"}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"cache_config":{"key":"k"}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"k"}`,
+		},
 	}
-	// user, assistant(FunctionCall), tool(FunctionCallOutput)
-	if len(req.Input) < 2 {
-		t.Fatalf("input len: %d", len(req.Input))
-	}
-	var foundOutput bool
-	for _, item := range req.Input {
-		if fco, ok := item.(*v1.FunctionCallOutput); ok {
-			if fco.CallID != "tc_1" {
-				t.Errorf("call_id: %q", fco.CallID)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := CCTranslator{}.ParseRequest([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
 			}
-			if fco.Output != "result" {
-				t.Errorf("output: %q", fco.Output)
+			assertJSON(t, mustJSON(req), tc.canon)
+			wire, err := CCTranslator{}.SerializeRequest(req)
+			if err != nil {
+				t.Fatal(err)
 			}
-			foundOutput = true
+			assertJSON(t, wire, tc.wire)
+		})
+	}
+}
+
+func TestCCParseRequest_OneSamplingParamAlone(t *testing.T) {
+	for _, param := range []string{`"temperature":0.5`, `"top_p":0.9`, `"frequency_penalty":0.1`, `"presence_penalty":0.2`, `"seed":7`} {
+		req, err := CCTranslator{}.ParseRequest([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],` + param + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSON(t, mustJSON(req.ModelConfig), `{"m":{"sampling":{`+param+`}}}`)
+	}
+}
+
+// Valid Chat Completions input must reach the re-serialized wire or fail the parse, never vanish (rule 11).
+func TestCCParseRequest_NoSilentDrop(t *testing.T) {
+	cases := []struct{ name, bug, body, keep string }{
+		{
+			name: "custom tool",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"custom","custom":{"name":"grammar"}}]}`,
+			keep: `"grammar"`,
+		},
+		{
+			name: "allowed_tools tool_choice",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
+			keep: `"allowed_tools":{`,
+		},
+		{
+			name: "json_schema format with a mistyped member",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
+			keep: `"schema":{"type":"object"}`,
+		},
+		{
+			name: "legacy function role message",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"function","name":"f","content":"sunny"}]}`,
+			keep: `sunny`,
+		},
+		{
+			name: "assistant refusal content part",
+			body: `{"model":"m","messages":[{"role":"assistant","content":[{"type":"refusal","refusal":"I won't"}]}]}`,
+			keep: `I won't`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.bug != "" {
+				t.Skip("bug: " + tc.bug)
+			}
+			req, err := CCTranslator{}.ParseRequest([]byte(tc.body))
+			if err != nil {
+				return
+			}
+			wire, err := CCTranslator{}.SerializeRequest(req)
+			if err != nil {
+				return
+			}
+			if !strings.Contains(string(wire), tc.keep) {
+				t.Errorf("%s lost without an error: %s", tc.keep, wire)
+			}
+		})
+	}
+}
+
+func TestCCParseRequest_Errors(t *testing.T) {
+	for name, body := range map[string]string{
+		"invalid JSON":          `{"model":`,
+		"missing model":         `{"messages":[{"role":"user","content":"x"}]}`,
+		"mistyped messages":     `{"model":"m","messages":5}`,
+		"mistyped user content": `{"model":"m","messages":[{"role":"user","content":5}]}`,
+		"mistyped tool content": `{"model":"m","messages":[{"role":"tool","tool_call_id":"c","content":{}}]}`,
+		"mistyped tool_choice":  `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":5}`,
+		"mistyped json_schema":  `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
+		"number stop":           `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":5}`,
+		"object stop":           `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":{"s":"END"}}`,
+		"non-string stop entry": `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":["END",5]}`,
+		"allowed custom tool":   `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"custom","custom":{"name":"g"}}]}}}`,
+		"empty allowed list":    `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[]}}}`,
+		"allowed mode none":     `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"none","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
+	} {
+		if req, err := (CCTranslator{}).ParseRequest([]byte(body)); err == nil {
+			t.Errorf("%s: want an error, got %s", name, mustJSON(req))
 		}
 	}
-	if !foundOutput {
-		t.Error("expected FunctionCallOutput item")
-	}
 }
-
-// --- SerializeRequest ---

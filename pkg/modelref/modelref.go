@@ -122,6 +122,10 @@ func Parse(s string) (Ref, error) {
 		return n, nil
 	}
 
+	if strings.Count(s, "@") > 1 {
+		return ref, &SyntaxError{Raw: ref.Raw, Reason: "more than one @ — a ref names at most one host"}
+	}
+
 	// Host-only refs ("@bedrock") — every model from every provider on
 	// this host. Distinct from every other shape, which is provider-
 	// anchored.

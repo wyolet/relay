@@ -129,7 +129,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Key, error) {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
 	applyColumns(&spec, r.PreviousKeyHash, r.PrincipalSaID, r.PrincipalUserID, r.AccountID)
-	return &Key{Meta: md, Spec: spec}, nil
+	return &Key{Meta: md, Spec: spec, Status: ObservedStatus{LastUsedAt: timeOrNil(r.LastUsedAt)}}, nil
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
@@ -149,7 +149,15 @@ func fromRow(r gen.ListRelayKeysRow) (*Key, error) {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
 	applyColumns(&spec, r.PreviousKeyHash, r.PrincipalSaID, r.PrincipalUserID, r.AccountID)
-	return &Key{Meta: md, Spec: spec}, nil
+	return &Key{Meta: md, Spec: spec, Status: ObservedStatus{LastUsedAt: timeOrNil(r.LastUsedAt)}}, nil
+}
+
+func timeOrNil(t pgtype.Timestamptz) *time.Time {
+	if !t.Valid {
+		return nil
+	}
+	at := t.Time.UTC()
+	return &at
 }
 
 // applyColumns overwrites the spec's principal, previous hash and account from the

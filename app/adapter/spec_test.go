@@ -3,13 +3,12 @@ package adapter_test
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
-	"net/http/httptest"
-	"reflect"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/keypool"
@@ -18,15 +17,11 @@ import (
 )
 
 // newBearerSpec returns a minimal built Spec for the openai name.
-func newBearerSpec(t testing.TB, path string, opts ...func(*adapter.Spec)) *adapter.Spec {
-	t.Helper()
+func newBearerSpec(path string, opts ...func(*adapter.Spec)) *adapter.Spec {
 	s := &adapter.Spec{
 		Name:        adapters.OpenAI,
 		DefaultPath: path,
-		Auth: adapter.AuthStrategy{
-			Header: "Authorization",
-			Scheme: "Bearer",
-		},
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 	}
 	for _, o := range opts {
 		o(s)
@@ -34,283 +29,7 @@ func newBearerSpec(t testing.TB, path string, opts ...func(*adapter.Spec)) *adap
 	return s.Build()
 }
 
-func TestSpecAdapter_Call_URLAndAuth(t *testing.T) {
-	srv, got := captureServer(t)
-
-	s := newBearerSpec(t, "/v1/chat/completions")
-	a := s.PipelineAdapter()
-
-	resp, err := a.Call(context.Background(), srv.URL, nil, "sk-test", []byte(`{}`), nil, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	resp.Body.Close()
-
-	gotPath, gotAuth, gotCT := got.Path(), got.Header("Authorization"), got.Header("Content-Type")
-	if gotPath != "/v1/chat/completions" {
-		t.Errorf("path: want /v1/chat/completions, got %s", gotPath)
-	}
-	if gotAuth != "Bearer sk-test" {
-		t.Errorf("auth: want 'Bearer sk-test', got %s", gotAuth)
-	}
-	if gotCT != "application/json" {
-		t.Errorf("content-type: want application/json, got %s", gotCT)
-	}
-}
-
-func TestSpecAdapter_Call_HeaderForwarding(t *testing.T) {
-	srv, got := captureServer(t)
-
-	s := newBearerSpec(t, "/v1/chat/completions")
-	a := s.PipelineAdapter()
-
-	hdr := http.Header{"X-Relay-Test": []string{"hello"}}
-	resp, err := a.Call(context.Background(), srv.URL, nil, "key", []byte(`{}`), hdr, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	resp.Body.Close()
-
-	if gotCustom := got.Header("X-Relay-Test"); gotCustom != "hello" {
-		t.Errorf("X-Relay-Test: want hello, got %s", gotCustom)
-	}
-}
-
-// The upstream must see the forwarded headers, relay's own and the body byte for byte, on both sides of the size where the body reader changes.
-func TestSpecAdapter_Call_HeadersAndBodyArriveIntact(t *testing.T) {
-	type seen struct {
-		header http.Header
-		body   []byte
-	}
-	got := make(chan seen, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		got <- seen{r.Header.Clone(), b}
-	}))
-	defer srv.Close()
-
-	a := newBearerSpec(t, "/v1/chat/completions").PipelineAdapter()
-	hdr := http.Header{
-		"Accept":     {"application/json"},
-		"User-Agent": {"client/1.0"},
-		"X-Multi":    {"a", "b"},
-	}
-	for _, size := range []int{3 << 10, 64 << 10, 64<<10 + 1, 1 << 20} {
-		body := bytes.Repeat([]byte("x"), size)
-		resp, err := a.Call(context.Background(), srv.URL, nil, "key", body, hdr, "", false, false)
-		if err != nil {
-			t.Fatalf("size %d: Call: %v", size, err)
-		}
-		resp.Body.Close()
-		s := <-got
-
-		if !bytes.Equal(s.body, body) {
-			t.Errorf("size %d: upstream read %d bytes", size, len(s.body))
-		}
-		want := hdr.Clone()
-		want.Set("Authorization", "Bearer key")
-		want.Set("Content-Type", "application/json")
-		want.Set("Content-Length", strconv.Itoa(size))
-		want.Set("Accept-Encoding", "gzip")
-		if !reflect.DeepEqual(s.header, want) {
-			t.Errorf("size %d: upstream headers\n got %v\nwant %v", size, s.header, want)
-		}
-	}
-}
-
-func TestSpecAdapter_Call_ExtraHeaders(t *testing.T) {
-	srv, got := captureServer(t)
-
-	s := &adapter.Spec{
-		Name:        adapters.Anthropic,
-		DefaultPath: "/v1/messages",
-		Auth: adapter.AuthStrategy{
-			Header: "x-api-key",
-			ExtraHeaders: map[string]string{
-				"Anthropic-Version": "2023-06-01",
-			},
-		},
-	}
-	s.Build()
-	a := s.PipelineAdapter()
-
-	resp, err := a.Call(context.Background(), srv.URL, nil, "key", []byte(`{}`), nil, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	resp.Body.Close()
-
-	if gotVer := got.Header("Anthropic-Version"); gotVer != "2023-06-01" {
-		t.Errorf("Anthropic-Version: want 2023-06-01, got %s", gotVer)
-	}
-}
-
-func TestSpecAdapter_Call_ExtraHeaders_NotOverrideForwarded(t *testing.T) {
-	// Forwarded header takes priority over ExtraHeaders default.
-	srv, got := captureServer(t)
-
-	s := &adapter.Spec{
-		Name:        adapters.Anthropic,
-		DefaultPath: "/v1/messages",
-		Auth: adapter.AuthStrategy{
-			Header: "x-api-key",
-			ExtraHeaders: map[string]string{
-				"Anthropic-Version": "2023-06-01",
-			},
-		},
-	}
-	s.Build()
-	a := s.PipelineAdapter()
-
-	hdr := http.Header{"Anthropic-Version": []string{"2024-12-01"}}
-	resp, err := a.Call(context.Background(), srv.URL, nil, "key", []byte(`{}`), hdr, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	resp.Body.Close()
-
-	// Forwarded header wins over ExtraHeaders default.
-	if gotVer := got.Header("Anthropic-Version"); gotVer != "2024-12-01" {
-		t.Errorf("Anthropic-Version: want forwarded 2024-12-01, got %s", gotVer)
-	}
-}
-
-func TestSpecAdapter_Call_EmptyAPIKey(t *testing.T) {
-	srv, got := captureServer(t)
-
-	s := newBearerSpec(t, "/v1/chat/completions")
-	a := s.PipelineAdapter()
-
-	resp, err := a.Call(context.Background(), srv.URL, nil, "", []byte(`{}`), nil, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	resp.Body.Close()
-
-	if gotAuth := got.Header("Authorization"); gotAuth != "" {
-		t.Errorf("expected no auth header for empty key, got %q", gotAuth)
-	}
-}
-
-func TestSpecAdapter_Call_BodyForwarded(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
-	}))
-	defer srv.Close()
-
-	s := newBearerSpec(t, "/v1/chat/completions")
-	a := s.PipelineAdapter()
-
-	want := []byte(`{"model":"gpt-4o","messages":[]}`)
-	resp, err := a.Call(context.Background(), srv.URL, nil, "key", want, nil, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	got, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-
-	if !bytes.Equal(got, want) {
-		t.Errorf("body mismatch: want %s, got %s", want, got)
-	}
-}
-
-func TestSpecAdapter_Retryable(t *testing.T) {
-	s := newBearerSpec(t, "/v1/chat/completions")
-	a := s.PipelineAdapter()
-
-	cases := []struct {
-		status    int
-		wantRetry bool
-		wantKind  keypool.FailureKind
-	}{
-		{200, false, 0},
-		{400, false, 0},
-		{401, true, keypool.FailureAuth},
-		{403, true, keypool.FailureForbidden},
-		{429, true, keypool.FailureRateLimitShort},
-		{500, true, keypool.FailureServerError},
-		{529, true, keypool.FailureServerError},
-	}
-
-	for _, tc := range cases {
-		resp := &http.Response{StatusCode: tc.status, Header: http.Header{}}
-		retry, kind, _ := a.Retryable(resp)
-		if retry != tc.wantRetry {
-			t.Errorf("status %d: retry want %v got %v", tc.status, tc.wantRetry, retry)
-		}
-		if retry && kind != tc.wantKind {
-			t.Errorf("status %d: kind want %v got %v", tc.status, tc.wantKind, kind)
-		}
-	}
-}
-
-func TestSpecAdapter_Retryable_LongRetryAfter(t *testing.T) {
-	s := newBearerSpec(t, "/v1/chat/completions")
-	a := s.PipelineAdapter()
-
-	hdr := http.Header{"Retry-After": []string{"30"}}
-	resp := &http.Response{StatusCode: 429, Header: hdr}
-	retry, kind, ra := a.Retryable(resp)
-	if !retry {
-		t.Fatal("429 should be retryable")
-	}
-	if kind != keypool.FailureRateLimitLong {
-		t.Errorf("kind: want FailureRateLimitLong, got %v", kind)
-	}
-	if ra <= 5*time.Second {
-		t.Errorf("retryAfter should be > 5s for 30s Retry-After, got %v", ra)
-	}
-}
-
-func TestSpecAdapter_Retryable_NilResp(t *testing.T) {
-	s := newBearerSpec(t, "/v1/chat/completions")
-	a := s.PipelineAdapter()
-	retry, _, _ := a.Retryable(nil)
-	if retry {
-		t.Error("nil resp should not be retryable")
-	}
-}
-
-func TestSpecAdapter_ExtractTokens_Nil(t *testing.T) {
-	// Spec with no ExtractTokens should return nil.
-	s := newBearerSpec(t, "/v1/chat/completions")
-	a := s.PipelineAdapter()
-	tok := a.ExtractTokens([]byte(`{"id":"x"}`))
-	if tok != nil {
-		t.Errorf("expected nil when ExtractTokens unset, got %v", tok)
-	}
-}
-
-func TestSpecAdapter_ExtractTokens_Custom(t *testing.T) {
-	called := false
-	s := &adapter.Spec{
-		Name:        adapters.OpenAI,
-		DefaultPath: "/v1/chat/completions",
-		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		ExtractTokens: func(_ []byte) pkgusage.Tokens {
-			called = true
-			return pkgusage.Tokens{"input": 10, "output": 5}
-		},
-	}
-	s.Build()
-	a := s.PipelineAdapter()
-	tok := a.ExtractTokens([]byte(`{}`))
-	if !called {
-		t.Error("ExtractTokens was not called")
-	}
-	if tok["input"] != 10 { //nolint:gomnd
-		t.Errorf("input: want 10, got %d", tok["input"])
-	}
-}
-
-// ---------------------------------------------------------------------------
-// OAuth auth-variant selection (Phase 3)
-// ---------------------------------------------------------------------------
-
-// dualAuthSpec mirrors the Anthropic spec: x-api-key by default, Bearer + the
-// oauth beta header when the credential is an OAuth token.
+// dualAuthSpec has an API-key auth and an OAuth variant, each with its own static headers.
 func dualAuthSpec() *adapter.Spec {
 	return (&adapter.Spec{
 		Name:        adapters.Anthropic,
@@ -320,121 +39,253 @@ func dualAuthSpec() *adapter.Spec {
 			ExtraHeaders: map[string]string{"x-api-version": "v1"},
 		},
 		OAuthAuth: adapter.AuthStrategy{
-			Header: "Authorization",
-			Scheme: "Bearer",
-			ExtraHeaders: map[string]string{
-				"x-api-version": "v1",
-				"x-oauth-beta":  "beta-v1",
-			},
+			Header:       "Authorization",
+			Scheme:       "Bearer",
+			ExtraHeaders: map[string]string{"x-api-version": "v1", "x-oauth-beta": "beta-v1"},
 		},
 	}).Build()
 }
 
-type capturedHeaders struct{ auth, apiKey, beta, version string }
+func pathFnSpec() *adapter.Spec {
+	return newBearerSpec("/ignored", func(s *adapter.Spec) {
+		s.UpstreamPathFn = func(model string, stream bool) string {
+			if stream {
+				return "/models/" + model + ":stream?alt=sse"
+			}
+			return "/models/" + model + ":generate"
+		}
+	})
+}
 
-func callCapture(t *testing.T, s *adapter.Spec, key string, hdr http.Header, oauth bool) capturedHeaders {
-	t.Helper()
-	srv, got := captureServer(t)
-	resp, err := s.PipelineAdapter().Call(context.Background(), srv.URL, nil, key, []byte(`{}`), hdr, "", false, oauth)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
+func ptr(s string) *string { return &s }
+
+// Every case pins the full request the upstream receives: URI and the complete header set.
+func TestSpecAdapter_Call(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     *adapter.Spec
+		hostPath *string
+		key      string
+		hdr      http.Header
+		model    string
+		stream   bool
+		oauth    bool
+		wantURI  string
+		// wantHdr is added to the headers the Go client always sends.
+		wantHdr http.Header
+	}{
+		{
+			name: "credential with scheme on the default path",
+			spec: newBearerSpec("/v1/chat/completions"), key: "sk-test",
+			wantURI: "/v1/chat/completions",
+			wantHdr: http.Header{"Authorization": {"Bearer sk-test"}},
+		},
+		{
+			name:    "empty credential sets no auth header",
+			spec:    newBearerSpec("/v1/chat/completions"),
+			wantURI: "/v1/chat/completions",
+		},
+		{
+			name: "forwarded headers arrive with every value",
+			spec: newBearerSpec("/v1/chat/completions"), key: "k",
+			hdr:     http.Header{"Accept": {"application/json"}, "User-Agent": {"client/1.0"}, "X-Multi": {"a", "b"}},
+			wantURI: "/v1/chat/completions",
+			wantHdr: http.Header{"Authorization": {"Bearer k"}, "Accept": {"application/json"}, "User-Agent": {"client/1.0"}, "X-Multi": {"a", "b"}},
+		},
+		{
+			name: "relay's credential and content type replace forwarded ones",
+			spec: newBearerSpec("/v1/chat/completions"), key: "upstream",
+			hdr:     http.Header{"Authorization": {"Bearer caller"}, "Content-Type": {"text/plain"}},
+			wantURI: "/v1/chat/completions",
+			wantHdr: http.Header{"Authorization": {"Bearer upstream"}},
+		},
+		{
+			name: "api key without scheme plus the static header",
+			spec: dualAuthSpec(), key: "sk-key",
+			wantURI: "/v1/messages",
+			wantHdr: http.Header{"X-Api-Key": {"sk-key"}, "X-Api-Version": {"v1"}},
+		},
+		{
+			name: "forwarded header beats the static default",
+			spec: dualAuthSpec(), key: "sk-key",
+			hdr:     http.Header{"X-Api-Version": {"v2"}},
+			wantURI: "/v1/messages",
+			wantHdr: http.Header{"X-Api-Key": {"sk-key"}, "X-Api-Version": {"v2"}},
+		},
+		{
+			name: "oauth credential uses the OAuth variant only",
+			spec: dualAuthSpec(), key: "tok", oauth: true,
+			wantURI: "/v1/messages",
+			wantHdr: http.Header{"Authorization": {"Bearer tok"}, "X-Api-Version": {"v1"}, "X-Oauth-Beta": {"beta-v1"}},
+		},
+		{
+			name: "oauth credential overrides a forwarded Authorization",
+			spec: dualAuthSpec(), key: "tok", oauth: true,
+			hdr:     http.Header{"Authorization": {"Bearer caller"}},
+			wantURI: "/v1/messages",
+			wantHdr: http.Header{"Authorization": {"Bearer tok"}, "X-Api-Version": {"v1"}, "X-Oauth-Beta": {"beta-v1"}},
+		},
+		{
+			name: "oauth credential on a spec without a variant uses the default auth",
+			spec: newBearerSpec("/v1/chat/completions"), key: "sk-tok", oauth: true,
+			wantURI: "/v1/chat/completions",
+			wantHdr: http.Header{"Authorization": {"Bearer sk-tok"}},
+		},
+		{
+			name: "host path wins verbatim",
+			spec: newBearerSpec("/v1/responses"), hostPath: ptr("/backend-api/codex/responses"),
+			wantURI: "/backend-api/codex/responses",
+		},
+		{
+			name: "explicit empty host path appends nothing",
+			spec: newBearerSpec("/v1/responses"), hostPath: ptr(""),
+			wantURI: "/",
+		},
+		{
+			name: "path builder, buffered",
+			spec: pathFnSpec(), model: "m-1.5",
+			wantURI: "/models/m-1.5:generate",
+		},
+		{
+			name: "path builder, streamed",
+			spec: pathFnSpec(), model: "m-1.5", stream: true,
+			wantURI: "/models/m-1.5:stream?alt=sse",
+		},
+		{
+			name: "path builder gets the model as one escaped segment",
+			spec: pathFnSpec(), model: "a/../b?x=1",
+			wantURI: "/models/a%2F..%2Fb%3Fx=1:generate",
+		},
+		{
+			name: "host path beats the path builder",
+			spec: pathFnSpec(), model: "m", hostPath: ptr("/fixed"),
+			wantURI: "/fixed",
+		},
 	}
-	resp.Body.Close()
-	return capturedHeaders{
-		auth:    got.Header("Authorization"),
-		apiKey:  got.Header("x-api-key"),
-		beta:    got.Header("x-oauth-beta"),
-		version: got.Header("x-api-version"),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseURL, last := captureServer(t)
+			before := tt.hdr.Clone()
+			resp, err := tt.spec.PipelineAdapter().Call(context.Background(), baseURL, tt.hostPath, tt.key, []byte(`{}`), tt.hdr, tt.model, tt.stream, tt.oauth)
+			if err != nil {
+				t.Fatalf("Call: %v", err)
+			}
+			resp.Body.Close()
+
+			want := http.Header{
+				"Accept-Encoding": {"gzip"},
+				"Content-Length":  {"2"},
+				"Content-Type":    {"application/json"},
+				"User-Agent":      {"Go-http-client/1.1"},
+			}
+			for k, v := range tt.wantHdr {
+				want[k] = v
+			}
+			if diff := cmp.Diff(captured{Method: http.MethodPost, URI: tt.wantURI, Header: want, Body: []byte(`{}`)}, last()); diff != "" {
+				t.Errorf("upstream request (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(before, tt.hdr); diff != "" {
+				t.Errorf("Call changed the caller's headers (-before +after):\n%s", diff)
+			}
+		})
 	}
 }
 
-func TestSpecAdapter_OAuth_SelectsBearerAndBeta(t *testing.T) {
-	got := callCapture(t, dualAuthSpec(), "sk-ant-oat01-tok", nil, true)
-	if got.auth != "Bearer sk-ant-oat01-tok" {
-		t.Errorf("Authorization = %q, want Bearer sk-ant-oat01-tok", got.auth)
-	}
-	if got.apiKey != "" {
-		t.Errorf("x-api-key = %q, want empty (must not leak the api-key header for oauth)", got.apiKey)
-	}
-	if got.beta != "beta-v1" {
-		t.Errorf("oauth beta header = %q, want beta-v1", got.beta)
-	}
-	if got.version != "v1" {
-		t.Errorf("api version header = %q, want v1", got.version)
-	}
-}
-
-func TestSpecAdapter_NotOAuth_UsesAPIKey(t *testing.T) {
-	got := callCapture(t, dualAuthSpec(), "sk-ant-apikey", nil, false)
-	if got.apiKey != "sk-ant-apikey" {
-		t.Errorf("x-api-key = %q, want sk-ant-apikey", got.apiKey)
-	}
-	if got.auth != "" {
-		t.Errorf("Authorization = %q, want empty for api-key mode", got.auth)
-	}
-	if got.beta != "" {
-		t.Errorf("oauth beta header = %q, want empty for api-key mode", got.beta)
+// The body reaches the upstream byte for byte on both sides of the size where the body reader changes.
+func TestSpecAdapter_Call_BodySizes(t *testing.T) {
+	baseURL, last := captureServer(t)
+	a := newBearerSpec("/v1/chat/completions").PipelineAdapter()
+	for _, size := range []int{0, 3 << 10, 64 << 10, 64<<10 + 1, 1 << 20} {
+		body := bytes.Repeat([]byte("x"), size)
+		resp, err := a.Call(context.Background(), baseURL, nil, "key", body, nil, "", false, false)
+		if err != nil {
+			t.Fatalf("size %d: Call: %v", size, err)
+		}
+		resp.Body.Close()
+		got := last()
+		if !bytes.Equal(got.Body, body) {
+			t.Errorf("size %d: upstream read %d bytes", size, len(got.Body))
+		}
+		if cl := got.Header.Get("Content-Length"); cl != strconv.Itoa(size) {
+			t.Errorf("size %d: Content-Length = %q", size, cl)
+		}
 	}
 }
 
-// A spec with no OAuthAuth variant (e.g. plain OpenAI Bearer) must fall back to
-// its default Auth even when the credential is oauth-kind.
-func TestSpecAdapter_OAuth_FallsBackWhenNoVariant(t *testing.T) {
-	s := (&adapter.Spec{
-		Name:        adapters.OpenAI,
-		DefaultPath: "/v1/chat/completions",
-		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-	}).Build()
-	got := callCapture(t, s, "sk-tok", nil, true)
-	if got.auth != "Bearer sk-tok" {
-		t.Errorf("Authorization = %q, want Bearer sk-tok (default Auth used)", got.auth)
+func TestSpecAdapter_Call_Errors(t *testing.T) {
+	a := newBearerSpec("/v1/chat/completions").PipelineAdapter()
+	for name, baseURL := range map[string]string{
+		"unparseable base URL": "http://bad host",
+		"nothing listening":    "http://127.0.0.1:1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, err := a.Call(context.Background(), baseURL, nil, "k", []byte(`{}`), nil, "", false, false)
+			if err == nil || resp != nil {
+				t.Fatalf("resp = %v, err = %v; want a nil response and an error", resp, err)
+			}
+		})
 	}
 }
 
-// Security edge: relay's resolved credential must win over any Authorization
-// header forwarded from the caller (the auth header is Set, not Add).
-func TestSpecAdapter_OAuth_OverridesForwardedAuthHeader(t *testing.T) {
-	hdr := http.Header{"Authorization": []string{"Bearer caller-key"}}
-	got := callCapture(t, dualAuthSpec(), "sk-ant-oat01-upstream", hdr, true)
-	if got.auth != "Bearer sk-ant-oat01-upstream" {
-		t.Errorf("Authorization = %q, want the upstream credential to override the forwarded one", got.auth)
+func TestSpecAdapter_Retryable(t *testing.T) {
+	a := newBearerSpec("/v1/chat/completions").PipelineAdapter()
+	resp := func(status int, retryAfter string) *http.Response {
+		h := http.Header{}
+		if retryAfter != "" {
+			h.Set("Retry-After", retryAfter)
+		}
+		return &http.Response{StatusCode: status, Header: h}
+	}
+	tests := []struct {
+		name      string
+		resp      *http.Response
+		wantRetry bool
+		wantKind  keypool.FailureKind
+		wantAfter time.Duration
+	}{
+		{"nil response", nil, false, 0, 0},
+		{"200", resp(200, ""), false, 0, 0},
+		{"400", resp(400, ""), false, 0, 0},
+		{"404", resp(404, ""), false, 0, 0},
+		{"499 is below the server range", resp(499, ""), false, 0, 0},
+		{"600 is above the server range", resp(600, ""), false, 0, 0},
+		{"401", resp(401, ""), true, keypool.FailureAuth, 0},
+		{"403", resp(403, ""), true, keypool.FailureForbidden, 0},
+		{"500", resp(500, ""), true, keypool.FailureServerError, 0},
+		{"529", resp(529, ""), true, keypool.FailureServerError, 0},
+		{"599", resp(599, ""), true, keypool.FailureServerError, 0},
+		{"500 ignores Retry-After", resp(500, "30"), true, keypool.FailureServerError, 0},
+		{"429 without Retry-After", resp(429, ""), true, keypool.FailureRateLimitShort, 0},
+		{"429 at the 5s boundary stays short", resp(429, "5"), true, keypool.FailureRateLimitShort, 5 * time.Second},
+		{"429 past 5s is long", resp(429, "6"), true, keypool.FailureRateLimitLong, 6 * time.Second},
+		{"429 with an unreadable Retry-After", resp(429, "soon"), true, keypool.FailureRateLimitShort, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retry, kind, after := a.Retryable(tt.resp)
+			if retry != tt.wantRetry || kind != tt.wantKind || after != tt.wantAfter {
+				t.Errorf("Retryable = (%v, %v, %v), want (%v, %v, %v)", retry, kind, after, tt.wantRetry, tt.wantKind, tt.wantAfter)
+			}
+		})
 	}
 }
 
-func TestSpecAdapter_Call_HostPathOverride(t *testing.T) {
-	srv, got := captureServer(t)
-
-	a := newBearerSpec(t, "/v1/responses").PipelineAdapter()
-
-	// Non-nil host path wins verbatim over the shape default.
-	p := "/backend-api/codex/responses"
-	resp, err := a.Call(context.Background(), srv.URL, &p, "k", []byte(`{}`), nil, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
+func TestSpecAdapter_ExtractTokens(t *testing.T) {
+	if got := newBearerSpec("/x").PipelineAdapter().ExtractTokens([]byte(`{"id":"x"}`)); got != nil {
+		t.Errorf("no extractor: tokens = %v, want nil", got)
 	}
-	resp.Body.Close()
-	if gotPath := got.Path(); gotPath != p {
-		t.Fatalf("path: got %q, want %q", gotPath, p)
+	var seen []byte
+	a := newBearerSpec("/x", func(s *adapter.Spec) {
+		s.ExtractTokens = func(body []byte) pkgusage.Tokens {
+			seen = body
+			return pkgusage.Tokens{"input": 10, "output": 5}
+		}
+	}).PipelineAdapter()
+	got := a.ExtractTokens([]byte(`{"u":1}`))
+	if diff := cmp.Diff(pkgusage.Tokens{"input": 10, "output": 5}, got); diff != "" {
+		t.Errorf("tokens (-want +got):\n%s", diff)
 	}
-
-	// Explicit "" appends nothing — baseURL is the complete endpoint.
-	empty := ""
-	resp, err = a.Call(context.Background(), srv.URL, &empty, "k", []byte(`{}`), nil, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	resp.Body.Close()
-	if gotPath := got.Path(); gotPath != "/" {
-		t.Fatalf("path: got %q, want / (nothing appended)", gotPath)
-	}
-
-	// Nil keeps the shape default.
-	resp, err = a.Call(context.Background(), srv.URL, nil, "k", []byte(`{}`), nil, "", false, false)
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	resp.Body.Close()
-	if gotPath := got.Path(); gotPath != "/v1/responses" {
-		t.Fatalf("path: got %q, want /v1/responses", gotPath)
+	if string(seen) != `{"u":1}` {
+		t.Errorf("extractor saw %q, want the response body", seen)
 	}
 }

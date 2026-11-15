@@ -2,309 +2,151 @@ package openai
 
 import (
 	"encoding/json"
-	"strings"
+	"slices"
 	"testing"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// applyPatchTool is the `custom` (freeform) tool shape Codex ships apply_patch
-// as, with a grammar constraining the patch envelope.
-const applyPatchTool = `{"type":"custom","name":"apply_patch","description":"Edit files.","format":{"type":"grammar","syntax":"lark","definition":"start: \"*** Begin Patch\" /.*/s \"*** End Patch\""}}`
+// applyPatchTool is the `custom` (freeform) tool shape Codex ships apply_patch as, with a grammar constraining the patch envelope.
+const applyPatchTool = `{"name":"apply_patch","type":"custom","description":"Edit files.","format":{"type":"grammar","syntax":"lark","definition":"start: \"*** Begin Patch\" /.*/s \"*** End Patch\""}}`
 
-func TestResponsesCustomToolLowersToFunctionTool(t *testing.T) {
-	body := []byte(`{"model":"gpt-5","input":"hi","tools":[` + applyPatchTool + `]}`)
+// applyPatchParams is the lowered schema a non-OpenAI model is asked to satisfy: one required string, the grammar in its description.
+const applyPatchParams = `{"type":"object","properties":{"input":{"type":"string","description":"Free-form text input for this tool. It must match this lark grammar:\nstart: \"*** Begin Patch\" /.*/s \"*** End Patch\""}},"required":["input"]}`
 
-	canon, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatalf("ParseRequest: %v", err)
-	}
-	if canon.Tools == nil || len(canon.Tools.Definitions) != 1 {
-		t.Fatalf("canonical tools = %+v, want one", canon.Tools)
-	}
-	ft, ok := canon.Tools.Definitions[0].(*v1.FunctionTool)
-	if !ok {
-		t.Fatalf("canonical tool type = %T, want *v1.FunctionTool", canon.Tools.Definitions[0])
-	}
-	if ft.Name != "apply_patch" {
-		t.Errorf("name = %q, want apply_patch", ft.Name)
-	}
+func respCustomToolRequest(t *testing.T) *v1.Request {
+	t.Helper()
+	return respParseRequest(t, `{"model":"gpt-5","input":"hi","tools":[{"type":"function","name":"f","parameters":{}},`+applyPatchTool+`,{"type":"custom","name":"note"}]}`)
+}
 
-	var params struct {
-		Type       string `json:"type"`
-		Properties struct {
-			Input struct {
-				Type        string `json:"type"`
-				Description string `json:"description"`
-			} `json:"input"`
-		} `json:"properties"`
-		Required []string `json:"required"`
-	}
-	if err := json.Unmarshal(ft.Parameters, &params); err != nil {
-		t.Fatalf("parameters: %v", err)
-	}
-	if params.Type != "object" || params.Properties.Input.Type != "string" ||
-		len(params.Required) != 1 || params.Required[0] != "input" {
-		t.Errorf("parameters = %s, want an object with one required string input", ft.Parameters)
-	}
-	if !strings.Contains(params.Properties.Input.Description, "*** Begin Patch") ||
-		!strings.Contains(params.Properties.Input.Description, "lark") {
-		t.Errorf("input description = %q, want the grammar syntax + definition", params.Properties.Input.Description)
+func TestResponsesCustomToolDefinition(t *testing.T) {
+	req := respCustomToolRequest(t)
+	// A custom tool without a grammar still lowers to a string input.
+	const noteTool = `{"type":"function","name":"note","parameters":{"type":"object","properties":{"input":{"type":"string","description":"Free-form text input for this tool."}},"required":["input"]},"provider_data":{"type":"custom","name":"note"}}`
+	respJSONEq(t, req.Tools, `{"definitions":[{"type":"function","name":"f","parameters":{}},
+		{"type":"function","name":"apply_patch","description":"Edit files.","parameters":`+applyPatchParams+`,"provider_data":`+applyPatchTool+`},`+noteTool+`]}`)
+
+	// Same vendor: the original definitions go back out byte for byte.
+	if got, want := string(respMember(t, respSerializeRequest(t, req), "tools")), `[{"type":"function","name":"f","parameters":{}},`+applyPatchTool+`,{"type":"custom","name":"note"}]`; got != want {
+		t.Errorf("tools = %s, want %s", got, want)
 	}
 
-	// Same vendor: the original definition comes back byte-equal.
-	out, err := (ResponsesTranslator{}).SerializeRequest(canon)
-	if err != nil {
-		t.Fatalf("SerializeRequest: %v", err)
-	}
-	var wire struct {
-		Tools []json.RawMessage `json:"tools"`
-	}
-	if err := json.Unmarshal(out, &wire); err != nil {
-		t.Fatalf("serialized body: %v", err)
-	}
-	if len(wire.Tools) != 1 || string(wire.Tools[0]) != applyPatchTool {
-		t.Errorf("serialized tool = %s, want the original custom definition verbatim", wire.Tools)
-	}
+	// Without the provider blob a non-OpenAI view of the tool is a plain function tool.
+	req.Tools.Definitions[1].(*v1.FunctionTool).ProviderData = nil
+	respJSONEq(t, respMember(t, respSerializeRequest(t, req), "tools"), `[{"type":"function","name":"f","parameters":{}},
+		{"type":"function","name":"apply_patch","description":"Edit files.","parameters":`+applyPatchParams+`},{"type":"custom","name":"note"}]`)
+}
 
-	// Without the provider blob (the cross-vendor view) the vendor-neutral
-	// function schema is what a non-OpenAI upstream is asked to satisfy.
-	ft.ProviderData = nil
-	neutral, err := (ResponsesTranslator{}).SerializeRequest(canon)
-	if err != nil {
-		t.Fatalf("SerializeRequest: %v", err)
-	}
-	if err := json.Unmarshal(neutral, &wire); err != nil {
-		t.Fatalf("serialized body: %v", err)
-	}
-	var neutralTool struct {
-		Type       string          `json:"type"`
-		Name       string          `json:"name"`
-		Parameters json.RawMessage `json:"parameters"`
-	}
-	if err := json.Unmarshal(wire.Tools[0], &neutralTool); err != nil {
-		t.Fatalf("neutral tool: %v", err)
-	}
-	if neutralTool.Type != "function" || neutralTool.Name != "apply_patch" {
-		t.Errorf("neutral tool = %s, want a function tool named apply_patch", wire.Tools[0])
-	}
-	if string(neutralTool.Parameters) != string(ft.Parameters) {
-		t.Errorf("neutral parameters = %s, want the lowered schema", neutralTool.Parameters)
+// Only a grammar format that has a definition reaches the lowered argument's description.
+func TestResponsesCustomToolDefinition_FormatWithoutGrammar(t *testing.T) {
+	for _, format := range []string{`{"type":"grammar","syntax":"lark"}`, `{"type":"text","definition":"x"}`, `{"definition":"x"}`} {
+		req := respParseRequest(t, `{"model":"m","input":"hi","tools":[{"type":"custom","name":"note","format":`+format+`}]}`)
+		respJSONEq(t, req.Tools.Definitions[0].(*v1.FunctionTool).Parameters, `{"type":"object","properties":{"input":{"type":"string","description":"Free-form text input for this tool."}},"required":["input"]}`)
 	}
 }
 
-func TestResponsesCustomToolCallFromCanonical(t *testing.T) {
-	req := &v1.Request{
-		Model: v1.ModelRefs{"gpt-5"},
-		Tools: &v1.ToolsConfig{Definitions: v1.Tools{
-			responsesCustomToolToCanonical(mustCustomTool(t, applyPatchTool)),
-		}},
-	}
-	resp := &v1.Response{
-		ID:     "resp_1",
-		Model:  "gpt-5",
-		Status: v1.StatusCompleted,
-		Output: []v1.Item{&v1.FunctionCall{
-			ID:        "ctc_1",
-			CallID:    "call_1",
-			Name:      "apply_patch",
-			Arguments: `{"input":"*** Begin Patch\n*** End Patch"}`,
-			Status:    v1.StatusCompleted,
-		}},
-	}
+// A custom call and its result parse to an ordinary function call pair and go back to the same vendor in custom form, the result following its call by call id.
+func TestResponsesCustomToolCallInput(t *testing.T) {
+	req := respParseRequest(t, `{"model":"gpt-5","input":[
+		{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch","status":"completed"},
+		{"type":"custom_tool_call","id":"x_2","call_id":"call_2","name":"apply_patch","input":"again"},
+		{"type":"custom_tool_call_output","call_id":"call_1","output":"Done"},
+		{"type":"custom_tool_call_output","call_id":"call_2","output":[{"type":"input_text","text":"ok"}]}]}`)
+	respJSONEq(t, req.Input, `[
+		{"type":"function_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\"}","status":"completed","provider_data":{"type":"custom_tool_call"}},
+		{"type":"function_call","id":"x_2","call_id":"call_2","name":"apply_patch","arguments":"{\"input\":\"again\"}","provider_data":{"type":"custom_tool_call"}},
+		{"type":"function_call_output","call_id":"call_1","output":"Done"},
+		{"type":"function_call_output","call_id":"call_2","output":"[{\"type\":\"input_text\",\"text\":\"ok\"}]"}]`)
+	respJSONEq(t, respMember(t, respSerializeRequest(t, req), "input"), `[
+		{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch"},
+		{"type":"custom_tool_call","call_id":"call_2","name":"apply_patch","input":"again"},
+		{"type":"custom_tool_call_output","call_id":"call_1","output":"Done"},
+		{"type":"custom_tool_call_output","call_id":"call_2","output":"[{\"type\":\"input_text\",\"text\":\"ok\"}]"}]`)
+}
 
-	out, err := (ResponsesTranslator{}).SerializeResponse(resp, req)
-	if err != nil {
-		t.Fatalf("SerializeResponse: %v", err)
-	}
-	var wire struct {
-		Output []struct {
-			Type  string `json:"type"`
-			Name  string `json:"name"`
-			Input string `json:"input"`
-		} `json:"output"`
-	}
-	if err := json.Unmarshal(out, &wire); err != nil {
-		t.Fatalf("serialized response: %v", err)
-	}
-	if len(wire.Output) != 1 || wire.Output[0].Type != "custom_tool_call" {
-		t.Fatalf("output = %s, want one custom_tool_call", out)
-	}
-	if wire.Output[0].Name != "apply_patch" || wire.Output[0].Input != "*** Begin Patch\n*** End Patch" {
-		t.Errorf("custom_tool_call = %+v, want the freeform patch as input", wire.Output[0])
-	}
-
-	// A model that ignored the lowered schema still gets its text through.
-	resp.Output[0].(*v1.FunctionCall).Arguments = "*** Begin Patch"
-	out, err = (ResponsesTranslator{}).SerializeResponse(resp, req)
-	if err != nil {
-		t.Fatalf("SerializeResponse: %v", err)
-	}
-	if err := json.Unmarshal(out, &wire); err != nil {
-		t.Fatalf("serialized response: %v", err)
-	}
-	if wire.Output[0].Input != "*** Begin Patch" {
-		t.Errorf("input = %q, want the raw arguments passed through", wire.Output[0].Input)
+func TestResponsesCustomToolCallResponse(t *testing.T) {
+	req := respCustomToolRequest(t)
+	for name, tc := range map[string]struct{ args, input string }{
+		"lowered arguments": {`{"input":"*** Begin Patch\n*** End Patch"}`, "*** Begin Patch\n*** End Patch"},
+		// A model that ignored the lowered schema still gets its text through.
+		"raw text":         {"*** Begin Patch", "*** Begin Patch"},
+		"no input key":     {`{"patch":"x"}`, `{"patch":"x"}`},
+		"non-string input": {`{"input":5}`, `{"input":5}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := &v1.Response{ID: "r", Model: "gpt-5", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonToolCalls, Output: []v1.Item{
+				&v1.FunctionCall{ID: "ctc_1", CallID: "call_1", Name: "apply_patch", Arguments: tc.args, Status: v1.StatusCompleted},
+			}}
+			wire, err := ResponsesTranslator{}.SerializeResponse(resp, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, _ := json.Marshal(tc.input)
+			respJSONEq(t, respMember(t, wire, "output"), `[{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":`+string(input)+`,"status":"completed"}]`)
+		})
 	}
 }
 
 func TestResponsesCustomToolCallStreamFromCanonical(t *testing.T) {
-	req := &v1.Request{
-		Model: v1.ModelRefs{"gpt-5"},
-		Tools: &v1.ToolsConfig{Definitions: v1.Tools{
-			responsesCustomToolToCanonical(mustCustomTool(t, applyPatchTool)),
-		}},
-	}
-	fn := (ResponsesTranslator{}).NewFromCanonicalStreamFor(req)
-
-	chunks := [][]byte{
+	frames := respStream(t, ResponsesTranslator{}.NewFromCanonicalStreamFor(respCustomToolRequest(t)),
 		canonicalChunk(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "resp_1", Model: "gpt-5"}),
-		canonicalChunk(v1.EventItemStarted, v1.ItemStartedEvent{
-			ItemID: "ctc_1", ItemType: v1.ItemTypeFunctionCall, Name: "apply_patch", Index: 0,
-		}),
-		canonicalChunk(v1.EventItemDelta, v1.ItemDeltaEvent{
-			ItemID: "ctc_1", Index: 0, Kind: v1.DeltaKindArguments, Delta: `{"input":"*** Begin`,
-		}),
-		canonicalChunk(v1.EventItemDelta, v1.ItemDeltaEvent{
-			ItemID: "ctc_1", Index: 0, Kind: v1.DeltaKindArguments, Delta: ` Patch"}`,
-		}),
-		canonicalChunk(v1.EventItemCompleted, v1.ItemCompletedEvent{
-			ItemID: "ctc_1",
-			Index:  0,
-			Item: &v1.FunctionCall{
-				ID: "ctc_1", CallID: "call_1", Name: "apply_patch",
-				Arguments: `{"input":"*** Begin Patch"}`, Status: v1.StatusCompleted,
-			},
-		}),
+		canonicalChunk(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "ctc_1", ItemType: v1.ItemTypeFunctionCall, Name: "apply_patch", CallID: "call_1"}),
+		canonicalChunk(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "ctc_1", Kind: v1.DeltaKindArguments, Delta: `{"input":"*** Begin`}),
+		canonicalChunk(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "ctc_1", Kind: v1.DeltaKindArguments, Delta: ` Patch"}`}),
+		canonicalChunk(v1.EventItemCompleted, map[string]any{"item_id": "ctc_1", "item": map[string]any{"type": "function_call", "status": "completed"}}),
+	)
+	want := []string{ResponsesEventCreated, ResponsesEventInProgress, ResponsesEventOutputItemAdded, ResponsesEventCustomToolCallInputDelta, ResponsesEventCustomToolCallInputDone, ResponsesEventOutputItemDone}
+	if got := respEvents(frames); !slices.Equal(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
 	}
+	respJSONEq(t, frames[2].Data, `{"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"","status":"in_progress"}}`)
+	respJSONEq(t, frames[3].Data, `{"type":"response.custom_tool_call_input.delta","sequence_number":3,"item_id":"ctc_1","output_index":0,"delta":"*** Begin Patch"}`)
+	respJSONEq(t, frames[4].Data, `{"type":"response.custom_tool_call_input.done","sequence_number":4,"item_id":"ctc_1","output_index":0,"input":"*** Begin Patch"}`)
+	respJSONEq(t, frames[5].Data, `{"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch","status":"completed"}}`)
+}
 
-	var events []string
-	var lastData []byte
-	for _, c := range chunks {
-		out, err := fn(c)
-		if err != nil {
-			t.Fatalf("translate: %v", err)
-		}
-		for _, frame := range splitCanonicalFrames(out) {
-			event, data, ok := ParseResponsesSSEChunk(frame)
-			if !ok {
-				continue
-			}
-			events = append(events, event)
-			lastData = data
-		}
-	}
-
-	want := []string{
-		ResponsesEventCreated,
-		ResponsesEventInProgress,
-		ResponsesEventOutputItemAdded,
-		ResponsesEventCustomToolCallInputDelta,
-		ResponsesEventCustomToolCallInputDone,
-		ResponsesEventOutputItemDone,
-	}
-	if len(events) != len(want) {
-		t.Fatalf("events = %v, want %v", events, want)
-	}
-	for i := range want {
-		if events[i] != want[i] {
-			t.Fatalf("events = %v, want %v", events, want)
-		}
-	}
-
-	var done struct {
-		Item struct {
-			Type  string `json:"type"`
-			Name  string `json:"name"`
-			Input string `json:"input"`
-		} `json:"item"`
-	}
-	if err := json.Unmarshal(lastData, &done); err != nil {
-		t.Fatalf("output_item.done: %v", err)
-	}
-	if done.Item.Type != "custom_tool_call" || done.Item.Input != "*** Begin Patch" {
-		t.Errorf("final item = %+v, want a custom_tool_call carrying the patch", done.Item)
+func respCustomCallStream() [][]byte {
+	return [][]byte{
+		respSSE(ResponsesEventOutputItemAdded, `{"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":""}}`),
+		respSSE(ResponsesEventCustomToolCallInputDelta, `{"type":"response.custom_tool_call_input.delta","item_id":"ctc_1","output_index":0,"delta":"*** Begin Patch"}`),
+		respSSE(ResponsesEventCustomToolCallInputDone, `{"type":"response.custom_tool_call_input.done","item_id":"ctc_1","output_index":0,"input":"*** Begin Patch"}`),
+		respSSE(ResponsesEventOutputItemDone, `{"type":"response.output_item.done","output_index":0,"item":{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch","status":"completed"}}`),
 	}
 }
 
-func TestResponsesCustomToolCallOutputToCanonical(t *testing.T) {
-	body := []byte(`{"model":"gpt-5","input":[
-		{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch"},
-		{"type":"custom_tool_call_output","call_id":"call_1","output":"Done"}
-	]}`)
-
-	canon, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatalf("ParseRequest: %v", err)
-	}
-	if len(canon.Input) != 2 {
-		t.Fatalf("input items = %d, want 2", len(canon.Input))
-	}
-	call, ok := canon.Input[0].(*v1.FunctionCall)
-	if !ok {
-		t.Fatalf("item 0 = %T, want *v1.FunctionCall", canon.Input[0])
-	}
-	if call.Arguments != `{"input":"*** Begin Patch"}` {
-		t.Errorf("arguments = %s, want the input lowered into the argument object", call.Arguments)
-	}
-	out, ok := canon.Input[1].(*v1.FunctionCallOutput)
-	if !ok {
-		t.Fatalf("item 1 = %T, want *v1.FunctionCallOutput", canon.Input[1])
-	}
-	if out.CallID != "call_1" || out.Output != "Done" {
-		t.Errorf("tool result = %+v, want call_1/Done", out)
-	}
-
-	// Same vendor: both items go back out in their custom form, the output
-	// following its call by call id.
-	wire, err := (ResponsesTranslator{}).SerializeRequest(canon)
-	if err != nil {
-		t.Fatalf("SerializeRequest: %v", err)
-	}
-	var body2 struct {
-		Input []struct {
-			Type string `json:"type"`
-		} `json:"input"`
-	}
-	if err := json.Unmarshal(wire, &body2); err != nil {
-		t.Fatalf("serialized body: %v", err)
-	}
-	if len(body2.Input) != 2 || body2.Input[0].Type != "custom_tool_call" ||
-		body2.Input[1].Type != "custom_tool_call_output" {
-		t.Errorf("input items = %+v, want the custom pair", body2.Input)
-	}
+func TestResponsesCustomToolCallStreamToCanonical(t *testing.T) {
+	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(), respCustomCallStream()...)
+	respJSONEq(t, frames, `[
+		{"event":"item.started","data":{"item_id":"ctc_1","item_type":"function_call","index":0,"name":"apply_patch","call_id":"call_1"}},
+		{"event":"item.delta","data":{"item_id":"ctc_1","index":0,"kind":"arguments","delta":"{\"input\":\"*** Begin Patch"}},
+		{"event":"item.delta","data":{"item_id":"ctc_1","index":0,"kind":"arguments","delta":"\"}"}},
+		{"event":"item.completed","data":{"item_id":"ctc_1","index":0,"item":{"type":"function_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\"}","status":"completed","provider_data":{"type":"custom_tool_call"}}}}]`)
 }
 
-func TestResponsesNamespaceToolFlattens(t *testing.T) {
-	body := []byte(`{"model":"gpt-5","input":"hi","tools":[{"type":"namespace","name":"multi_agent_v1","description":"","tools":[
-		{"type":"function","name":"create_goal","description":"c","parameters":{"type":"object"}},
-		{"type":"function","name":"update_goal","description":"u","parameters":{"type":"object"}}
-	]}]}`)
+// Deltas are escaped as JSON string bodies, and a done with no preceding delta carries the whole input.
+func TestResponsesCustomToolCallStreamToCanonical_ArgumentDeltaEdges(t *testing.T) {
+	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(),
+		respSSE(ResponsesEventCustomToolCallInputDelta, `{"item_id":"a","output_index":0,"delta":"say \"<hi>\"\n"}`),
+		respSSE(ResponsesEventCustomToolCallInputDone, `{"item_id":"a","output_index":0,"input":"say \"<hi>\"\n"}`),
+		respSSE(ResponsesEventCustomToolCallInputDone, `{"item_id":"b","output_index":1,"input":""}`),
+	)
+	respJSONEq(t, frames, `[
+		{"event":"item.delta","data":{"item_id":"a","index":0,"kind":"arguments","delta":"{\"input\":\"say \\\"\\u003chi\\u003e\\\"\\n"}},
+		{"event":"item.delta","data":{"item_id":"a","index":0,"kind":"arguments","delta":"\"}"}},
+		{"event":"item.delta","data":{"item_id":"b","index":1,"kind":"arguments","delta":"{\"input\":\"\"}"}}]`)
+}
 
-	canon, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatalf("ParseRequest: %v", err)
-	}
-	if canon.Tools == nil || len(canon.Tools.Definitions) != 2 {
-		t.Fatalf("canonical tools = %+v, want the two inner tools", canon.Tools)
-	}
-	for i, want := range []string{"create_goal", "update_goal"} {
-		ft, ok := canon.Tools.Definitions[i].(*v1.FunctionTool)
-		if !ok || ft.Name != want {
-			t.Errorf("tool %d = %+v, want a function tool named %s", i, canon.Tools.Definitions[i], want)
+// A consumer that builds tool calls from argument deltas (every vendor stream serializer) must see the arguments the completed item carries.
+func TestResponsesCustomToolCallStreamToCanonical_ArgumentDeltas(t *testing.T) {
+	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(), respCustomCallStream()...)
+	var args string
+	for _, f := range frames {
+		var d v1.ItemDeltaEvent
+		if f.Event == v1.EventItemDelta && json.Unmarshal(f.Data, &d) == nil && d.Kind == v1.DeltaKindArguments {
+			args += d.Delta
 		}
 	}
-}
-
-func mustCustomTool(t *testing.T, raw string) *ResponsesCustomTool {
-	t.Helper()
-	tool, err := responsesUnmarshalTool([]byte(raw))
-	if err != nil {
-		t.Fatalf("parse custom tool: %v", err)
+	if args != `{"input":"*** Begin Patch"}` {
+		t.Errorf("argument deltas concatenate to %q, want the completed item's arguments", args)
 	}
-	ct, ok := tool.(*ResponsesCustomTool)
-	if !ok {
-		t.Fatalf("tool type = %T, want *ResponsesCustomTool", tool)
-	}
-	return ct
 }

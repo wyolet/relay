@@ -21,9 +21,14 @@ type testMeta struct {
 	Dirty       bool      `json:"dirty,omitempty"`
 }
 
+type testStatus struct {
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+}
+
 type testEntity struct {
-	Meta testMeta `json:"metadata"`
-	Spec testSpec `json:"spec"`
+	Meta   testMeta   `json:"metadata"`
+	Spec   testSpec   `json:"spec"`
+	Status testStatus `json:"status"`
 }
 
 func TestDiffFields(t *testing.T) {
@@ -52,6 +57,8 @@ func TestDiffFields(t *testing.T) {
 				e.Meta.UpdatedAt = time.Now()
 				e.Meta.CreatedAt = time.Now().Add(-time.Hour)
 				e.Meta.Dirty = true
+				used := time.Now()
+				e.Status.LastUsedAt = &used
 			},
 			want:     nil,
 			wantKept: nil,

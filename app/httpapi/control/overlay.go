@@ -173,11 +173,12 @@ func registerOverlayRoutes(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := settings.Governs(d.Catalog, settings.OpEdit, "model", string(tmpl.Meta.GovernedOwnerKind()), authz.IsAdmin(ctx)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
-		if err := d.Stores.Overlay.Delete(ctx, overlay.KindModel, in.ID); err != nil {
+		deleted, err := d.Stores.Overlay.Delete(ctx, overlay.KindModel, in.ID)
+		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		out := &overlayDeleteOut{}
-		out.Body.Deleted = true
+		out.Body.Deleted = deleted
 		return out, nil
 	})
 }

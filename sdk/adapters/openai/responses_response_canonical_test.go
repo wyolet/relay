@@ -3,588 +3,315 @@ package openai
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-func TestResponsesParseResponse_SimpleText(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":         "resp_01",
-		"object":     "response",
-		"created_at": int64(1700000000),
-		"model":      "gpt-5",
-		"status":     "completed",
-		"output": []any{map[string]any{
-			"type":   "message",
-			"id":     "msg_0",
-			"status": "completed",
-			"role":   "assistant",
-			"content": []any{map[string]any{
-				"type": "output_text",
-				"text": "Hello!",
-			}},
-		}},
-		"usage": map[string]any{
-			"input_tokens":  10,
-			"output_tokens": 5,
-			"total_tokens":  15,
-		},
-	})
-	resp, err := (ResponsesTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.ID != "resp_01" {
-		t.Errorf("id: %q", resp.ID)
-	}
-	if resp.Status != v1.StatusCompleted {
-		t.Errorf("status: %q", resp.Status)
-	}
-	if len(resp.Output) != 1 {
-		t.Fatalf("output len: %d", len(resp.Output))
-	}
-	msg, ok := resp.Output[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	if len(msg.Content) != 1 {
-		t.Fatalf("content len: %d", len(msg.Content))
-	}
-	if resp.Usage["input"] != 10 {
-		t.Errorf("usage: %v", resp.Usage)
-	}
-}
-
-// TestResponsesParseResponse_FinishReasonFromStatus locks the fix for the
-// fabricated finish_reason: the Responses API has no finish_reason field, so the
-// canonical finish_reason must be derived from status + incomplete_details.reason.
-// Before the fix, every non-stop terminal masqueraded as a clean stop.
-func TestResponsesParseResponse_FinishReasonFromStatus(t *testing.T) {
-	mk := func(status, incompleteReason string, withFnCall bool) []byte {
-		m := map[string]any{
-			"id": "resp_fr", "object": "response", "model": "gpt-5", "status": status,
-			"output": []any{},
-		}
-		if incompleteReason != "" {
-			m["incomplete_details"] = map[string]any{"reason": incompleteReason}
-		}
-		if withFnCall {
-			m["output"] = []any{map[string]any{
-				"type": "function_call", "id": "fc_0", "call_id": "c0",
-				"name": "f", "arguments": "{}",
-			}}
-		}
-		return mustJSON(m)
-	}
+// The Responses API has no finish_reason: it is derived from status, incomplete_details.reason and the output items, and a cut-off must never read as a clean stop.
+func TestResponsesParseResponse_FinishReason(t *testing.T) {
+	const (
+		call    = `{"type":"function_call","id":"fc_0","call_id":"c0","name":"f","arguments":"{}"}`
+		custom  = `{"type":"custom_tool_call","id":"ctc_0","call_id":"c0","name":"f","input":"x"}`
+		refusal = `{"type":"message","id":"msg_0","role":"assistant","content":[{"type":"refusal","refusal":"no"}]}`
+	)
 	cases := []struct {
-		name, status, reason string
-		fnCall               bool
-		want                 v1.FinishReason
+		name, status, details, output string
+		want                          v1.FinishReason
 	}{
-		{"plain stop", "completed", "", false, v1.FinishReasonStop},
-		{"tool calls", "completed", "", true, v1.FinishReasonToolCalls},
-		{"truncated", "incomplete", "max_output_tokens", false, v1.FinishReasonLength},
-		{"content filter", "incomplete", "content_filter", false, v1.FinishReasonContentFilter},
-		{"incomplete without reason", "incomplete", "", false, v1.FinishReasonOther},
-		{"incomplete unknown reason", "incomplete", "new_reason", false, v1.FinishReasonOther},
-		{"failed has no finish_reason", "failed", "", false, v1.FinishReason("")},
+		{"plain stop", "completed", "null", "", v1.FinishReasonStop},
+		{"function call", "completed", "null", call, v1.FinishReasonToolCalls},
+		{"custom tool call", "completed", "null", custom, v1.FinishReasonToolCalls},
+		{"refusal part", "completed", "null", refusal, v1.FinishReasonRefusal},
+		{"refusal next to a call", "completed", "null", refusal + "," + call, v1.FinishReasonToolCalls},
+		{"truncated", "incomplete", `{"reason":"max_output_tokens"}`, "", v1.FinishReasonLength},
+		{"content filter", "incomplete", `{"reason":"content_filter"}`, call, v1.FinishReasonContentFilter},
+		{"incomplete without details", "incomplete", "null", "", v1.FinishReasonOther},
+		{"failed", "failed", "null", "", ""},
+		{"cancelled", "cancelled", "null", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := (ResponsesTranslator{}).ParseResponse(mk(tc.status, tc.reason, tc.fnCall))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if resp.FinishReason != tc.want {
-				t.Errorf("finish_reason: got %q, want %q", resp.FinishReason, tc.want)
-			}
-			if resp.Status != v1.Status(tc.status) {
-				t.Errorf("status: got %q, want %q", resp.Status, tc.status)
+			resp := respParseResponse(t, `{"id":"r","object":"response","model":"m","status":"`+tc.status+`","incomplete_details":`+tc.details+`,"output":[`+tc.output+`]}`)
+			if resp.Status != v1.Status(tc.status) || resp.FinishReason != tc.want {
+				t.Errorf("status/finish_reason = %q/%q, want %q/%q", resp.Status, resp.FinishReason, tc.status, tc.want)
 			}
 		})
 	}
 }
 
-// TestResponsesSerializeResponse_StatusFromFinishReason locks the inverse: a
-// canonical length/content_filter finish_reason must serialize to a Responses
-// body as status=incomplete + incomplete_details.reason, with NO finish_reason field.
-func TestResponsesSerializeResponse_StatusFromFinishReason(t *testing.T) {
+func TestResponsesParseResponse(t *testing.T) {
+	resp := respParseResponse(t, `{"id":"resp_1","object":"response","created_at":7,"status":"completed","model":"gpt-5","service_tier":"flex","output":[
+		{"type":"web_search_call","id":"ws_0","status":"completed","action":{"type":"search","query":"go"}},
+		{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Checking"}],"content":[{"type":"reasoning_text","text":"221 = 13 * 17"}]},
+		{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[
+			{"type":"output_text","text":"See [1].","annotations":[{"type":"url_citation","start_index":4,"end_index":7,"url":"https://x","title":"X"},{"type":"file_citation","file_id":"file_abc","index":3}]},
+			{"type":"output_audio","data":"UklGRg==","transcript":"hi"}]}],
+		"usage":{"input_tokens":200,"input_tokens_details":{"cached_tokens":150},"output_tokens":100,"output_tokens_details":{"reasoning_tokens":40},"total_tokens":300}}`)
+	respJSONEq(t, resp, `{"id":"resp_1","object":"response","created_at":7,"model":"gpt-5","status":"completed","finish_reason":"stop","service_tier":"flex",
+		"output":[
+			{"type":"reasoning","id":"rs_1","summary":[{"text":"Checking"}],"content":"221 = 13 * 17"},
+			{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"See [1].","annotations":[
+				{"type":"url_citation","start_index":4,"end_index":7,"url":"https://x","title":"X"},
+				{"type":"file_citation","file_id":"file_abc","index":3}]}]}],
+		"usage":{"input":50,"output":100,"cache_read":150,"reasoning":40}}`)
+}
+
+// What ParseResponse keeps, SerializeResponse writes back in the same wire form.
+func TestResponsesResponseRoundTrip(t *testing.T) {
+	const output = `[
+		{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"S"}],"content":[{"type":"reasoning_text","text":"raw"}],"encrypted_content":"BLOB","status":"completed"},
+		{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"See [1].","annotations":[{"type":"file_citation","file_id":"file_abc","index":3}],"logprobs":[]}]},
+		{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}","status":"completed"}]`
+	resp := respParseResponse(t, `{"id":"r","object":"response","created_at":7,"status":"completed","model":"m","output":`+output+`}`)
+	wire, err := ResponsesTranslator{}.SerializeResponse(resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respJSONEq(t, respMember(t, wire, "output"), output)
+}
+
+// Responses carries length, content_filter and other only as status=incomplete plus incomplete_details.reason.
+func TestResponsesSerializeResponse_Status(t *testing.T) {
 	cases := []struct {
-		name       string
-		fr         v1.FinishReason
-		status     v1.Status
-		inc        *v1.IncompleteDetails
-		wantStatus string
-		wantReason string
+		name string
+		resp v1.Response
+		want string
 	}{
-		{"length", v1.FinishReasonLength, v1.StatusIncomplete, nil, "incomplete", "max_output_tokens"},
-		{"content_filter", v1.FinishReasonContentFilter, v1.StatusCompleted, nil, "incomplete", "content_filter"},
-		{"stop", v1.FinishReasonStop, v1.StatusCompleted, nil, "completed", ""},
-		{"other own reason", v1.FinishReasonOther, v1.StatusIncomplete, &v1.IncompleteDetails{Reason: "new_reason"}, "incomplete", "new_reason"},
-		{"other foreign reason", v1.FinishReasonOther, v1.StatusIncomplete, &v1.IncompleteDetails{Reason: "anthropic:new_reason"}, "incomplete", "anthropic:new_reason"},
-		{"other without details", v1.FinishReasonOther, v1.StatusCompleted, nil, "incomplete", ""},
+		{"stop", v1.Response{Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop}, `{"status":"completed","incomplete_details":null,"error":null}`},
+		{"tool calls", v1.Response{FinishReason: v1.FinishReasonToolCalls}, `{"status":"completed","incomplete_details":null,"error":null}`},
+		{"length", v1.Response{Status: v1.StatusIncomplete, FinishReason: v1.FinishReasonLength}, `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"error":null}`},
+		{"length with empty details", v1.Response{FinishReason: v1.FinishReasonLength, IncompleteDetails: &v1.IncompleteDetails{}}, `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"error":null}`},
+		{"length keeps the raw reason", v1.Response{FinishReason: v1.FinishReasonLength, IncompleteDetails: &v1.IncompleteDetails{Reason: "anthropic:max_tokens"}}, `{"status":"incomplete","incomplete_details":{"reason":"anthropic:max_tokens"},"error":null}`},
+		{"content filter", v1.Response{Status: v1.StatusCompleted, FinishReason: v1.FinishReasonContentFilter}, `{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"error":null}`},
+		{"content filter with empty details", v1.Response{FinishReason: v1.FinishReasonContentFilter, IncompleteDetails: &v1.IncompleteDetails{}}, `{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"error":null}`},
+		{"content filter keeps the raw reason", v1.Response{FinishReason: v1.FinishReasonContentFilter, IncompleteDetails: &v1.IncompleteDetails{Reason: "gemini:SAFETY"}}, `{"status":"incomplete","incomplete_details":{"reason":"gemini:SAFETY"},"error":null}`},
+		{"other", v1.Response{Status: v1.StatusIncomplete, FinishReason: v1.FinishReasonOther, IncompleteDetails: &v1.IncompleteDetails{Reason: "anthropic:new_reason"}}, `{"status":"incomplete","incomplete_details":{"reason":"anthropic:new_reason"},"error":null}`},
+		{"other without details", v1.Response{Status: v1.StatusCompleted, FinishReason: v1.FinishReasonOther}, `{"status":"incomplete","incomplete_details":null,"error":null}`},
+		{"failed", v1.Response{Status: v1.StatusFailed, Error: &v1.Error{Code: "server_error", Message: "boom"}}, `{"status":"failed","incomplete_details":null,"error":{"code":"server_error","message":"boom"}}`},
+		{"cancelled with details", v1.Response{Status: v1.Status("cancelled"), IncompleteDetails: &v1.IncompleteDetails{Reason: "user"}}, `{"status":"cancelled","incomplete_details":{"reason":"user"},"error":null}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b, err := (ResponsesTranslator{}).SerializeResponse(
-				&v1.Response{ID: "r", Model: "gpt-5", Status: tc.status, FinishReason: tc.fr, IncompleteDetails: tc.inc}, nil)
+			tc.resp.ID, tc.resp.Model = "r", "m"
+			wire, err := ResponsesTranslator{}.SerializeResponse(&tc.resp, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			m := decodeMap(t, b)
-			if _, ok := m["finish_reason"]; ok {
-				t.Errorf("finish_reason must not appear: %v", m["finish_reason"])
+			if fr := respMember(t, wire, "finish_reason"); fr != nil {
+				t.Errorf("finish_reason is not a Responses field, got %s", fr)
 			}
-			if m["status"] != tc.wantStatus {
-				t.Errorf("status: got %v, want %q", m["status"], tc.wantStatus)
+			got := map[string]json.RawMessage{}
+			for _, k := range []string{"status", "incomplete_details", "error"} {
+				got[k] = respMember(t, wire, k)
 			}
-			if tc.wantReason != "" {
-				inc, ok := m["incomplete_details"].(map[string]any)
-				if !ok || inc["reason"] != tc.wantReason {
-					t.Errorf("incomplete_details.reason: got %v, want %q", m["incomplete_details"], tc.wantReason)
-				}
+			respJSONEq(t, got, tc.want)
+		})
+	}
+}
+
+// An empty response still carries the members the API requires: an output array and a creation time; empty usage is left out.
+func TestResponsesSerializeResponse_Empty(t *testing.T) {
+	before := time.Now().Unix()
+	wire, err := ResponsesTranslator{}.SerializeResponse(&v1.Response{ID: "r", Model: "m", Status: v1.StatusFailed, Usage: usage.Tokens{}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respJSONEq(t, respMember(t, wire, "output"), `[]`)
+	if u := respMember(t, wire, "usage"); u != nil {
+		t.Errorf("usage = %s, want none", u)
+	}
+	var created struct {
+		CreatedAt int64 `json:"created_at"`
+	}
+	if err := json.Unmarshal(wire, &created); err != nil || created.CreatedAt < before || created.CreatedAt > time.Now().Unix() {
+		t.Errorf("created_at = %d (%v), want the serialize time", created.CreatedAt, err)
+	}
+}
+
+// A refusal marks every assistant message's text, wherever the message sits; the request's top_p is echoed, and a nil request echoes nothing.
+func TestResponsesSerializeResponse_RefusalAfterAToolCall(t *testing.T) {
+	resp := &v1.Response{ID: "r", Model: "m", CreatedAt: 1, Status: v1.StatusCompleted, FinishReason: v1.FinishReasonRefusal, Output: []v1.Item{
+		&v1.FunctionCall{ID: "fc_1", CallID: "c1", Name: "f", Arguments: `{}`},
+		&v1.Message{ID: "msg_1", Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "no"}}},
+	}}
+	req := &v1.Request{Model: v1.ModelRefs{"m"}, ModelConfig: map[string]*v1.ModelOpts{"m": {Sampling: &v1.SamplingParams{TopP: respPtr(0.9)}}}}
+	wire, err := ResponsesTranslator{}.SerializeResponse(resp, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respJSONEq(t, respMember(t, wire, "output"), `[{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}"},
+		{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"refusal","refusal":"no"}]}]`)
+	respJSONEq(t, respMember(t, wire, "top_p"), `0.9`)
+	ResponsesEchoRequest(&ResponsesResponse{}, nil)
+}
+
+// Canonical raw annotations go back out verbatim, except a file_citation, which is rebuilt in its typed form; required members are sent even when zero.
+func TestResponsesSerializeResponse_RawAnnotations(t *testing.T) {
+	resp := &v1.Response{ID: "r", Model: "m", CreatedAt: 1, Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop, Output: []v1.Item{
+		&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "x", Annotations: []v1.Annotation{
+			&v1.RawAnnotation{Type: "file_citation", JSON: json.RawMessage(`{"file_id":"f1","index":2}`)},
+			&v1.RawAnnotation{Type: "file_citation", JSON: json.RawMessage(`{"file_id":"f0","index":0}`)},
+			&v1.URLCitationAnnotation{StartIndex: 0, EndIndex: 1, URL: "https://x"},
+			&v1.RawAnnotation{Type: "container_file_citation", JSON: json.RawMessage(`{"type":"container_file_citation","container_id":"c"}`)},
+			&v1.RawAnnotation{Type: "file_path", JSON: json.RawMessage(`{"type":"file_path","file_id":"f2"}`)},
+			&v1.RawAnnotation{Type: "file_path"},
+		}}}},
+	}}
+	wire, err := ResponsesTranslator{}.SerializeResponse(resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respJSONEq(t, respMember(t, wire, "output"), `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","logprobs":[],"annotations":[
+		{"type":"file_citation","file_id":"f1","index":2},
+		{"type":"file_citation","file_id":"f0","index":0},
+		{"type":"url_citation","start_index":0,"end_index":1,"url":"https://x","title":""},
+		{"type":"container_file_citation","container_id":"c"},
+		{"type":"file_path","file_id":"f2"},
+		{"type":"file_path"}]}]}]`)
+}
+
+// v1.RawAnnotation exists to carry annotation types canonical does not model.
+func TestResponsesParseResponse_UnmodeledAnnotation(t *testing.T) {
+	resp := respParseResponse(t, `{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c","file_id":"f"}]}]}]}`)
+	respJSONEq(t, resp.Output, `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c","file_id":"f"}]}]}]`)
+}
+
+func TestResponsesParseResponse_FileCitationKeepsFilename(t *testing.T) {
+	resp := respParseResponse(t, `{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":"f","filename":"a.pdf","index":3}]}]}]}`)
+	respJSONEq(t, resp.Output, `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":"f","filename":"a.pdf","index":3}]}]}]`)
+}
+
+// Responses input_tokens includes cached tokens and output_tokens includes reasoning; canonical meters do not overlap.
+func TestResponsesUsage(t *testing.T) {
+	cases := []struct {
+		name  string
+		wire  ResponsesUsage
+		canon usage.Tokens
+	}{
+		{"cached and reasoning", ResponsesUsage{InputTokens: 5504, OutputTokens: 104, TotalTokens: 5608, InputTokensDetails: ResponsesInputDeets{CachedTokens: 5120}, OutputTokensDetails: ResponsesOutputDeets{ReasoningTokens: 49}},
+			usage.Tokens{"input": 384, "cache_read": 5120, "output": 104, "reasoning": 49}},
+		{"all cached", ResponsesUsage{InputTokens: 10, OutputTokens: 1, TotalTokens: 11, InputTokensDetails: ResponsesInputDeets{CachedTokens: 10}}, usage.Tokens{"cache_read": 10, "output": 1}},
+		{"zero", ResponsesUsage{}, nil},
+		{"negative counts are dropped", ResponsesUsage{InputTokens: -10, OutputTokens: -1, InputTokensDetails: ResponsesInputDeets{CachedTokens: -5}, OutputTokensDetails: ResponsesOutputDeets{ReasoningTokens: -1}}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			respJSONEq(t, responsesUsageToCanonical(&tc.wire), respMarshal(t, tc.canon))
+			if tc.canon != nil {
+				respJSONEq(t, canonicalUsageToResponses(tc.canon), respMarshal(t, tc.wire))
+			}
+		})
+	}
+	// Chat Completions shares the rule: total is prompt + completion, never the sum of the meters.
+	cc := canonicalUsageToCC(cases[0].canon)
+	if cc.PromptTokens != 5504 || cc.CompletionTokens != 104 || cc.TotalTokens != 5608 {
+		t.Errorf("CC usage = %d/%d/%d, want 5504/104/5608", cc.PromptTokens, cc.CompletionTokens, cc.TotalTokens)
+	}
+}
+
+func respMarshal(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestResponsesWireMarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		v    any
+		want string
+	}{
+		// output is required on the wire even when the tool returned nothing.
+		{"empty tool result", &ResponsesFunctionCallOutput{CallID: "c"}, `{"type":"function_call_output","call_id":"c","output":""}`},
+		{"tool result with empty parts", &ResponsesFunctionCallOutput{CallID: "c", Output: "x", Content: []ResponsesPart{}}, `{"type":"function_call_output","call_id":"c","output":"x"}`},
+		// summary is required on a reasoning item, which commonly has none.
+		{"reasoning without summary", &ResponsesReasoning{ID: "rs_1", EncryptedContent: "blob"}, `{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"blob"}`},
+		{"tool choice auto", ResponsesToolChoice{Mode: "auto"}, `"auto"`},
+		{"tool choice unset", ResponsesToolChoice{}, `"auto"`},
+		{"tool choice function", ResponsesToolChoice{Mode: "function", FunctionName: "f"}, `{"type":"function","name":"f"}`},
+		// Only auto/required/none are legal bare strings; a hosted-tool mode rebuilt from canonical has lost its object.
+		{"tool choice hosted, rebuilt", ResponsesToolChoice{Mode: "file_search"}, `{"type":"file_search"}`},
+		{"custom tool keeps its definition", &ResponsesCustomTool{Name: "n", Raw: json.RawMessage(`{"name":"n","type":"custom"}`)}, `{"name":"n","type":"custom"}`},
+		{"namespace keeps its definition", &ResponsesNamespaceTool{Name: "ns", Raw: json.RawMessage(`{"name":"ns","type":"namespace"}`)}, `{"name":"ns","type":"namespace"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(tc.v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) != tc.want {
+				t.Errorf("got  %s\nwant %s", b, tc.want)
 			}
 		})
 	}
 }
 
-func TestResponsesParseResponse_ToolCall(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":         "resp_02",
-		"object":     "response",
-		"created_at": int64(1700000001),
-		"model":      "gpt-5",
-		"status":     "completed",
-		"output": []any{map[string]any{
-			"type":      "function_call",
-			"id":        "fc_01",
-			"call_id":   "call_abc",
-			"name":      "search",
-			"arguments": `{"q":"golang"}`,
-			"status":    "completed",
-		}},
-		"usage": map[string]any{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-	})
-	resp, err := (ResponsesTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
+// The type an item, part, tool or annotation reports is the discriminator it writes on the wire.
+func TestResponsesReportedTypeMatchesWire(t *testing.T) {
+	reported := map[any]string{}
+	for _, v := range []ResponsesItem{&ResponsesMessage{}, &ResponsesFunctionCall{}, &ResponsesFunctionCallOutput{}, &ResponsesReasoning{}, &ResponsesCustomToolCall{}, &ResponsesCustomToolCallOutput{},
+		&ResponsesRawItem{Type: "mcp_call", Raw: json.RawMessage(`{"type":"mcp_call"}`)}} {
+		reported[v] = string(v.ResponsesItemType())
 	}
-	var foundFC bool
-	for _, item := range resp.Output {
-		if fc, ok := item.(*v1.FunctionCall); ok {
-			if fc.CallID != "call_abc" {
-				t.Errorf("call_id: %q", fc.CallID)
-			}
-			if fc.Name != "search" {
-				t.Errorf("name: %q", fc.Name)
-			}
-			foundFC = true
+	for _, v := range []ResponsesPart{&ResponsesTextPart{}, &ResponsesImagePart{}, &ResponsesFilePart{}, &ResponsesOutputTextPart{}, &ResponsesRefusalPart{},
+		&ResponsesRawPart{Type: "output_audio", Raw: json.RawMessage(`{"type":"output_audio"}`)}} {
+		reported[v] = string(v.ResponsesPartType())
+	}
+	for _, v := range []ResponsesTool{&ResponsesFunctionTool{}, &ResponsesCustomTool{}, &ResponsesNamespaceTool{}, &ResponsesRawTool{Type: "web_search", Raw: json.RawMessage(`{"type":"web_search"}`)}} {
+		reported[v] = string(v.ResponsesToolType())
+	}
+	for _, v := range []ResponsesAnnotation{&ResponsesURLCitationAnnotation{}, &ResponsesFileCitationAnnotation{}, &ResponsesRawAnnotation{Type: "file_path"}} {
+		reported[v] = v.ResponsesAnnotationType()
+	}
+	for v, want := range reported {
+		var wire struct{ Type string }
+		if err := json.Unmarshal([]byte(respMarshal(t, v)), &wire); err != nil || wire.Type != want {
+			t.Errorf("%T reports %q, writes %q (%v)", v, want, wire.Type, err)
 		}
 	}
-	if !foundFC {
-		t.Error("expected FunctionCall in output")
-	}
 }
 
-func TestResponsesParseResponse_ReasoningItem(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":         "resp_03",
-		"object":     "response",
-		"created_at": int64(1700000002),
-		"model":      "o3",
-		"status":     "completed",
-		"output": []any{
-			map[string]any{
-				"type":   "reasoning",
-				"id":     "rs_0",
-				"status": "completed",
-				"summary": []any{map[string]any{
-					"type": "summary_text",
-					"text": "Let me think step by step.",
-				}},
-			},
-			map[string]any{
-				"type":   "message",
-				"id":     "msg_0",
-				"status": "completed",
-				"role":   "assistant",
-				"content": []any{map[string]any{
-					"type": "output_text",
-					"text": "The answer is 42.",
-				}},
-			},
-		},
-		"usage": map[string]any{"input_tokens": 50, "output_tokens": 30, "total_tokens": 80},
-	})
-	resp, err := (ResponsesTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
+// Unmodeled items, parts, annotations and tool-choice objects re-encode byte for byte.
+func TestResponsesWireVerbatimRoundTrip(t *testing.T) {
+	decodeItem := func(b []byte) (any, error) { return responsesUnmarshalItem(b, false) }
+	decodeTool := func(b []byte) (any, error) { return responsesUnmarshalTool(b) }
+	decodeChoice := func(b []byte) (any, error) {
+		var c ResponsesToolChoice
+		return c, json.Unmarshal(b, &c)
 	}
-	if len(resp.Output) != 2 {
-		t.Fatalf("output len: %d", len(resp.Output))
+	cases := []struct {
+		name   string
+		in     string
+		decode func([]byte) (any, error)
+	}{
+		{"hosted-tool item", `{"type":"mcp_call","id":"mcp_0","name":"lookup","arguments":"{}","output":"ok"}`, decodeItem},
+		{"unmodeled part and annotation", `{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c"}],"logprobs":[{"token":"x","logprob":-0.5}]},{"type":"output_audio","data":"UklGRg==","transcript":"hi"}]}`, decodeItem},
+		{"custom tool", `{"name":"note","type":"custom"}`, decodeTool},
+		{"namespace tool", `{"name":"ns","type":"namespace","tools":[]}`, decodeTool},
+		{"mcp tool choice", `{"type":"mcp","server_label":"docs","name":"search"}`, decodeChoice},
+		{"required", `"required"`, decodeChoice},
+		{"hosted tool choice", `{"type":"file_search"}`, decodeChoice},
+		{"allowed_tools choice", `{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}`, decodeChoice},
 	}
-	if _, ok := resp.Output[0].(*v1.Reasoning); !ok {
-		t.Errorf("output[0] is %T, want *v1.Reasoning", resp.Output[0])
-	}
-	if _, ok := resp.Output[1].(*v1.Message); !ok {
-		t.Errorf("output[1] is %T, want *v1.Message", resp.Output[1])
-	}
-}
-
-func TestResponsesParseResponse_Refusal(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":         "resp_ref",
-		"object":     "response",
-		"created_at": int64(1700000003),
-		"model":      "gpt-5",
-		"status":     "completed",
-		"output": []any{map[string]any{
-			"type":   "message",
-			"id":     "msg_0",
-			"status": "completed",
-			"role":   "assistant",
-			"content": []any{map[string]any{
-				"type":    "refusal",
-				"refusal": "I cannot help with that.",
-			}},
-		}},
-		"usage": map[string]any{"input_tokens": 5, "output_tokens": 8, "total_tokens": 13},
-	})
-	resp, err := (ResponsesTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Output) == 0 {
-		t.Fatal("expected output items")
-	}
-	msg, ok := resp.Output[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	// Refusal part maps to OutputTextPart (canonical rule 9).
-	if len(msg.Content) == 0 {
-		t.Error("expected refusal text in content")
-	}
-	tp, ok := msg.Content[0].(*v1.OutputTextPart)
-	if !ok {
-		t.Fatalf("content[0] is %T", msg.Content[0])
-	}
-	if tp.Text != "I cannot help with that." {
-		t.Errorf("refusal text: %q", tp.Text)
-	}
-}
-
-func TestResponsesParseResponse_UsageDetails(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":         "resp_u",
-		"object":     "response",
-		"created_at": int64(1700000000),
-		"model":      "gpt-5",
-		"status":     "completed",
-		"output":     []any{},
-		"usage": map[string]any{
-			"input_tokens":          200,
-			"output_tokens":         100,
-			"total_tokens":          300,
-			"input_tokens_details":  map[string]any{"cached_tokens": 150},
-			"output_tokens_details": map[string]any{"reasoning_tokens": 40},
-		},
-	})
-	resp, err := (ResponsesTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Usage) == 0 {
-		t.Fatal("usage is nil")
-	}
-	// Responses input_tokens=200 includes cached=150; canonical "input"
-	// is non-cached only. Sum gives 200 back.
-	if resp.Usage["input"] != 50 {
-		t.Errorf("non-cached input: %d", resp.Usage["input"])
-	}
-	if resp.Usage["cache_read"] != 150 {
-		t.Errorf("cache_read: %d", resp.Usage["cache_read"])
-	}
-	if resp.Usage["reasoning"] != 40 {
-		t.Errorf("reasoning: %d", resp.Usage["reasoning"])
-	}
-}
-
-// --- SerializeResponse ---
-
-func TestResponsesSerializeResponse_SimpleText(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "resp_01",
-		Model:        "gpt-5",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
-		Output: []v1.Item{
-			&v1.Message{
-				ID:      "msg_0",
-				Role:    v1.RoleAssistant,
-				Status:  v1.StatusCompleted,
-				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello!"}},
-			},
-		},
-		Usage: usage.Tokens{"input": 10, "output": 5},
-	}
-	req := &v1.Request{Model: v1.ModelRefs{"gpt-5"}}
-	b, err := (ResponsesTranslator{}).SerializeResponse(resp, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	if m["object"] != "response" {
-		t.Errorf("object: %v", m["object"])
-	}
-	if m["status"] != "completed" {
-		t.Errorf("status: %v", m["status"])
-	}
-	output, ok := m["output"].([]any)
-	if !ok || len(output) != 1 {
-		t.Fatalf("output: %v", m["output"])
-	}
-}
-
-func TestResponsesSerializeResponse_RequestEchoFields(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "resp_echo",
-		Model:        "gpt-5",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
-	}
-	req := &v1.Request{
-		Model:        v1.ModelRefs{"gpt-5"},
-		Instructions: "be helpful",
-		User:         "user-123",
-		Metadata:     map[string]string{"k": "v"},
-		ModelConfig: map[string]*v1.ModelOpts{
-			"gpt-5": {
-				Sampling: &v1.SamplingParams{
-					Temperature: floatPtr(0.7),
-				},
-			},
-		},
-	}
-	b, err := (ResponsesTranslator{}).SerializeResponse(resp, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	// Spec requires echo fields on the response.
-	if m["instructions"] != "be helpful" {
-		t.Errorf("instructions: %v", m["instructions"])
-	}
-}
-
-func TestResponsesSerializeResponse_NilRequestAllowed(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "resp_nil",
-		Model:        "gpt-5",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
-	}
-	_, err := (ResponsesTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatalf("unexpected error with nil req: %v", err)
-	}
-}
-
-func TestResponsesSerializeResponse_IncompleteStatus(t *testing.T) {
-	resp := &v1.Response{
-		ID:                "resp_inc",
-		Model:             "gpt-5",
-		Status:            v1.StatusIncomplete,
-		FinishReason:      v1.FinishReasonLength,
-		IncompleteDetails: &v1.IncompleteDetails{Reason: "max_output_tokens"},
-	}
-	b, err := (ResponsesTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	if m["status"] != "incomplete" {
-		t.Errorf("status: %v", m["status"])
-	}
-}
-
-// --- ParseResponse / SerializeResponse round-trip ---
-
-func TestResponsesSerializeResponse_ToolCallOutput(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "resp_fc",
-		Model:        "gpt-5",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonToolCalls,
-		Output: []v1.Item{
-			&v1.FunctionCall{
-				ID:        "fc_0",
-				CallID:    "call_abc",
-				Name:      "search",
-				Arguments: `{"q":"golang"}`,
-				Status:    v1.StatusCompleted,
-			},
-		},
-	}
-	b, err := (ResponsesTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	// Responses has no finish_reason field; tool_calls is conveyed by
-	// status=completed + a function_call output item.
-	if _, ok := m["finish_reason"]; ok {
-		t.Errorf("finish_reason must not appear on a Responses body: %v", m["finish_reason"])
-	}
-	if m["status"] != "completed" {
-		t.Errorf("status: %v", m["status"])
-	}
-	output := m["output"].([]any)
-	if len(output) != 1 {
-		t.Fatalf("output len: %d", len(output))
-	}
-	item := output[0].(map[string]any)
-	if item["type"] != "function_call" {
-		t.Errorf("item type: %v", item["type"])
-	}
-}
-
-func TestResponsesRoundTrip_Response(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":         "resp_rt",
-		"object":     "response",
-		"created_at": int64(1700000000),
-		"model":      "gpt-5",
-		"status":     "completed",
-		"output": []any{map[string]any{
-			"type":   "message",
-			"id":     "msg_0",
-			"status": "completed",
-			"role":   "assistant",
-			"content": []any{map[string]any{
-				"type": "output_text",
-				"text": "Round trip.",
-			}},
-		}},
-		"usage": map[string]any{"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
-	})
-
-	tr := ResponsesTranslator{}
-	req := &v1.Request{Model: v1.ModelRefs{"gpt-5"}}
-	resp, err := tr.ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b2, err := tr.SerializeResponse(resp, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b2)
-	if m["status"] != "completed" {
-		t.Errorf("status: %v", m["status"])
-	}
-	output := m["output"].([]any)
-	if len(output) != 1 {
-		t.Fatalf("output len: %d", len(output))
-	}
-}
-
-// --- NewToCanonicalStream (Responses → canonical) ---
-
-// encrypted_content round-trips through ProviderData.
-func TestResponsesParseResponse_EncryptedContentRoundTrip(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":            "resp_enc",
-		"object":        "response",
-		"created_at":    1000,
-		"model":         "o1",
-		"status":        "completed",
-		"finish_reason": "stop",
-		"output": []any{map[string]any{
-			"type":              "reasoning",
-			"id":                "rs_abc",
-			"status":            "completed",
-			"encrypted_content": "ENCBLOB",
-			"summary":           []any{map[string]any{"text": "the answer is 42"}},
-		}},
-	})
-	resp, err := (ResponsesTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Output) != 1 {
-		t.Fatalf("output len: %d", len(resp.Output))
-	}
-	r, ok := resp.Output[0].(*v1.Reasoning)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	if len(r.ProviderData) == 0 {
-		t.Fatal("ProviderData must not be empty when encrypted_content is present")
-	}
-	var pd struct {
-		EncryptedContent string `json:"encrypted_content"`
-	}
-	if err := json.Unmarshal(r.ProviderData, &pd); err != nil {
-		t.Fatalf("ProviderData unmarshal: %v", err)
-	}
-	if pd.EncryptedContent != "ENCBLOB" {
-		t.Errorf("encrypted_content: %q", pd.EncryptedContent)
-	}
-
-	// Serialize back and confirm encrypted_content is restored in the wire body.
-	req := &v1.Request{Model: v1.ModelRefs{"o1"}}
-	b, err := (ResponsesTranslator{}).SerializeResponse(resp, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wireResp struct {
-		Output []json.RawMessage `json:"output"`
-	}
-	if err := json.Unmarshal(b, &wireResp); err != nil {
-		t.Fatal(err)
-	}
-	if len(wireResp.Output) != 1 {
-		t.Fatalf("serialized output len: %d", len(wireResp.Output))
-	}
-	var wireItem struct {
-		EncryptedContent string `json:"encrypted_content"`
-	}
-	if err := json.Unmarshal(wireResp.Output[0], &wireItem); err != nil {
-		t.Fatal(err)
-	}
-	if wireItem.EncryptedContent != "ENCBLOB" {
-		t.Errorf("round-tripped encrypted_content: %q", wireItem.EncryptedContent)
-	}
-}
-
-// TestResponsesParseResponse_HostedToolItemNoError locks the don't-500 fix: a
-// response carrying a hosted-tool output item (web_search_call) must parse
-// successfully — the item is dropped from canonical (no representation) but the
-// surrounding message survives. Before the fix the whole ParseResponse errored.
-func TestResponsesParseResponse_HostedToolItemNoError(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id": "resp_ws", "object": "response", "model": "gpt-5", "status": "completed",
-		"output": []any{
-			map[string]any{
-				"type": "web_search_call", "id": "ws_0", "status": "completed",
-				"action": map[string]any{"type": "search", "query": "golang"},
-			},
-			map[string]any{
-				"type": "message", "id": "msg_0", "status": "completed", "role": "assistant",
-				"content": []any{map[string]any{"type": "output_text", "text": "Found it."}},
-			},
-		},
-	})
-	resp, err := (ResponsesTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatalf("hosted-tool item must not error the parse: %v", err)
-	}
-	if len(resp.Output) != 1 {
-		t.Fatalf("output len: %d (web_search_call should drop, message should survive)", len(resp.Output))
-	}
-	if _, ok := resp.Output[0].(*v1.Message); !ok {
-		t.Fatalf("surviving item is %T, want *v1.Message", resp.Output[0])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := tc.decode([]byte(tc.in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(out) != tc.in {
+				t.Errorf("got  %s\nwant %s", out, tc.in)
+			}
+		})
 	}
 }

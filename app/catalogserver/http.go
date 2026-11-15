@@ -16,6 +16,7 @@ const (
 	// channelDataAsset names the data tarball under /channels/, where the
 	// client doesn't know the tag the file name carries.
 	channelDataAsset = "relay-catalog-data.tar.gz"
+	channelMCPAsset  = "mcp-catalog-data.tar.gz"
 )
 
 // Handler serves the catalog release API. Nothing here compresses a
@@ -23,6 +24,7 @@ const (
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /index.yaml", s.serveIndex)
+	mux.HandleFunc("GET /mcp/index.yaml", s.serveMCPIndex)
 	mux.HandleFunc("GET /releases/{tag}/{file}", s.serveRelease)
 	mux.HandleFunc("GET /channels/{channel}/latest/{file}", s.serveChannelLatest)
 	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
@@ -47,6 +49,17 @@ func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	index, etag, synced := s.index, s.indexETag, s.synced
 	s.mu.RUnlock()
+	serveIndexBytes(w, r, index, etag, synced)
+}
+
+func (s *Server) serveMCPIndex(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	index, etag, synced := s.mcpIndex, s.mcpIndexETag, s.synced
+	s.mu.RUnlock()
+	serveIndexBytes(w, r, index, etag, synced)
+}
+
+func serveIndexBytes(w http.ResponseWriter, r *http.Request, index []byte, etag string, synced bool) {
 	if !synced || index == nil {
 		http.Error(w, "index not built yet", http.StatusServiceUnavailable)
 		return
@@ -94,16 +107,21 @@ func (s *Server) serveRelease(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serveChannelLatest(w http.ResponseWriter, r *http.Request) {
 	channel, file := r.PathValue("channel"), r.PathValue("file")
+	name, isSum := strings.CutSuffix(file, ".sha256")
 	s.mu.RLock()
 	tag := s.latest[channel]
+	if name == channelMCPAsset {
+		tag = s.mcpLatest[channel]
+	}
 	s.mu.RUnlock()
-	name, isSum := strings.CutSuffix(file, ".sha256")
 	switch {
 	case tag == "":
 		http.NotFound(w, r)
 		return
 	case name == channelDataAsset:
 		name = DataAsset(tag)
+	case name == channelMCPAsset:
+		name = MCPAsset(tag)
 	case name != CatalogAsset:
 		http.NotFound(w, r)
 		return

@@ -277,6 +277,9 @@ type Status struct {
 	// repair it; the snapshot drops it so no request picks a valueless key.
 	// Load-time only — never written to the status column.
 	Unresolved *UnresolvedStatus `json:"unresolved,omitempty" yaml:"-" doc:"Set when the secret could not be read at load; the key is not routed until repaired."`
+
+	// LastUsedAt is read from its own column, never written to the status column.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty" yaml:"-" doc:"When relay last sent a request with this key, to the minute; updated about once a minute. Absent when it has not sent one."`
 }
 
 // UnresolvedStatus explains why a key's value could not be resolved.

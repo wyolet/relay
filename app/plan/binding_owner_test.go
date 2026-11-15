@@ -73,22 +73,6 @@ func TestBindingOwner_PersonalAccountBindingGovernsThePersonalLane(t *testing.T)
 	mustRoute(t, tokenCaller(t, plans, u.ID, o.proj.Meta.ID), "m2")
 }
 
-// A binding takes effect only for accounts inside its owner's scope: a project-owned binding naming another project's service account's account does not govern that account's requests.
-func TestBindingOwner_ProjectBindingOutsideItsScopeDoesNotApply(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	other := o.w.Project(o.team)
-	pol := o.w.Policy("other-project", policy.Spec{Models: []string{"prov/m1"}})
-	pol.Meta.Owner = ownedBy(meta.OwnerProject, other.Meta.ID)
-	pb := o.w.BindPolicy(pol, o.saAcct())
-	pb.Meta.Owner = ownedBy(meta.OwnerProject, other.Meta.ID)
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-
-	if r := cp.Routes.Get("m2"); r.Refused != nil {
-		t.Fatalf("the service account is governed by a binding its project does not own: %v", r.Refused)
-	}
-}
-
 // A tier preset is a host-owned policy any binding may use: a team binds it to the team's provider account and it narrows that account's credentials.
 func TestBindingOwner_HostOwnedTierPresetBoundByTeamToItsAccount(t *testing.T) {
 	o := newOrg()

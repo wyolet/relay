@@ -102,6 +102,10 @@ func (cs *cipherString) decrypt(key symmetricKey) ([]byte, error) {
 		return nil, fmt.Errorf("bitwarden: invalid ciphertext length: %d", len(cs.ct))
 	}
 
+	if cs.typ == encTypeAesCbc256B64 && len(key.macKey) != 0 {
+		// A MAC-less type is only valid under a key without a MAC key; otherwise a stripped type-2 value would pass unauthenticated.
+		return nil, errors.New("bitwarden: unauthenticated type 0 refused under a key with a MAC key")
+	}
 	if cs.typ == encTypeAesCbc256HmacSha256B64 {
 		if len(key.macKey) == 0 {
 			return nil, errors.New("bitwarden: MAC key required for type 2 decryption")

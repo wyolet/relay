@@ -2,19 +2,15 @@ package otlpreceiver_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"github.com/wyolet/relay/pkg/payload"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
-	"strings"
 	"sync"
 	"testing"
 
-	"github.com/wyolet/relay/sdk/adapters/anthropic"
-	"github.com/wyolet/relay/sdk/adapters/gemini"
-	"github.com/wyolet/relay/sdk/adapters/openai"
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/sdk/client"
 	"github.com/wyolet/relay/sdk/telemetry"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -48,29 +44,30 @@ func (s *serialized) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // TestSDKReportsMatchProxiedUsage is the acceptance test of reporting through the SDK: for the same upstream response, the usage event the receiver builds from the SDK's export carries the tokens and cost the proxied path stores, so nothing is counted twice or lost.
 func TestSDKReportsMatchProxiedUsage(t *testing.T) {
+	type tokens = map[string]int64
 	for _, tc := range []struct {
-		name       string
-		translator v1.Translator
-		body       string
-		stream     bool
-		build      func(baseURL string, opts ...client.Option) *client.Client
+		name   string
+		body   string
+		stream bool
+		build  func(baseURL string, opts ...client.Option) *client.Client
+		// What the proxied path stores for body: the canonical counts (input net of its cached part, output including reasoning) and their cost at the fixture's rate sheet.
+		tokens tokens
+		cost   int64
 	}{
-		{name: "chat completions: cached, reasoning, audio", translator: openai.CCTranslator{}, body: chatCompletionsBody, build: func(u string, o ...client.Option) *client.Client { return client.OpenAI(u, "sk-test", o...) }},
-		{name: "messages: cache read and write", translator: anthropic.AnthropicTranslator{}, body: messagesBody, build: func(u string, o ...client.Option) *client.Client { return client.Anthropic(u, "sk-test", o...) }},
-		{name: "messages stream: cache counts on message_start", translator: anthropic.AnthropicTranslator{}, body: messagesStream, stream: true, build: func(u string, o ...client.Option) *client.Client { return client.Anthropic(u, "sk-test", o...) }},
-		{name: "generate content: thoughts", translator: gemini.GeminiTranslator{}, body: generateBody, build: func(u string, o ...client.Option) *client.Client { return client.Gemini(u, "sk-test", o...) }},
+		{name: "chat completions: cached, reasoning, audio", body: chatCompletionsBody, build: func(u string, o ...client.Option) *client.Client { return client.OpenAI(u, "sk-test", o...) },
+			tokens: tokens{"input": 176, "cache_read": 1024, "audio_input": 40, "output": 300, "reasoning": 128, "audio_output": 16}, cost: 3_863_200},
+		{name: "messages: cache read and write", body: messagesBody, build: func(u string, o ...client.Option) *client.Client { return client.Anthropic(u, "sk-test", o...) },
+			tokens: tokens{"input": 90, "cache_read": 2000, "cache_creation": 500, "output": 210}, cost: 5_895_000},
+		{name: "messages stream: cache counts on message_start", body: messagesStream, stream: true, build: func(u string, o ...client.Option) *client.Client { return client.Anthropic(u, "sk-test", o...) },
+			tokens: tokens{"input": 90, "cache_read": 2000, "cache_creation": 500, "output": 210}, cost: 5_895_000},
+		{name: "generate content: thoughts", body: generateBody, build: func(u string, o ...client.Option) *client.Client { return client.Gemini(u, "sk-test", o...) },
+			tokens: tokens{"input": 200, "cache_read": 600, "output": 214, "reasoning": 64}, cost: 3_254_000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// The proxied path: relay summarises the upstream body with the binding's translator and prices it at the binding's rate sheet.
-			proxied, err := v1.ExtractSummary(tc.translator, []byte(tc.body))
-			if err != nil || len(proxied.Tokens) == 0 {
-				t.Fatalf("proxied summary: %v %v", proxied, err)
-			}
 			fx := newFixtureWith(t, fixtureOptions{reasoningRate: 3.5})
 			fx.captureContent, fx.payloads.enabled = true, true
-			wantCost, _, ok := fx.ownPrice.CostNanos(proxied.Tokens)
-			if !ok {
-				t.Fatal("proxied tokens are unpriced")
+			if got, _, ok := fx.ownPrice.CostNanos(tc.tokens); !ok || got != tc.cost {
+				t.Fatalf("the rate sheet prices %v at %d (priced %v), want %d", tc.tokens, got, ok, tc.cost)
 			}
 
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -89,10 +86,7 @@ func TestSDKReportsMatchProxiedUsage(t *testing.T) {
 			c := tc.build(upstream.URL, client.WithTelemetry(emitter))
 			req := &v1.Request{Model: v1.ModelRefs{"acme-large"}, Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "Say hello."}}}}}
 			if tc.stream {
-				s, err := c.GenerateStream(context.Background(), req)
-				if err != nil {
-					t.Fatal(err)
-				}
+				s := must(c.GenerateStream(context.Background(), req))(t)
 				for {
 					if _, err := s.Recv(); err != nil {
 						if !errors.Is(err, io.EOF) {
@@ -115,25 +109,24 @@ func TestSDKReportsMatchProxiedUsage(t *testing.T) {
 				t.Fatalf("recorded %d usage events, want 1", len(fx.events))
 			}
 			ev := fx.events[0]
-			if !reflect.DeepEqual(ev.Tokens, proxied.Tokens) {
-				t.Errorf("tokens = %v, proxied path stores %v", ev.Tokens, proxied.Tokens)
+			if diff := cmp.Diff(tc.tokens, map[string]int64(ev.Tokens)); diff != "" {
+				t.Errorf("tokens differ from what the proxied path stores (-want +got):\n%s", diff)
 			}
-			if ev.CostNanos == nil || *ev.CostNanos != wantCost {
-				t.Errorf("cost = %v, proxied path charges %d", ev.CostNanos, wantCost)
+			if ev.CostNanos == nil || *ev.CostNanos != tc.cost {
+				t.Errorf("cost = %v, proxied path charges %d", ev.CostNanos, tc.cost)
 			}
-			if ev.FinishReason != string(proxied.FinishReason) || ev.Streamed != tc.stream || ev.Status != http.StatusOK || ev.ErrorKind != "" {
+			if ev.FinishReason != "stop" || ev.Streamed != tc.stream || ev.Status != http.StatusOK || ev.ErrorKind != "" {
 				t.Errorf("finish %q streamed %v status %d error %q", ev.FinishReason, ev.Streamed, ev.Status, ev.ErrorKind)
 			}
-			// The content event collapses into the same call and its content is stored.
-			if len(fx.payloads.records) != 1 || fx.payloads.records[0].RequestID != ev.RequestID {
-				t.Fatalf("payload records = %d, want one for %s", len(fx.payloads.records), ev.RequestID)
-			}
-			var request, response map[string]json.RawMessage
-			if json.Unmarshal(fx.payloads.records[0].RequestBody, &request) != nil || json.Unmarshal(fx.payloads.records[0].ResponseBody, &response) != nil {
-				t.Fatalf("stored bodies are not JSON objects: %s / %s", fx.payloads.records[0].RequestBody, fx.payloads.records[0].ResponseBody)
-			}
-			if !strings.Contains(string(request["gen_ai.input.messages"]), "Say hello.") || !strings.Contains(string(response["gen_ai.output.messages"]), "Hello.") {
-				t.Errorf("stored content: %s / %s", fx.payloads.records[0].RequestBody, fx.payloads.records[0].ResponseBody)
+			// The content event collapses into the same call and its content is stored, the same bytes whichever provider shape carried it.
+			want := []payload.Record{{
+				RequestID: ev.RequestID, Timestamp: ev.Timestamp,
+				ProjectID: fx.project.Meta.ID, PrincipalID: fx.sa.Meta.ID, RelayKeyHash: fx.keyRow.Spec.KeyHash,
+				RequestBody:  []byte(`{"gen_ai.input.messages":[{"parts":[{"content":"Say hello.","type":"text"}],"role":"user"}]}`),
+				ResponseBody: []byte(`{"gen_ai.output.messages":[{"finish_reason":"stop","parts":[{"content":"Hello.","type":"text"}],"role":"assistant"}]}`),
+			}}
+			if diff := cmp.Diff(want, fx.payloads.records); diff != "" {
+				t.Errorf("payload records (-want +got):\n%s", diff)
 			}
 		})
 	}

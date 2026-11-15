@@ -5,73 +5,97 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/pkg/adapters"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-func buildSpec(name adapters.Name) *adapter.Spec {
-	return (&adapter.Spec{
-		Name:        name,
-		DefaultPath: "/v1/test",
-		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-	}).Build()
-}
+// stubTranslator is a translator the registry only stores, never calls.
+type stubTranslator struct{ v1.Translator }
 
-func TestRegistry_Get(t *testing.T) {
-	s := buildSpec(adapters.OpenAI)
-	reg := adapter.NewRegistry(s)
+func TestRegistry_Lookups(t *testing.T) {
+	a, b := newBearerSpec("/a"), dualAuthSpec()
+	a.Translator = stubTranslator{}
+	reg := adapter.NewRegistry(a, b)
 
-	got := reg.Spec(adapters.OpenAI)
-	if got == nil {
-		t.Fatal("expected non-nil spec for openai")
+	if specs := reg.Specs(); len(specs) != 2 || specs[0] != a || specs[1] != b {
+		t.Errorf("Specs() = %v, want the two specs in registration order", specs)
 	}
-	if got.Name != adapters.OpenAI {
-		t.Errorf("name: want openai, got %s", got.Name)
+	if reg.Spec(a.Name) != a || reg.Spec(b.Name) != b || reg.Spec(adapters.OpenAIResponses) != nil {
+		t.Error("Spec() does not return the registered spec by name, or nil for an unknown one")
 	}
-}
+	if reg.PipelineAdapter(a.Name) == nil || reg.PipelineAdapter(b.Name) == nil || reg.PipelineAdapter(adapters.OpenAIResponses) != nil {
+		t.Error("PipelineAdapter() is not set for exactly the registered names")
+	}
 
-func TestRegistry_Get_Missing(t *testing.T) {
-	reg := adapter.NewRegistry(buildSpec(adapters.OpenAI))
-	if s := reg.Spec(adapters.Anthropic); s != nil {
-		t.Errorf("expected nil for unregistered name, got %v", s)
-	}
-}
-
-func TestRegistry_PipelineAdapter(t *testing.T) {
-	reg := adapter.NewRegistry(buildSpec(adapters.OpenAI), buildSpec(adapters.Anthropic))
-	if a := reg.PipelineAdapter(adapters.OpenAI); a == nil {
-		t.Error("expected non-nil pipeline.Adapter for openai")
-	}
-	if a := reg.PipelineAdapter(adapters.Anthropic); a == nil {
-		t.Error("expected non-nil pipeline.Adapter for anthropic")
-	}
-	if a := reg.PipelineAdapter(adapters.OpenAIResponses); a != nil {
-		t.Errorf("expected nil for unregistered name, got %v", a)
-	}
-}
-
-func TestRegistry_AdapterMap(t *testing.T) {
-	reg := adapter.NewRegistry(buildSpec(adapters.OpenAI), buildSpec(adapters.Anthropic))
 	m := reg.AdapterMap()
-	if len(m) != 2 {
-		t.Errorf("map len: want 2, got %d", len(m))
+	if len(m) != 2 || m[a.Name] != reg.PipelineAdapter(a.Name) || m[b.Name] != reg.PipelineAdapter(b.Name) {
+		t.Errorf("AdapterMap() = %v, want the two registered adapters", m)
+	}
+	delete(m, a.Name)
+	if reg.PipelineAdapter(a.Name) == nil {
+		t.Error("mutating the AdapterMap() copy changed the registry")
+	}
+
+	// A spec without a translator is left out.
+	if tm := reg.TranslatorMap(); len(tm) != 1 || tm[v1.Name(a.Name)] != v1.Translator(stubTranslator{}) {
+		t.Errorf("TranslatorMap() = %v, want only %q", tm, a.Name)
 	}
 }
 
-func TestRegistry_DuplicatePanic(t *testing.T) {
+func TestRegistry_NilReceiver(t *testing.T) {
+	var reg *adapter.Registry
+	if reg.Spec(adapters.OpenAI) != nil || reg.PipelineAdapter(adapters.OpenAI) != nil {
+		t.Error("a nil registry returned a spec or an adapter")
+	}
+}
+
+func TestNewRegistry_DuplicateNamePanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic on duplicate name")
+		if r := recover(); r != "adapter.Registry: duplicate spec name openai" {
+			t.Errorf("panic = %v", r)
 		}
 	}()
-	adapter.NewRegistry(buildSpec(adapters.OpenAI), buildSpec(adapters.OpenAI))
+	adapter.NewRegistry(newBearerSpec("/a"), newBearerSpec("/b"))
 }
 
-func TestRegistry_Specs(t *testing.T) {
-	reg := adapter.NewRegistry(
-		buildSpec(adapters.OpenAI),
-		buildSpec(adapters.Anthropic),
-		buildSpec(adapters.OpenAIResponses),
-	)
-	if len(reg.Specs()) != 3 {
-		t.Errorf("want 3 specs, got %d", len(reg.Specs()))
+func TestRegistry_AssertWired(t *testing.T) {
+	// wired registers every upstream-binding name, then applies edit to the list.
+	wired := func(edit func([]*adapter.Spec) []*adapter.Spec) *adapter.Registry {
+		var specs []*adapter.Spec
+		for _, n := range adapters.UpstreamBindingNames() {
+			specs = append(specs, (&adapter.Spec{Name: n}).Build())
+		}
+		return adapter.NewRegistry(edit(specs)...)
+	}
+	inbound := []adapter.InboundPath{{Path: "/v1/x"}}
+	first := adapters.UpstreamBindingNames()[0]
+	tests := []struct {
+		name    string
+		edit    func([]*adapter.Spec) []*adapter.Spec
+		wantErr string
+	}{
+		{"every binding registered", func(s []*adapter.Spec) []*adapter.Spec { return s }, ""},
+		{"a binding without a spec", func(s []*adapter.Spec) []*adapter.Spec { return s[1:] },
+			`adapter.Registry: upstream binding "` + string(first) + `" has no registered spec`},
+		{"inbound spec without a translator", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "extra", InboundPaths: inbound}).Build())
+		}, `adapter.Registry: inbound spec "extra" has no canonical translator`},
+		{"inbound byte-pass spec needs no translator", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "extra", InboundPaths: inbound, BytePass: true}).Build())
+		}, ""},
+		{"inbound spec with a translator", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "extra", InboundPaths: inbound, Translator: stubTranslator{}}).Build())
+		}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := wired(tt.edit).AssertWired()
+			var got string
+			if err != nil {
+				got = err.Error()
+			}
+			if got != tt.wantErr {
+				t.Errorf("AssertWired = %q, want %q", got, tt.wantErr)
+			}
+		})
 	}
 }

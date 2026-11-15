@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -124,14 +125,18 @@ func TestWriteError(t *testing.T) {
 	if err := writeError(&pgconn.PgError{Code: sqlstateNotPrimary, Message: "m"}); !errors.Is(err, keyring.ErrNotPrimary) {
 		t.Fatalf("not primary: %v", err)
 	}
-	for _, code := range []string{sqlstateKeyMismatch, sqlstateLegacyWrite} {
-		if err := writeError(&pgconn.PgError{Code: code}); err == nil || errors.Is(err, keyring.ErrNotPrimary) {
-			t.Fatalf("%s: %v", code, err)
+	for code, want := range map[string]string{
+		sqlstateNotPrimary:  keyring.ErrNotPrimary.Error() + ": m",
+		sqlstateKeyMismatch: "secret_values refused the row: m",
+		sqlstateLegacyWrite: "the database refuses legacy-shape secret writes: m",
+	} {
+		if err := writeError(&pgconn.PgError{Code: code, Message: "m"}); err.Error() != want || errors.Is(err, keyring.ErrNotPrimary) != (code == sqlstateNotPrimary) {
+			t.Errorf("%s: %v, want %s", code, err, want)
 		}
 	}
-	plain := errors.New("x")
-	if writeError(plain) != plain {
-		t.Fatal("unrelated error was rewritten")
+	plain, other := errors.New("x"), &pgconn.PgError{Code: "23505", Message: "m"}
+	if writeError(plain) != plain || writeError(other) != error(other) {
+		t.Error("an unrelated error was rewritten")
 	}
 }
 
@@ -156,11 +161,17 @@ func TestPeriodicReloadWakesTheRewriter(t *testing.T) {
 }
 
 func TestNewRefusesDuplicateMasterKeys(t *testing.T) {
-	if _, err := New(nil, [][]byte{testKey, testKey}); err == nil {
-		t.Fatal("the same master key twice was accepted")
-	}
-	if _, err := New(nil, [][]byte{testKey[:16]}); err == nil {
-		t.Fatal("a short master key was accepted")
+	for name, tc := range map[string]struct {
+		keys [][]byte
+		want string
+	}{
+		"the same master key twice": {[][]byte{testKey, testKey}, "secret: master keys: kek: duplicate KEK id 45a2e90451e92dddbdc15782506f30bc"},
+		"a short master key":        {[][]byte{testKey[:16]}, "secret: master key 1: local: key must be 32 bytes, got 16"},
+	} {
+		_, err := New(nil, tc.keys)
+		if got := fmt.Sprint(err); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %s", name, got, tc.want)
+		}
 	}
 	b, err := New(nil, nil)
 	if err != nil {

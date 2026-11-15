@@ -21,9 +21,22 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		// Model is not part of the Gemini body (it lives in the URL), but we
 		// accept it as a convenience field so tests can round-trip cleanly.
 		Model string `json:"model"`
+
+		SystemInstructionSnake json.RawMessage `json:"system_instruction"`
+		GenerationConfigSnake  json.RawMessage `json:"generation_config"`
+		ToolConfigSnake        json.RawMessage `json:"tool_config"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("gemini parse_request: %w", err)
+	}
+	if wire.SystemInstruction == nil {
+		wire.SystemInstruction = wire.SystemInstructionSnake
+	}
+	if wire.GenerationConfig == nil {
+		wire.GenerationConfig = wire.GenerationConfigSnake
+	}
+	if wire.ToolConfig == nil {
+		wire.ToolConfig = wire.ToolConfigSnake
 	}
 
 	req := &v1.Request{}
@@ -45,6 +58,7 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		if err := json.Unmarshal(wire.GenerationConfig, &gc); err != nil {
 			return nil, fmt.Errorf("gemini parse_request: generationConfig: %w", err)
 		}
+		gc.fillFromSnakeCase()
 		sp := &v1.SamplingParams{}
 		hasSampling := false
 		if gc.Temperature != nil {
@@ -83,12 +97,13 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			opts.Sampling = sp
 			hasOpts = true
 		}
+		// canonical: thinkingBudget 0 (off) and -1 (dynamic) dropped — canonical has no "off" or "dynamic" that is safe across models and vendors (effort "none" is a 400 on several), and 2.5 Flash-Lite thinks only when sent -1.
 		if gc.ThinkingConfig != nil && gc.ThinkingConfig.ThinkingBudget > 0 {
 			rc := &v1.ReasoningConfig{BudgetTokens: &gc.ThinkingConfig.ThinkingBudget}
 			opts.Reasoning = rc
 			hasOpts = true
 		}
-		if f := geminiResponseFormat(gc.ResponseMIMEType, gc.ResponseSchema); f != nil {
+		if f := geminiResponseFormat(gc.ResponseMIMEType, geminiSchema(gc.ResponseJSONSchema, gc.ResponseSchema)); f != nil {
 			opts.Output = &v1.OutputConfig{Format: f}
 			hasOpts = true
 		}
@@ -101,8 +116,9 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			if err := json.Unmarshal(rawTool, &gt); err != nil {
 				return nil, fmt.Errorf("gemini parse_request: tool: %w", err)
 			}
+			gt.fillFromSnakeCase()
 			for _, fd := range gt.FunctionDeclarations {
-				schema := fd.Parameters
+				schema := geminiSchema(fd.ParametersJSONSchema, fd.Parameters)
 				if schema == nil {
 					schema = json.RawMessage(`{}`)
 				}
@@ -115,8 +131,11 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		}
 		if len(wire.ToolConfig) > 0 && string(wire.ToolConfig) != "null" {
 			var tcWire toolConfig
-			if err := json.Unmarshal(wire.ToolConfig, &tcWire); err == nil && tcWire.FunctionCallingConfig != nil {
-				tc.Choice = geminiToolModeToChoice(tcWire.FunctionCallingConfig)
+			if err := json.Unmarshal(wire.ToolConfig, &tcWire); err == nil {
+				tcWire.fillFromSnakeCase()
+				if tcWire.FunctionCallingConfig != nil {
+					tc.Choice = geminiToolModeToChoice(tcWire.FunctionCallingConfig)
+				}
 			}
 		}
 		req.Tools = tc
@@ -136,6 +155,14 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	req.Input = items
 
 	return req, nil
+}
+
+// geminiSchema picks the JSON Schema form when set, else the OpenAPI-subset form; the API takes only one of the pair. Canonical keeps no record of which form arrived, so SerializeRequest writes either back as JSON Schema, which also accepts the OpenAPI form's type names and nullable.
+func geminiSchema(jsonSchema, openAPI json.RawMessage) json.RawMessage {
+	if len(jsonSchema) > 0 && string(jsonSchema) != "null" {
+		return jsonSchema
+	}
+	return openAPI
 }
 
 // geminiResponseFormat inverts the serializer's json_object / json_schema mapping.
@@ -204,9 +231,12 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 		if err := json.Unmarshal(raw, &c); err != nil {
 			return nil, err
 		}
+		for i := range c.Parts {
+			c.Parts[i].fillFromSnakeCase()
+		}
 		switch c.Role {
-		case "user":
-			// user may have text parts or functionResponse parts
+		default:
+			// Any role but model reads as user, as the API reads a content without one.
 			var textParts []v1.Part
 			hasFunctionResponse := false
 			for _, p := range c.Parts {
@@ -252,9 +282,19 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 			}
 
 		case "model":
+			turnStart := len(items)
 			var textParts []v1.Part
+			var textSig json.RawMessage
+			// Text is flushed before each call or thought so items keep wire order, and after a signed part so the signature stays on it.
+			flushText := func() {
+				if len(textParts) > 0 {
+					items = append(items, &v1.Message{Role: v1.RoleAssistant, Content: textParts, ProviderData: textSig})
+					textParts, textSig = nil, nil
+				}
+			}
 			for _, p := range c.Parts {
 				if p.FunctionCall != nil {
+					flushText()
 					args := "{}"
 					if len(p.FunctionCall.Args) > 0 {
 						args = string(p.FunctionCall.Args)
@@ -272,31 +312,32 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 						fc.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
 					}
 					items = append(items, fc)
-				} else if p.Text != "" && p.Thought {
-					r := &v1.Reasoning{Content: p.Text, Summary: []v1.SummaryText{{Text: p.Text}}}
+				} else if p.Thought && (p.Text != "" || p.ThoughtSignature != "") {
+					flushText()
+					r := &v1.Reasoning{Content: p.Text}
+					if p.Text != "" {
+						r.Summary = []v1.SummaryText{{Text: p.Text}}
+					}
 					if p.ThoughtSignature != "" {
 						r.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
 					}
 					items = append(items, r)
-				} else if p.Text != "" {
+				} else if !p.Thought && p.Text != "" {
 					textParts = append(textParts, &v1.OutputTextPart{Text: p.Text})
+					if p.ThoughtSignature != "" {
+						textSig = thoughtSignatureJSON(p.ThoughtSignature)
+						flushText()
+					}
+				} else if !p.Thought && p.ThoughtSignature != "" && p.InlineData == nil && p.FileData == nil {
+					if len(textParts) > 0 {
+						textSig = emptyPartSignatureJSON(p.ThoughtSignature)
+						flushText()
+					} else if !signLastItem(items[turnStart:], p.ThoughtSignature) {
+						items = append(items, &v1.Reasoning{ProviderData: emptyPartSignatureJSON(p.ThoughtSignature)})
+					}
 				}
 			}
-			if len(textParts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleAssistant, Content: textParts})
-			}
-
-		default:
-			// Unknown roles: treat as user.
-			var textParts []v1.Part
-			for _, p := range c.Parts {
-				if p.Text != "" {
-					textParts = append(textParts, &v1.TextPart{Text: p.Text})
-				}
-			}
-			if len(textParts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleUser, Content: textParts})
-			}
+			flushText()
 		}
 	}
 	return items, nil
@@ -314,9 +355,12 @@ func geminiToolModeToChoice(cfg *functionCallingConfig) *v1.ToolChoice {
 		if len(cfg.AllowedFunctionNames) == 1 {
 			return &v1.ToolChoice{Mode: "function", FunctionName: cfg.AllowedFunctionNames[0]}
 		}
-		return &v1.ToolChoice{Mode: "required"}
+		return &v1.ToolChoice{Mode: "required", Allowed: cfg.AllowedFunctionNames}
 	case "NONE":
 		return &v1.ToolChoice{Mode: "none"}
+	case "VALIDATED":
+		// canonical: VALIDATED's constrained decoding dropped — canonical has no per-choice decoding switch.
+		return &v1.ToolChoice{Mode: "auto", Allowed: cfg.AllowedFunctionNames}
 	default:
 		return &v1.ToolChoice{Mode: "auto"}
 	}

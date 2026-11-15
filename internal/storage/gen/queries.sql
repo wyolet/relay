@@ -5,7 +5,7 @@ SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_
 SELECT id, name, display_name, metadata, spec, models, created_at, updated_at, resource_version FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets ORDER BY name;
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version, last_used_at FROM secrets ORDER BY name;
 
 -- name: ListStoredSecretsForRotation :many
 SELECT id, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE value_kind = 'stored' ORDER BY id;
@@ -282,17 +282,29 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR rate_limits.resource_vers
 -- name: DeleteProvider :exec
 DELETE FROM providers WHERE id = $1;
 
+-- name: DeleteProviderAtVersion :execrows
+DELETE FROM providers WHERE id = $1 AND resource_version = $2;
+
 -- name: DeletePolicy :exec
 DELETE FROM policies WHERE id = $1;
+
+-- name: DeletePolicyAtVersion :execrows
+DELETE FROM policies WHERE id = $1 AND resource_version = $2;
 
 -- name: DeleteModel :exec
 DELETE FROM models WHERE id = $1;
 
+-- name: DeleteModelAtVersion :execrows
+DELETE FROM models WHERE id = $1 AND resource_version = $2;
+
 -- name: DeleteRateLimit :exec
 DELETE FROM rate_limits WHERE id = $1;
 
+-- name: DeleteRateLimitAtVersion :execrows
+DELETE FROM rate_limits WHERE id = $1 AND resource_version = $2;
+
 -- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys ORDER BY name;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id, last_used_at FROM relay_keys ORDER BY name;
 
 -- name: UpsertRelayKey :execrows
 INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, account_id, metadata, spec, updated_at)
@@ -335,6 +347,21 @@ UPDATE relay_keys
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE id = $1;
 
+-- name: TouchRelayKeysLastUsed :exec
+-- Ids deleted since they were used match no row. Times only move forward, so pods flushing at once keep the later one; a row already as late is skipped and writes no tuple. The triggers ignore a change to last_used_at alone.
+UPDATE relay_keys AS k
+   SET last_used_at = GREATEST(COALESCE(k.last_used_at, u.used_at), u.used_at)
+  FROM (SELECT unnest(@ids::text[]) AS id, unnest(@used_at::timestamptz[]) AS used_at) u
+ WHERE k.id = u.id
+   AND (k.last_used_at IS NULL OR k.last_used_at < u.used_at);
+
+-- name: TouchHostKeysLastUsed :exec
+UPDATE secrets AS s
+   SET last_used_at = GREATEST(COALESCE(s.last_used_at, u.used_at), u.used_at)
+  FROM (SELECT unnest(@ids::text[]) AS id, unnest(@used_at::timestamptz[]) AS used_at) u
+ WHERE s.id = u.id
+   AND (s.last_used_at IS NULL OR s.last_used_at < u.used_at);
+
 -- ── app/ arch (migration 0009) ───────────────────────────────────────────────
 
 -- name: ListHosts :many
@@ -353,6 +380,9 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR hosts.resource_version = 
 
 -- name: DeleteHost :exec
 DELETE FROM hosts WHERE id = $1;
+
+-- name: DeleteHostAtVersion :execrows
+DELETE FROM hosts WHERE id = $1 AND resource_version = $2;
 
 -- ── pricing (migration 0010) ─────────────────────────────────────────────────
 
@@ -373,6 +403,9 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR pricings.resource_version
 
 -- name: DeletePricing :exec
 DELETE FROM pricings WHERE id = $1;
+
+-- name: DeletePricingAtVersion :execrows
+DELETE FROM pricings WHERE id = $1 AND resource_version = $2;
 
 -- name: ListPricingModels :many
 SELECT pricing_id, model_id, position FROM pricing_models ORDER BY pricing_id, position;
@@ -408,6 +441,20 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR host_bindings.resource_ve
 -- name: DeleteHostBinding :exec
 DELETE FROM host_bindings WHERE id = $1;
 
+-- name: DeleteHostBindingAtVersion :execrows
+DELETE FROM host_bindings WHERE id = $1 AND resource_version = $2;
+
+-- name: AnyCatalogDetached :one
+-- Whether a catalog release left any row detached; the follower asks on
+-- every poll before it runs a prune.
+SELECT EXISTS (SELECT 1 FROM host_bindings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM pricings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM models WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM policies WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM rate_limits WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM hosts WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM providers WHERE metadata->>'catalogDetachedAt' IS NOT NULL);
+
 -- name: GetProvider :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers WHERE id = $1;
 
@@ -418,7 +465,7 @@ SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM models WHERE id = $1;
 
 -- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version, last_used_at FROM secrets WHERE id = $1;
 
 -- name: GetRateLimit :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM rate_limits WHERE id = $1;
@@ -433,7 +480,7 @@ UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pricings WHERE id = $1;
 
 -- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys WHERE id = $1;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id, last_used_at FROM relay_keys WHERE id = $1;
 
 -- name: GetPricingModels :many
 SELECT pricing_id, model_id, position FROM pricing_models WHERE pricing_id = $1 ORDER BY position;
@@ -498,7 +545,7 @@ ON CONFLICT (kind, resource_id) DO UPDATE SET
     patch = EXCLUDED.patch,
     updated_at = NOW();
 
--- name: DeleteOverlay :exec
+-- name: DeleteOverlay :execrows
 DELETE FROM overlays WHERE kind = $1 AND resource_id = $2;
 
 -- name: ListUserIDsIn :many

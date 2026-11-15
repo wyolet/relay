@@ -107,12 +107,12 @@ func wantErr(t *testing.T, what string, err, want error) {
 
 func TestNewRequiresStoresAndGrants(t *testing.T) {
 	s := memstore.New().Stores()
-	if _, err := directory.New(directory.Config{Stores: s}); err == nil {
-		t.Fatal("no grant checker accepted")
+	if d, err := directory.New(directory.Config{Stores: s}); err == nil || err.Error() != "directory: a grant checker is required" || d != nil {
+		t.Fatalf("New without a grant checker = %v, %v", d, err)
 	}
 	s.Roles = nil
-	if _, err := directory.New(directory.Config{Stores: s, Grants: &grants{}}); err == nil {
-		t.Fatal("missing store accepted")
+	if d, err := directory.New(directory.Config{Stores: s, Grants: &grants{}}); err == nil || err.Error() != "directory: every store is required" || d != nil {
+		t.Fatalf("New without the role store = %v, %v", d, err)
 	}
 	h := newHarness(t)
 	if h.d.Stores().Users == nil {

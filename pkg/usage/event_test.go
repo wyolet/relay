@@ -105,5 +105,3 @@ func TestEvent_UnpricedVsZeroCostJSON(t *testing.T) {
 		t.Fatalf("zero-cost row lost its stamp: %s → %+v", zero, back)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

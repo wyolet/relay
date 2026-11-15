@@ -97,19 +97,17 @@ func ccToolContentToOutput(callID string, raw json.RawMessage) (*v1.FunctionCall
 
 // ccAssistantMessageToItem converts a CC assistant message to canonical items.
 // Text content → Message item. Tool calls → FunctionCall items. Refusal → Message
-// with finish_reason="refusal" (set on response, not here).
-func ccAssistantMessageToItem(msg *ChatMessage) ([]v1.Item, error) {
+// with finish_reason="refusal" (set on response, not here). legacyCallID is the
+// id for a deprecated function_call on the message.
+func ccAssistantMessageToItem(msg *ChatMessage, legacyCallID string) ([]v1.Item, error) {
 	var items []v1.Item
 
 	// Text content (may be absent when only tool_calls present).
-	var textContent string
-	if len(msg.Content) > 0 && string(msg.Content) != "null" {
-		textContent = ccContentToText(msg.Content)
-	}
-	refusal := msg.Refusal
+	textContent, partRefusal := ccAssistantContent(msg.Content)
+	refusal := msg.Refusal + partRefusal
 
 	hasContent := textContent != "" || refusal != ""
-	if hasContent || len(msg.ToolCalls) == 0 {
+	if hasContent || (len(msg.ToolCalls) == 0 && msg.FunctionCall == nil) {
 		m := &v1.Message{Role: v1.RoleAssistant}
 		if textContent != "" {
 			m.Content = []v1.Part{&v1.OutputTextPart{Text: textContent}}
@@ -130,7 +128,40 @@ func ccAssistantMessageToItem(msg *ChatMessage) ([]v1.Item, error) {
 			Arguments: tc.Function.Arguments,
 		})
 	}
+	if fc := msg.FunctionCall; fc != nil {
+		items = append(items, &v1.FunctionCall{
+			ID:        legacyCallID,
+			CallID:    legacyCallID,
+			Name:      fc.Name,
+			Arguments: fc.Arguments,
+		})
+	}
 	return items, nil
+}
+
+// ccAssistantContent splits an assistant content field into its text and the text of its refusal parts.
+func ccAssistantContent(raw json.RawMessage) (text, refusal string) {
+	if len(raw) == 0 || raw[0] != '[' {
+		return ccContentToText(raw), ""
+	}
+	var parts []struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Refusal string `json:"refusal"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return "", ""
+	}
+	var textBuf, refusalBuf []byte
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			textBuf = append(textBuf, p.Text...)
+		case "refusal":
+			refusalBuf = append(refusalBuf, p.Refusal...)
+		}
+	}
+	return string(textBuf), string(refusalBuf)
 }
 
 // canonicalMessageToCC converts a canonical *v1.Message to a CC ChatMessage.

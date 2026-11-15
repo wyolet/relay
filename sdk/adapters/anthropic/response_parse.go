@@ -61,26 +61,6 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			outputIndex++
 
 		case "tool_use":
-			if block.Name == structuredOutputToolName {
-				// Unwrap the forced-tool trick: emit the tool input as plain text
-				// so the caller sees a normal completed text response (rule 9 semantics).
-				text := "{}"
-				if len(block.Input) > 0 {
-					text = string(block.Input)
-				}
-				msg := &v1.Message{
-					ID:      fmt.Sprintf("msg_%d", outputIndex),
-					Status:  v1.StatusCompleted,
-					Role:    v1.RoleAssistant,
-					Content: []v1.Part{&v1.OutputTextPart{Text: text}},
-				}
-				resp.Output = append(resp.Output, msg)
-				resp.Status = v1.StatusCompleted
-				resp.FinishReason = v1.FinishReasonStop
-				resp.IncompleteDetails = nil
-				outputIndex++
-				continue
-			}
 			args := "{}"
 			if len(block.Input) > 0 {
 				args = string(block.Input)
@@ -99,10 +79,8 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			// Empty-text blocks are NOT skipped: on the 4.7+/Sonnet 5/Fable 5
 			// family display defaults to "omitted", so thinking arrives with empty
 			// text but a signature that same-model replay must echo back verbatim.
-			// Dropping the block loses the signature and the item entirely.
-			if block.Thinking == "" && block.Signature == "" {
-				continue
-			}
+			// An empty unsigned block stays too: the stream numbers it at its
+			// start, and both paths must give later items the same index.
 			// Carry the full thinking block (including signature) in ProviderData for
 			// same-vendor round-trip. Cross-vendor consumers ignore ProviderData.
 			var providerData json.RawMessage
@@ -127,7 +105,10 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			outputIndex++
 
 		case "redacted_thinking":
-			// Cannot faithfully represent; silently drop.
+			r := redactedThinkingToReasoning(block.Data)
+			r.ID, r.Status = fmt.Sprintf("rs_%d", outputIndex), v1.StatusCompleted
+			resp.Output = append(resp.Output, r)
+			outputIndex++
 
 		case "server_tool_use":
 			// server_tool_use blocks (web_search, code_execution) not modeled in v1 output.

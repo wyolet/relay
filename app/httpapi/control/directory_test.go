@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
@@ -63,7 +64,7 @@ func TestDirectoryGrantCheckProbesTheUnauditedAuthorizer(t *testing.T) {
 		t.Fatalf("binding a role with a permission the caller lacks = %v, want forbidden", err)
 	}
 	want := []string{"keys.get key team:" + team.Meta.ID, "keys.delete key team:" + team.Meta.ID}
-	if len(inner.asked) != len(want) || inner.asked[0] != want[0] || inner.asked[1] != want[1] {
+	if !slices.Equal(inner.asked, want) {
 		t.Fatalf("probes = %q, want %q", inner.asked, want)
 	}
 

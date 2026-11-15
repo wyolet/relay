@@ -1,155 +1,113 @@
 package openai
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 )
 
+// A Responses caller served by a Chat Completions upstream: request out, response back with the request's echo fields.
 func TestE2E_ResponsesViaCC(t *testing.T) {
-	// 1. Responses wire request.
-	inputBytes := mustJSON(map[string]any{
-		"model":       "gpt-4o",
-		"input":       "hello",
-		"temperature": 0.5,
-	})
-
-	// 2. Parse to canonical via ResponsesTranslator.
-	rt := ResponsesTranslator{}
-	canonReq, err := rt.ParseRequest(inputBytes)
+	rt, cc := ResponsesTranslator{}, CCTranslator{}
+	req, err := rt.ParseRequest([]byte(`{"model":"gpt-4o","input":"hello","temperature":0.5}`))
 	if err != nil {
-		t.Fatalf("ResponsesTranslator.ParseRequest: %v", err)
+		t.Fatal(err)
 	}
-	if len(canonReq.Model) != 1 || canonReq.Model[0] != "gpt-4o" {
-		t.Errorf("model: %v", canonReq.Model)
-	}
-
-	// 3. Serialize to CC wire via CCTranslator.
-	ccT := CCTranslator{}
-	ccBody, err := ccT.SerializeRequest(canonReq)
+	wire, err := cc.SerializeRequest(req)
 	if err != nil {
-		t.Fatalf("CCTranslator.SerializeRequest: %v", err)
+		t.Fatal(err)
 	}
-	ccMap := decodeMap(t, ccBody)
-	if ccMap["model"] != "gpt-4o" {
-		t.Errorf("cc model: %v", ccMap["model"])
-	}
-	// Should have messages array (not input array).
-	if _, ok := ccMap["messages"]; !ok {
-		t.Error("cc body missing messages field")
-	}
+	assertJSON(t, wire, `{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}],"temperature":0.5}`)
 
-	// 4. Mock CC response.
-	ccResp := mustJSON(map[string]any{
-		"id":      "chatcmpl-e2e",
-		"object":  "chat.completion",
-		"created": int64(1700000000),
-		"model":   "gpt-4o",
-		"choices": []any{map[string]any{
-			"index":         0,
-			"message":       map[string]any{"role": "assistant", "content": "Hello there!"},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]any{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-	})
-
-	// 5. Parse CC response to canonical.
-	canonResp, err := ccT.ParseResponse(ccResp)
+	resp, err := cc.ParseResponse([]byte(ccResponse(`{"index":0,"message":{"role":"assistant","content":"Hello there!"},"finish_reason":"stop"}`,
+		`,"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}`)))
 	if err != nil {
-		t.Fatalf("CCTranslator.ParseResponse: %v", err)
+		t.Fatal(err)
 	}
-
-	// 6. Serialize canonical → Responses wire.
-	respBytes, err := rt.SerializeResponse(canonResp, canonReq)
+	body, err := rt.SerializeResponse(resp, req)
 	if err != nil {
-		t.Fatalf("ResponsesTranslator.SerializeResponse: %v", err)
+		t.Fatal(err)
 	}
+	var got struct {
+		Object, Status, Model string
+		Temperature           float64
+		Output                []struct {
+			Type    string
+			Content []struct{ Type, Text string }
+		}
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Object != "response" || got.Status != "completed" || got.Model != "m" || got.Temperature != 0.5 ||
+		len(got.Output) != 1 || got.Output[0].Type != "message" || len(got.Output[0].Content) != 1 ||
+		got.Output[0].Content[0] != (struct{ Type, Text string }{"output_text", "Hello there!"}) ||
+		got.Usage.InputTokens != 5 || got.Usage.OutputTokens != 3 {
+		t.Errorf("Responses body: %s", body)
+	}
+}
 
-	// 7. Verify well-formed Responses response with echo fields.
-	m := decodeMap(t, respBytes)
-	if m["object"] != "response" {
-		t.Errorf("object: %v", m["object"])
+// A Responses request body as a Chat Completions upstream receives it.
+func TestE2E_ResponsesRequestToCC(t *testing.T) {
+	cases := []struct {
+		name, body, wire string
+	}{
+		{
+			name: "type-less message items",
+			body: `{"model":"gpt-4o","input":[{"role":"developer","content":"be brief"},{"role":"user","content":"hi"},
+				{"role":"assistant","content":[{"type":"output_text","text":"hello"}]},{"role":"user","content":[{"type":"input_text","text":"again"}]}]}`,
+			wire: `{"model":"gpt-4o","messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},
+				{"role":"assistant","content":"hello"},{"role":"user","content":"again"}]}`,
+		},
 	}
-	if m["status"] != "completed" {
-		t.Errorf("status: %v", m["status"])
-	}
-	if m["model"] != "gpt-4o" {
-		t.Errorf("model: %v", m["model"])
-	}
-	// Temperature was in original Responses request → should echo.
-	if m["temperature"] != 0.5 {
-		t.Errorf("temperature echo: %v", m["temperature"])
-	}
-	output, ok := m["output"].([]any)
-	if !ok || len(output) == 0 {
-		t.Errorf("output: %v", m["output"])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := ResponsesTranslator{}.ParseRequest([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := CCTranslator{}.SerializeRequest(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSON(t, wire, tc.wire)
+		})
 	}
 }
 
 func TestE2E_StreamingCCToResponses(t *testing.T) {
-	ccToCanon := (CCTranslator{}).NewToCanonicalStream()
-	canonToResp := (ResponsesTranslator{}).NewFromCanonicalStream()
-	if canonToResp == nil {
-		t.Fatal("NewFromCanonicalStream returned nil")
-	}
-
-	cs := NewComposedStream(ccToCanon, canonToResp)
-
-	ccChunks := [][]byte{
-		ccSSEChunk(map[string]any{
-			"id":      "chatcmpl-e2e",
-			"object":  "chat.completion.chunk",
-			"created": int64(1700000000),
-			"model":   "gpt-4o",
-			"choices": []any{map[string]any{
-				"index": 0,
-				"delta": map[string]any{"role": "assistant", "content": "Hello"},
-			}},
-		}),
-		ccSSEChunk(map[string]any{
-			"id":      "chatcmpl-e2e",
-			"object":  "chat.completion.chunk",
-			"created": int64(1700000000),
-			"model":   "gpt-4o",
-			"choices": []any{map[string]any{
-				"index": 0,
-				"delta": map[string]any{"content": " world"},
-			}},
-		}),
-		ccDoneChunk(),
-	}
-
-	var allFrames []ResponsesSSEFrame
-	for _, c := range ccChunks {
-		frames, err := cs.Translate(c)
+	cs := NewComposedStream(CCTranslator{}.NewToCanonicalStream(), ResponsesTranslator{}.NewFromCanonicalStream())
+	var events []string
+	var text string
+	for _, f := range []string{ccChunk(`{"role":"assistant","content":"Hello"}`), ccChunk(`{"content":" world"}`), "data: [DONE]"} {
+		frames, err := cs.Translate([]byte(f + "\n\n"))
 		if err != nil {
-			t.Fatalf("ComposedStream.Translate: %v", err)
+			t.Fatal(err)
 		}
-		allFrames = append(allFrames, frames...)
-	}
-
-	// Composed stream must produce at least response.created and response.completed.
-	var eventNames []string
-	for _, f := range allFrames {
-		eventNames = append(eventNames, f.Event)
-	}
-
-	wantContains := []string{ResponsesEventCreated, ResponsesEventCompleted}
-	for _, want := range wantContains {
-		found := false
-		for _, e := range eventNames {
-			if e == want {
-				found = true
-				break
+		for _, fr := range frames {
+			events = append(events, fr.Event)
+			if fr.Event == ResponsesEventOutputTextDone {
+				var done struct{ Text string }
+				if err := json.Unmarshal(fr.Data, &done); err != nil {
+					t.Fatal(err)
+				}
+				text = done.Text
 			}
 		}
-		if !found {
-			t.Errorf("missing Responses event %q in composed stream output %v", want, eventNames)
-		}
 	}
-
-	// Every frame must have non-empty data.
-	for i, f := range allFrames {
-		if len(f.Data) == 0 {
-			t.Errorf("frame[%d] event=%q has empty data", i, f.Event)
-		}
+	want := []string{
+		ResponsesEventCreated, ResponsesEventInProgress, ResponsesEventOutputItemAdded, ResponsesEventContentPartAdded,
+		ResponsesEventOutputTextDelta, ResponsesEventOutputTextDelta, ResponsesEventOutputTextDone,
+		ResponsesEventContentPartDone, ResponsesEventOutputItemDone, ResponsesEventCompleted,
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Errorf("events = %v\nwant     %v", events, want)
+	}
+	if text != "Hello world" {
+		t.Errorf("output_text.done text = %q, want the joined deltas", text)
 	}
 }

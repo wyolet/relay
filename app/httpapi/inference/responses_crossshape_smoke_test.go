@@ -10,11 +10,7 @@ package inference
 // covering tools, reasoning round-trip injection, usage totals, and streaming.
 
 import (
-	"io"
 	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/wyolet/relay/app/adapter"
@@ -22,7 +18,6 @@ import (
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -34,13 +29,13 @@ func buildRealCrossShapeRegistry() *adapter.Registry {
 		Name:        adapters.OpenAI,
 		DefaultPath: "/v1/chat/completions",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:  openai.CCTranslator{},
+		Translator:  productionSpec(adapters.OpenAI).Translator,
 	}).Build()
 	responses := (&adapter.Spec{
 		Name:        adapters.OpenAIResponses,
 		DefaultPath: "/v1/responses",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:  openai.ResponsesTranslator{},
+		Translator:  productionSpec(adapters.OpenAIResponses).Translator,
 		IsNativePath: func(b *binding.Binding, h *host.Host) bool {
 			return b.Spec.Adapter == adapters.OpenAI && h.Meta.Name == "openai"
 		},
@@ -66,20 +61,6 @@ func buildCrossShapeDeps(t *testing.T, cat *catalog.Catalog) Deps {
 	return d
 }
 
-func mustContain(t *testing.T, label, body, want string) {
-	t.Helper()
-	if !strings.Contains(body, want) {
-		t.Errorf("%s: missing %q\n--- body ---\n%s", label, want, body)
-	}
-}
-
-func mustNotContain(t *testing.T, label, body, notWant string) {
-	t.Helper()
-	if strings.Contains(body, notWant) {
-		t.Errorf("%s: must NOT contain %q\n--- body ---\n%s", label, notWant, body)
-	}
-}
-
 // A realistic buffered Responses upstream reply: a reasoning item (with the
 // encrypted blob), a function_call, and usage with cached + reasoning tokens.
 const responsesBufferedReply = `{"id":"resp_1","object":"response","created_at":1700000000,"model":"test-model","status":"completed","output":[` +
@@ -87,23 +68,10 @@ const responsesBufferedReply = `{"id":"resp_1","object":"response","created_at":
 	`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"get_weather","arguments":"{\"city\":\"SF\"}","status":"completed"}` +
 	`],"usage":{"input_tokens":5504,"input_tokens_details":{"cached_tokens":5120},"output_tokens":104,"output_tokens_details":{"reasoning_tokens":49},"total_tokens":5608}}`
 
-// TestCrossShape_CCtoResponses_Buffered drives a multi-turn CC request (system +
-// user + a prior assistant tool-call + tool result + tool definitions) through
-// the cross-shape chain to a Responses upstream and back.
+// A multi-turn CC request (system + user + a prior assistant tool call + tool result + tool definitions) through the cross-shape chain to a Responses upstream and back.
 func TestCrossShape_CCtoResponses_Buffered(t *testing.T) {
-	var mu sync.Mutex
-	var upstreamBody string
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		upstreamBody = string(b)
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responsesBufferedReply))
-	}))
-	defer up.Close()
-
-	cat, pr := crossShapeCatalog(t, up.URL)
+	upURL, last := answeringUpstream(t, "application/json", responsesBufferedReply)
+	cat, pr := crossShapeCatalog(t, upURL)
 	d := buildCrossShapeDeps(t, cat)
 
 	ccReq := `{"model":"test-model","messages":[` +
@@ -112,44 +80,41 @@ func TestCrossShape_CCtoResponses_Buffered(t *testing.T) {
 		`{"role":"assistant","content":"let me check","tool_calls":[{"id":"call_0","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},` +
 		`{"role":"tool","tool_call_id":"call_0","content":"72F and sunny"}` +
 		`],"tools":[{"type":"function","function":{"name":"get_weather","description":"w","parameters":{"type":"object"}}}],"stream":false}`
-
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r = withNormalContext(r, pr)
-	w := httptest.NewRecorder()
-
-	Dispatch(d, w, r, DispatchInput{
-		Inbound:   adapters.OpenAI,
-		Body:      []byte(ccReq),
-		ModelName: "test-model",
-		Stream:    false,
-	})
-
+	w := dispatch(d, pr, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(ccReq), ModelName: "test-model"})
 	if w.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
 
-	mu.Lock()
-	upReq := upstreamBody
-	mu.Unlock()
-
-	// --- the Responses request relay produced for the upstream ---
-	// Content part type is role-driven — assistant→output_text, user→input_text.
-	mustContain(t, "upstream req", upReq, `"type":"output_text","text":"let me check"`)
-	mustContain(t, "upstream req", upReq, `"type":"input_text","text":"weather in SF?"`)
-	mustContain(t, "upstream req", upReq, "72F and sunny")               // tool result carried
-	mustContain(t, "upstream req", upReq, `"call_id":"call_0"`)          // function_call_output paired
-	mustContain(t, "upstream req", upReq, `"name":"get_weather"`)        // tool definition forwarded
-	mustContain(t, "upstream req", upReq, `"store":false`)               // stateless reasoning
-	mustContain(t, "upstream req", upReq, "reasoning.encrypted_content") // include
-	mustNotContain(t, "upstream req", upReq, "stop_sequences")           // nonexistent param
-	mustNotContain(t, "upstream req", upReq, "top_k")                    // nonexistent param
-	mustNotContain(t, "upstream req", upReq, `"status"`)                 // output-only field stripped
-
-	// --- the CC response relay returned to the caller ---
-	ccResp := w.Body.String()
-	mustContain(t, "cc resp", ccResp, `"chat.completion"`)   // CC shape, not Responses
-	mustContain(t, "cc resp", ccResp, "get_weather")         // tool call surfaced
-	mustContain(t, "cc resp", ccResp, `"total_tokens":5608`) // no reasoning double-count
+	path, upReq := last()
+	if path != "/v1/responses" {
+		t.Errorf("upstream path = %q, want /v1/responses", path)
+	}
+	// Content part types follow the role, the tool result pairs with its call by call_id, the system message becomes instructions, and reasoning stays stateless (store off, encrypted content included).
+	wantJSON(t, "Responses request sent upstream", upReq, `{
+		"model": "test-model",
+		"instructions": "be helpful",
+		"input": [
+			{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "weather in SF?"}]},
+			{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "let me check", "annotations": [], "logprobs": []}]},
+			{"type": "function_call", "call_id": "call_0", "name": "get_weather", "arguments": "{}"},
+			{"type": "function_call_output", "call_id": "call_0", "output": "72F and sunny"}
+		],
+		"tools": [{"type": "function", "name": "get_weather", "description": "w", "parameters": {"type": "object"}}],
+		"store": false,
+		"include": ["reasoning.encrypted_content"]
+	}`)
+	// Reasoning tokens are a detail of the completion count, not added to the total.
+	wantJSON(t, "Chat Completions response returned", w.Body.String(), `{
+		"id": "resp_1", "object": "chat.completion", "created": 1700000000, "model": "test-model",
+		"choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+			"role": "assistant", "content": null,
+			"tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"SF\"}"}}]
+		}}],
+		"usage": {
+			"prompt_tokens": 5504, "completion_tokens": 104, "total_tokens": 5608,
+			"prompt_tokens_details": {"cached_tokens": 5120}, "completion_tokens_details": {"reasoning_tokens": 49}
+		}
+	}`)
 }
 
 // A realistic streaming Responses upstream reply (text deltas + terminal usage).
@@ -176,49 +141,33 @@ data: {"type":"response.completed","response":{"id":"resp_1","object":"response"
 
 `
 
-// TestCrossShape_CCtoResponses_Streaming drives a streaming CC request through
-// the cross-shape chain: upstream Responses SSE → canonical → CC SSE. Guards
-// the terminal event/usage and the stream flag reaching the upstream.
+// A streaming CC request through the chain: upstream Responses SSE to canonical to CC SSE, ending in the terminal chunk and [DONE].
 func TestCrossShape_CCtoResponses_Streaming(t *testing.T) {
-	var mu sync.Mutex
-	var upstreamBody string
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		upstreamBody = string(b)
-		mu.Unlock()
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, responsesStreamReply)
-	}))
-	defer up.Close()
-
-	cat, pr := crossShapeCatalog(t, up.URL)
+	upURL, last := answeringUpstream(t, "text/event-stream", responsesStreamReply)
+	cat, pr := crossShapeCatalog(t, upURL)
 	d := buildCrossShapeDeps(t, cat)
 
-	ccReq := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r = withNormalContext(r, pr)
-	w := httptest.NewRecorder()
-
-	Dispatch(d, w, r, DispatchInput{
+	w := dispatch(d, pr, DispatchInput{
 		Inbound:   adapters.OpenAI,
-		Body:      []byte(ccReq),
+		Body:      []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`),
 		ModelName: "test-model",
 		Stream:    true,
 	})
-
 	if w.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
 
-	mu.Lock()
-	upReq := upstreamBody
-	mu.Unlock()
-	mustContain(t, "upstream req", upReq, `"stream":true`) // stream flag propagates
-
-	ccOut := w.Body.String()
-	mustContain(t, "cc stream", ccOut, "chat.completion.chunk") // CC streaming shape
-	mustContain(t, "cc stream", ccOut, "Hello")                 // text deltas translated
-	mustContain(t, "cc stream", ccOut, "world")
-	mustContain(t, "cc stream", ccOut, "[DONE]") // terminal frame emitted
+	_, upReq := last()
+	wantJSON(t, "Responses request sent upstream", upReq, `{
+		"model": "test-model", "stream": true, "store": false, "include": ["reasoning.encrypted_content"],
+		"input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+	}`)
+	chunk := func(delta, finish, usage string) string {
+		return `data: {"id":"resp_1","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":` + delta + `,"finish_reason":` + finish + `}]` + usage + "}\n\n"
+	}
+	want := chunk(`{"role":"assistant"}`, "null", "") + chunk(`{"content":"Hello"}`, "null", "") + chunk(`{"content":" world"}`, "null", "") +
+		chunk(`{}`, `"stop"`, `,"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}`) + "data: [DONE]\n\n"
+	if got := string(clockFields.ReplaceAll(w.Body.Bytes(), []byte(`"$1":0`))); got != want {
+		t.Errorf("Chat Completions stream\n got %q\nwant %q", got, want)
+	}
 }

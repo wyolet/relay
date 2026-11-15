@@ -23,19 +23,11 @@ func refuseStrandingMove(ctx context.Context, d Deps, kind, id, name string, own
 	if d.Stores == nil {
 		return nil
 	}
-	var items []referenceItem
 	// A link a delete would take still strands on a move: the policy keeps
 	// pointing at a row it may no longer draw on.
-	for _, scans := range []map[string]func(context.Context, Deps, string) ([]referenceItem, error){referenceScans, droppedLinkScans} {
-		scan, ok := scans[kind]
-		if !ok {
-			continue
-		}
-		more, err := scan(ctx, d, id)
-		if err != nil {
-			return huma.Error500InternalServerError(err.Error())
-		}
-		items = append(items, more...)
+	items, err := referencesOf(ctx, d, kind, id)
+	if err != nil {
+		return huma.Error500InternalServerError(err.Error())
 	}
 	var stranded []referenceItem
 	for _, it := range items {
@@ -102,11 +94,18 @@ func refuseServiceAccountMove(existing *serviceaccount.ServiceAccount) error {
 	}
 }
 
-// guardRateLimitMove refuses an update that moves a rate limit away from the
-// policies using it.
-func guardRateLimitMove(d Deps) mutationGuard[ratelimit.RateLimit] {
+// guardRateLimitUpdate refuses an update that reaches an account whose policy
+// the caller may not set, or that moves a rate limit away from the policies
+// using it.
+func guardRateLimitUpdate(d Deps) mutationGuard[ratelimit.RateLimit] {
 	return func(ctx context.Context, action string, existing, incoming *ratelimit.RateLimit) error {
-		if action != "update" || existing.Meta.Owner == incoming.Meta.Owner {
+		if action != "update" {
+			return nil
+		}
+		if err := refuseLinkedEdit(ctx, d, "rate-limit", existing.Meta.ID); err != nil {
+			return err
+		}
+		if existing.Meta.Owner == incoming.Meta.Owner {
 			return nil
 		}
 		return refuseRateLimitMove(ctx, d, incoming)

@@ -132,11 +132,14 @@ func (p *OutputTextPart) UnmarshalJSON(data []byte) error {
 // --- Annotations ---
 
 // URLCitationAnnotation is a url_citation annotation on output text.
+// ProviderData carries the vendor's own citation for same-vendor
+// round-trip fidelity. Customers never construct it.
 type URLCitationAnnotation struct {
-	StartIndex int    `json:"start_index"`
-	EndIndex   int    `json:"end_index"`
-	URL        string `json:"url"`
-	Title      string `json:"title,omitempty"`
+	StartIndex   int             `json:"start_index"`
+	EndIndex     int             `json:"end_index"`
+	URL          string          `json:"url"`
+	Title        string          `json:"title,omitempty"`
+	ProviderData json.RawMessage `json:"provider_data,omitempty"`
 }
 
 func (*URLCitationAnnotation) isAnnotation()          {}
@@ -144,18 +147,20 @@ func (*URLCitationAnnotation) AnnotationType() string { return "url_citation" }
 
 func (a *URLCitationAnnotation) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type       string `json:"type"`
-		StartIndex int    `json:"start_index"`
-		EndIndex   int    `json:"end_index"`
-		URL        string `json:"url"`
-		Title      string `json:"title,omitempty"`
+		Type         string          `json:"type"`
+		StartIndex   int             `json:"start_index"`
+		EndIndex     int             `json:"end_index"`
+		URL          string          `json:"url"`
+		Title        string          `json:"title,omitempty"`
+		ProviderData json.RawMessage `json:"provider_data,omitempty"`
 	}
 	return json.Marshal(wire{
-		Type:       "url_citation",
-		StartIndex: a.StartIndex,
-		EndIndex:   a.EndIndex,
-		URL:        a.URL,
-		Title:      a.Title,
+		Type:         "url_citation",
+		StartIndex:   a.StartIndex,
+		EndIndex:     a.EndIndex,
+		URL:          a.URL,
+		Title:        a.Title,
+		ProviderData: a.ProviderData,
 	})
 }
 

@@ -33,7 +33,7 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	}
 
 	// Extract model-specific options.
-	if opts, ok := req.ModelConfig[model]; ok && opts != nil {
+	if opts := req.ModelOptsFor(model); opts != nil {
 		if opts.Sampling != nil {
 			s := opts.Sampling
 			out.Temperature = s.Temperature
@@ -127,6 +127,9 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cc serialize_request: %w", err)
 	}
+	if len(msgs) == 0 {
+		return nil, fmt.Errorf("cc serialize_request: %w: no messages to send", v1.ErrUnsupportedRequest)
+	}
 	out.Messages = msgs
 
 	return json.Marshal(out)
@@ -206,6 +209,9 @@ type ccToolChoice struct {
 }
 
 func ccToolChoiceFromCanonical(c *v1.ToolChoice) (json.RawMessage, error) {
+	if hasAllowedList(c) {
+		return ccAllowedChoiceFromCanonical(c)
+	}
 	if c.Mode != "function" {
 		return json.Marshal(c)
 	}
@@ -217,6 +223,12 @@ func ccToolChoiceFromCanonical(c *v1.ToolChoice) (json.RawMessage, error) {
 // ccToolChoiceToCanonical reads the CC form; the flat form is accepted too
 // since lenient clients send it.
 func ccToolChoiceToCanonical(raw json.RawMessage) (*v1.ToolChoice, error) {
+	if len(raw) > 0 && raw[0] == '{' {
+		var w ccAllowedChoice
+		if err := json.Unmarshal(raw, &w); err == nil && w.Type == "allowed_tools" {
+			return ccAllowedChoiceToCanonical(&w)
+		}
+	}
 	choice := &v1.ToolChoice{}
 	if err := json.Unmarshal(raw, choice); err != nil {
 		return nil, err
@@ -230,6 +242,17 @@ func ccToolChoiceToCanonical(raw json.RawMessage) (*v1.ToolChoice, error) {
 	return choice, nil
 }
 
+// defaultSchemaName fills the name OpenAI requires on a json_schema format; nameless schemas come from shapes without one (Anthropic output_config.format).
+const defaultSchemaName = "response"
+
+// jsonSchemaName returns the format's name, or defaultSchemaName when it has none.
+func jsonSchemaName(f *v1.Format) string {
+	if f.Name == "" {
+		return defaultSchemaName
+	}
+	return f.Name
+}
+
 // ccFormatToResponseFormat converts a canonical v1.Format to a CC ResponseFormat.
 func ccFormatToResponseFormat(f *v1.Format) (*ResponseFormat, error) {
 	switch f.Type {
@@ -239,7 +262,7 @@ func ccFormatToResponseFormat(f *v1.Format) (*ResponseFormat, error) {
 		return &ResponseFormat{Type: "json_object"}, nil
 	case "json_schema":
 		inner := map[string]any{
-			"name":   f.Name,
+			"name":   jsonSchemaName(f),
 			"schema": f.Schema,
 		}
 		if f.Description != "" {

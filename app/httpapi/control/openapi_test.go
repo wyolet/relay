@@ -2,7 +2,6 @@ package control
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -10,189 +9,169 @@ import (
 	"github.com/wyolet/relay/app/httpapi/openapitest"
 )
 
-// The UI's client is generated from this document, so it must describe every operation and field, and must not offer fields the policy model retired.
-func TestControlOpenAPIIsDocumented(t *testing.T) {
-	doc := controlDoc(t)
-	for _, p := range openapitest.Problems(doc) {
-		t.Error(p)
-	}
-}
-
-func TestControlOpenAPIHasNoRetiredFields(t *testing.T) {
-	doc := controlDoc(t)
-
-	// Names no schema may carry at all.
-	for _, name := range []string{"hostKeyIds", "rlBindings", "keySelection", "defaultPolicy", "allowMissingPolicy", "priority"} {
-		if at := openapitest.PropertyPaths(doc, name); len(at) > 0 {
-			t.Errorf("retired field %q appears at %v", name, at)
-		}
-	}
-	// Names that survive elsewhere with another meaning, but not on these schemas.
-	retiredOn := map[string][]string{
-		"PolicySpec":         {"rateLimitId", "modelIds", "policyId", "credentialIds", "budgetIds", "includeDeprecated", "payloadLoggingEnabled"},
-		"PolicyBindingSpec":  {"subjects", "projectId"},
-		"HostKeySpec":        {"policyId"},
-		"KeySpec":            {"policyId"},
-		"ServiceAccountSpec": {"policyId"},
-		"BindingSpec":        {"priority"},
-		"HostSpec":           {"policies", "policyIds"},
-		"TeamSpec":           {"budget", "budgetId", "budgetIds"},
-		"ProjectSpec":        {"budget", "budgetId", "budgetIds"},
-	}
-	for schema, fields := range retiredOn {
-		props := schemaProps(t, doc, schema)
-		for _, f := range fields {
-			if _, ok := props[f]; ok {
-				t.Errorf("%s still has retired field %q", schema, f)
-			}
-		}
-	}
-
-	kinds := enumOf(t, doc, "AccountSpec", "kind")
-	for _, k := range []string{"team", "project", "personal", "member", "service", "provider"} {
-		if !slices.Contains(kinds, k) {
-			t.Errorf("AccountSpec.kind lacks %q: %v", k, kinds)
-		}
-	}
-}
-
-func TestControlOpenAPIHasPolicyModel(t *testing.T) {
+// The UI's client is generated from this document, so it must describe every operation and field, carry the policy model, sharing and refusal surface the UI reads, and not offer fields the policy model retired.
+func TestControlOpenAPI(t *testing.T) {
 	doc := controlDoc(t)
 	paths, _ := doc["paths"].(map[string]any)
-	for _, kind := range []string{"accounts", "pools", "budgets"} {
-		for _, p := range []string{"", "/{ref}", "/by-id/{id}", "/by-id/{id}/references", "/by-id/{id}/detach", "/{ref}/keys"} {
-			if kind == "budgets" && p == "/{ref}/keys" {
-				continue
-			}
-			if _, ok := paths["/"+kind+p]; !ok {
-				t.Errorf("no path /%s%s", kind, p)
-			}
-		}
-	}
-	for _, p := range []string{"/policy-bindings", "/policy-bindings/by-id/{id}", "/policies/{ref}/models", "/hosts/{ref}/policies"} {
-		if _, ok := paths[p]; !ok {
-			t.Errorf("no path %s", p)
-		}
-	}
 
-	wantProps := map[string][]string{
-		"PolicySpec":          {"models", "poolIds", "rateLimits", "budgets"},
-		"PolicyRateLimitLink": {"rateLimitId", "models", "shared"},
-		"PolicyBudgetLink":    {"budgetId", "shared"},
-		"PolicyBindingSpec":   {"policyId", "accountIds"},
-		"HostKeySpec":         {"hostId", "accountId"},
-		"KeySpec":             {"principal", "accountId"},
-		"AccountSpec":         {"kind", "holder", "hostId", "orgId", "groupedByRelay", "payloadLogging", "closed"},
-		"PoolSpec":            {"hostId", "credentialIds", "selection"},
-		"BudgetSpec":          {"amountUsd", "period", "mode"},
-	}
-	for schema, fields := range wantProps {
-		props := schemaProps(t, doc, schema)
-		for _, f := range fields {
-			if _, ok := props[f]; !ok {
-				t.Errorf("%s lacks %q", schema, f)
-			}
+	t.Run("every operation and field is documented", func(t *testing.T) {
+		for _, p := range openapitest.Problems(doc) {
+			t.Error(p)
 		}
-	}
-	for schema, prop := range map[string]string{"PoolSpec": "selection", "BudgetSpec": "period", "Owner": "kind"} {
-		if len(enumOf(t, doc, schema, prop)) == 0 {
-			t.Errorf("%s.%s declares no enum", schema, prop)
-		}
-	}
+	})
 
-	// Deletes answer 200 with what they detached, or 409 with what blocks them.
-	del := operation(t, doc, "/pools/by-id/{id}", "delete")
-	if ref := responseRef(del, "200"); !strings.HasSuffix(ref, "/deleteDetachedBody") {
-		t.Errorf("delete 200 schema = %q", ref)
-	}
-	if ref := responseRef(del, "409"); !strings.HasSuffix(ref, "/conflictBody") {
-		t.Errorf("delete 409 schema = %q", ref)
-	}
-	if _, ok := schemaProps(t, doc, "conflictBody")["blockers"]; !ok {
-		t.Error("conflictBody has no blockers")
-	}
-}
+	t.Run("retired fields are gone", func(t *testing.T) {
+		for _, name := range []string{"hostKeyIds", "rlBindings", "keySelection", "defaultPolicy", "allowMissingPolicy", "priority"} {
+			if at := openapitest.PropertyPaths(doc, name); len(at) > 0 {
+				t.Errorf("retired field %q appears at %v", name, at)
+			}
+		}
+		// Names that survive elsewhere with another meaning, but not on these schemas.
+		for schema, fields := range map[string][]string{
+			"PolicySpec":         {"rateLimitId", "modelIds", "policyId", "credentialIds", "budgetIds", "includeDeprecated", "payloadLoggingEnabled"},
+			"PolicyBindingSpec":  {"subjects", "projectId"},
+			"HostKeySpec":        {"policyId"},
+			"KeySpec":            {"policyId"},
+			"ServiceAccountSpec": {"policyId"},
+			"HostSpec":           {"policies", "policyIds"},
+			"TeamSpec":           {"budget", "budgetId", "budgetIds"},
+			"ProjectSpec":        {"budget", "budgetId", "budgetIds"},
+		} {
+			props := schemaProps(t, doc, schema)
+			for _, f := range fields {
+				if _, ok := props[f]; ok {
+					t.Errorf("%s still has retired field %q", schema, f)
+				}
+			}
+		}
+	})
 
-// Usage and log records carry the lane account and the refusal class, the error envelope the class, and both list endpoints filter on them.
-func TestControlOpenAPIHasRefusalAndLane(t *testing.T) {
-	doc := controlDoc(t)
-	want := []string{"model_not_allowed", "host_not_reachable", "no_capacity"}
-	for _, schema := range []string{"Event", "APIErrorBody"} {
-		if got := enumOf(t, doc, schema, "refusal"); !slices.Equal(got, want) {
-			t.Errorf("%s.refusal enum = %v, want %v", schema, got, want)
-		}
-	}
-	if _, ok := schemaProps(t, doc, "Event")["lane_account_id"]; !ok {
-		t.Error("Event lacks lane_account_id")
-	}
-	for _, path := range []string{"/usage/events", "/logs"} {
-		params, _ := operation(t, doc, path, "get")["parameters"].([]any)
-		found := map[string]bool{}
-		for _, p := range params {
-			if name, _ := p.(map[string]any)["name"].(string); name != "" {
-				found[name] = true
+	t.Run("schemas carry the fields the UI reads", func(t *testing.T) {
+		for schema, fields := range map[string][]string{
+			"PolicySpec":          {"models", "poolIds", "rateLimits", "budgets"},
+			"PolicyRateLimitLink": {"rateLimitId", "models", "shared"},
+			"PolicyBudgetLink":    {"budgetId", "shared"},
+			"PolicyBindingSpec":   {"policyId", "accountIds"},
+			"HostKeySpec":         {"hostId", "accountId"},
+			"HostKeyView":         {"readOnly", "prefix"},
+			"KeySpec":             {"principal", "accountId"},
+			"AccountSpec":         {"kind", "holder", "hostId", "orgId", "groupedByRelay", "payloadLogging", "closed", "sourceAccountId", "sharedBy"},
+			"AccountShare":        {"sharedAccount", "receiver", "usage"},
+			"ShareUsage":          {"requests", "costNanos", "unpriced"},
+			"AccountShareParty":   {"kind", "id", "name"},
+			"AccountReceiver":     {"kind", "id"},
+			"AccountPolicy":       {"binding", "previousBindingId", "previousBindingDeleted"},
+			"PoolSpec":            {"hostId", "accountIds", "credentialIds", "selection"},
+			"BudgetSpec":          {"amountUsd", "period", "mode"},
+			"Event":               {"lane_account_id", "via_account_id"},
+			"conflictBody":        {"blockers"},
+			"Policy":              {"editable", "editBlockedBy"},
+			"PolicyEditBlockers":  {"accounts", "hidden"},
+			"policyInUseBody":     {"error", "blockedBy"},
+		} {
+			props := schemaProps(t, doc, schema)
+			for _, f := range fields {
+				if _, ok := props[f]; !ok {
+					t.Errorf("%s lacks %q", schema, f)
+				}
 			}
 		}
-		for _, name := range []string{"refusal", "lane_account_id"} {
-			if !found[name] {
-				t.Errorf("GET %s does not filter on %s", path, name)
-			}
-		}
-	}
-}
+	})
 
-// The sharing surface the UI is generated from: share and list operations with named schemas, the share's read fields, pools by account, and via_account_id on usage.
-func TestControlOpenAPIHasSharing(t *testing.T) {
-	doc := controlDoc(t)
-	if ref := responseRef(operation(t, doc, "/accounts/{ref}/shares", "post"), "201"); ref != "#/components/schemas/Account" {
-		t.Errorf("POST shares answers %q, want the Account schema", ref)
-	}
-	if ref := responseRef(operation(t, doc, "/accounts/{ref}/shares", "get"), "200"); ref != "#/components/schemas/AccountShares" {
-		t.Errorf("GET shares answers %q, want AccountShares", ref)
-	}
-	for schema, fields := range map[string][]string{
-		"AccountShare":      {"sharedAccount", "receiver", "usage"},
-		"ShareUsage":        {"requests", "costNanos", "unpriced"},
-		"AccountShareParty": {"kind", "id", "name"},
-		"AccountReceiver":   {"kind", "id"},
-		"AccountSpec":       {"sourceAccountId", "sharedBy"},
-		"PoolSpec":          {"accountIds", "credentialIds"},
-		"HostKeyView":       {"readOnly", "prefix"},
-		"Event":             {"via_account_id"},
-	} {
-		props := schemaProps(t, doc, schema)
-		for _, f := range fields {
-			if _, ok := props[f]; !ok {
-				t.Errorf("%s lacks %s", schema, f)
+	t.Run("closed sets are enums", func(t *testing.T) {
+		for _, tc := range []struct {
+			schema, prop string
+			want         []string
+		}{
+			{"AccountSpec", "kind", []string{"team", "project", "personal", "member", "service", "provider"}},
+			{"Event", "refusal", []string{"model_not_allowed", "host_not_reachable", "no_capacity"}},
+			{"APIErrorBody", "refusal", []string{"model_not_allowed", "host_not_reachable", "no_capacity"}},
+			{"BudgetSpec", "period", []string{"day", "week", "month"}},
+			{"BudgetSpec", "mode", []string{"hard", "alert"}},
+		} {
+			if got := enumOf(t, doc, tc.schema, tc.prop); !slices.Equal(got, tc.want) {
+				t.Errorf("%s.%s enum = %v, want %v", tc.schema, tc.prop, got, tc.want)
 			}
 		}
-	}
-	for _, path := range []string{"/usage/events", "/logs"} {
-		params, _ := operation(t, doc, path, "get")["parameters"].([]any)
-		found := false
-		for _, p := range params {
-			if name, _ := p.(map[string]any)["name"].(string); name == "via_account_id" {
-				found = true
+		for schema, prop := range map[string]string{"PoolSpec": "selection", "Owner": "kind"} {
+			if len(enumOf(t, doc, schema, prop)) == 0 {
+				t.Errorf("%s.%s declares no enum", schema, prop)
 			}
 		}
-		if !found {
-			t.Errorf("GET %s does not filter on via_account_id", path)
-		}
-	}
-}
+	})
 
-// The account pages set an account's policy through one route; its answer is a named schema with the binding the account ends up in.
-func TestControlOpenAPIHasAccountPolicy(t *testing.T) {
-	doc := controlDoc(t)
-	if ref := responseRef(operation(t, doc, "/accounts/{ref}/policy", "put"), "200"); ref != "#/components/schemas/AccountPolicy" {
-		t.Errorf("PUT account policy answers %q, want AccountPolicy", ref)
-	}
-	props := schemaProps(t, doc, "AccountPolicy")
-	for _, f := range []string{"binding", "previousBindingId", "previousBindingDeleted"} {
-		if _, ok := props[f]; !ok {
-			t.Errorf("AccountPolicy lacks %s", f)
+	t.Run("policy model routes", func(t *testing.T) {
+		want := []string{"/policy-bindings", "/policy-bindings/by-id/{id}", "/policies/{ref}/models", "/hosts/{ref}/policies", "/accounts/{ref}/keys", "/pools/{ref}/keys"}
+		for _, kind := range []string{"accounts", "pools", "budgets"} {
+			for _, p := range []string{"", "/{ref}", "/by-id/{id}", "/by-id/{id}/references", "/by-id/{id}/detach"} {
+				want = append(want, "/"+kind+p)
+			}
 		}
-	}
+		for _, p := range want {
+			if _, ok := paths[p]; !ok {
+				t.Errorf("no path %s", p)
+			}
+		}
+	})
+
+	// Deletes answer 200 with what they detached, or 409 with what blocks them; the account pages read named schemas.
+	t.Run("answers are named schemas", func(t *testing.T) {
+		for _, tc := range []struct{ path, method, code, schema string }{
+			{"/pools/by-id/{id}", "delete", "200", "deleteDetachedBody"},
+			{"/pools/by-id/{id}", "delete", "409", "conflictBody"},
+			{"/accounts/{ref}/shares", "post", "201", "Account"},
+			{"/accounts/{ref}/shares", "get", "200", "AccountShares"},
+			{"/accounts/{ref}/policy", "put", "200", "AccountPolicy"},
+			{"/policies/{ref}/duplicate", "post", "201", "Policy"},
+			{"/policies/by-id/{id}", "put", "403", "policyInUseBody"},
+			{"/rate-limits/by-id/{id}", "put", "403", "policyInUseBody"},
+			{"/budgets/by-id/{id}", "put", "403", "policyInUseBody"},
+		} {
+			if ref := responseRef(operation(t, doc, tc.path, tc.method), tc.code); ref != "#/components/schemas/"+tc.schema {
+				t.Errorf("%s %s %s answers %q, want %s", tc.method, tc.path, tc.code, ref, tc.schema)
+			}
+		}
+	})
+
+	// Create derives an omitted name, so its body is a named schema of its own; update and the answers keep the kind's schema, where name is required.
+	t.Run("create bodies are named schemas", func(t *testing.T) {
+		for _, tc := range []struct{ base, kind string }{{"/providers", "Provider"}, {"/host-keys", "HostKey"}, {"/rate-limits", "RateLimit"}} {
+			if ref := bodyRef(operation(t, doc, tc.base, "post")); ref != "#/components/schemas/"+tc.kind+"Create" {
+				t.Errorf("POST %s takes %q, want %sCreate", tc.base, ref, tc.kind)
+			}
+			if ref := responseRef(operation(t, doc, tc.base, "post"), "201"); ref != "#/components/schemas/"+tc.kind {
+				t.Errorf("POST %s answers %q, want %s", tc.base, ref, tc.kind)
+			}
+			if ref := bodyRef(operation(t, doc, tc.base+"/by-id/{id}", "put")); ref != "#/components/schemas/"+tc.kind {
+				t.Errorf("PUT %s/by-id/{id} takes %q, want %s", tc.base, ref, tc.kind)
+			}
+		}
+		comps, _ := doc["components"].(map[string]any)
+		schemas, _ := comps["schemas"].(map[string]any)
+		for name, wantName := range map[string]bool{"Metadata": true, "MetadataCreate": false} {
+			s, _ := schemas[name].(map[string]any)
+			required, _ := s["required"].([]any)
+			if slices.Contains(required, any("name")) != wantName {
+				t.Errorf("%s requires name: %v, want %v", name, !wantName, wantName)
+			}
+		}
+	})
+
+	t.Run("usage and logs filter on lane, share and refusal", func(t *testing.T) {
+		for _, path := range []string{"/usage/events", "/logs"} {
+			params, _ := operation(t, doc, path, "get")["parameters"].([]any)
+			var names []string
+			for _, p := range params {
+				name, _ := p.(map[string]any)["name"].(string)
+				names = append(names, name)
+			}
+			for _, name := range []string{"refusal", "lane_account_id", "via_account_id"} {
+				if !slices.Contains(names, name) {
+					t.Errorf("GET %s does not filter on %s", path, name)
+				}
+			}
+		}
+	})
 }
 
 func controlDoc(t *testing.T) map[string]any {
@@ -238,6 +217,15 @@ func operation(t *testing.T, doc map[string]any, path, method string) map[string
 		t.Fatalf("no %s %s", method, path)
 	}
 	return op
+}
+
+func bodyRef(op map[string]any) string {
+	b, _ := op["requestBody"].(map[string]any)
+	c, _ := b["content"].(map[string]any)
+	j, _ := c["application/json"].(map[string]any)
+	s, _ := j["schema"].(map[string]any)
+	ref, _ := s["$ref"].(string)
+	return ref
 }
 
 func responseRef(op map[string]any, code string) string {

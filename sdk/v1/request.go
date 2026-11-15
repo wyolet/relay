@@ -11,6 +11,11 @@ import (
 // future support is additive.
 var ErrMultiplexNotImplemented = errors.New("multiplex_not_implemented")
 
+// ErrUnsupportedRequest wraps a SerializeRequest error for a request the
+// upstream wire shape cannot express. The caller has to change the request,
+// so it is a client error, not a server fault.
+var ErrUnsupportedRequest = errors.New("not supported by the upstream API")
+
 const (
 	OutputModeSync   = "sync"
 	OutputModeStream = "stream"
@@ -42,6 +47,21 @@ type Request struct {
 	User       string                     `json:"user,omitempty"`
 	Metadata   map[string]string          `json:"metadata,omitempty"`
 	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
+}
+
+// ModelOptsFor returns the ModelConfig entry for model, else the sole entry,
+// else nil. The sole-entry fallback is what keeps a caller's options when
+// routing rewrites the model name the parser keyed them by.
+func (r *Request) ModelOptsFor(model string) *ModelOpts {
+	if o, ok := r.ModelConfig[model]; ok {
+		return o
+	}
+	if len(r.ModelConfig) == 1 {
+		for _, o := range r.ModelConfig {
+			return o
+		}
+	}
+	return nil
 }
 
 // MarshalJSON emits a single model as a bare JSON string and multiple as an

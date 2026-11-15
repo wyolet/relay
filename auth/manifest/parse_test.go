@@ -104,9 +104,7 @@ func TestParseRefusesMetadataOwner(t *testing.T) {
 // Document indexes count empty documents, so an error points at the right place in the file.
 func TestParseCountsEmptyDocuments(t *testing.T) {
 	docs, err := testRegistry(t).Parse(strings.NewReader("---\napiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: a}\n---\n---\napiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: b}\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if len(docs) != 2 || docs[0].Index != 0 || docs[1].Index != 2 {
 		t.Fatalf("docs = %+v", docs)
 	}
@@ -124,14 +122,14 @@ func TestRegistryAcceptsAProductAPIVersion(t *testing.T) {
 }
 
 func TestNewRegistryRefusesAFieldThatShadowsTheSpec(t *testing.T) {
-	for _, fields := range []map[string][]manifest.Field{
-		{manifest.KindProject: {{Name: "team"}}},
-		{"Policy": {{Name: "x"}}},
-		{manifest.KindTeam: {{Name: "a"}, {Name: "a"}}},
-		{manifest.KindTeam: {{}}},
+	for want, fields := range map[string]map[string][]manifest.Field{
+		`manifest: Project: field "team" is built in`:           {manifest.KindProject: {{Name: "team"}}},
+		`manifest: fields registered for unknown kind "Policy"`: {"Policy": {{Name: "x"}}},
+		`manifest: Team: field "a" is registered twice`:         {manifest.KindTeam: {{Name: "a"}, {Name: "a"}}},
+		`manifest: Team: a field needs a name`:                  {manifest.KindTeam: {{Name: "ok"}, {}}},
 	} {
-		if _, err := manifest.NewRegistry(manifest.Config{Fields: fields}); err == nil {
-			t.Errorf("fields %v accepted", fields)
+		if r, err := manifest.NewRegistry(manifest.Config{Fields: fields}); err == nil || err.Error() != want || r != nil {
+			t.Errorf("NewRegistry(%v) = %v, want %q", fields, err, want)
 		}
 	}
 }

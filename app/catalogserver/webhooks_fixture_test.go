@@ -1,7 +1,6 @@
 package catalogserver
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -13,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -193,8 +193,12 @@ func trustReceiver(s *Server, rc *receiver) {
 
 func register(t *testing.T, s *Server, hookURL, channel, remote string) *httptest.ResponseRecorder {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"url": hookURL, "channel": channel})
-	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks", bytes.NewReader(body))
+	body := must(json.Marshal(registerRequest{URL: hookURL, Channel: channel}))(t)
+	return registerRaw(s, string(body), remote)
+}
+
+func registerRaw(s *Server, body, remote string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks", strings.NewReader(body))
 	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)

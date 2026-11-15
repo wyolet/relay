@@ -1,108 +1,105 @@
 package control
 
 import (
+	"net/http"
+	"slices"
 	"testing"
 
-	"github.com/wyolet/relay/app/catalog/catalogtest"
-	"github.com/wyolet/relay/pkg/adapters"
-	"github.com/wyolet/relay/pkg/catalogkind/binding"
-	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+
 	"github.com/wyolet/relay/pkg/catalogkind/model"
-	"github.com/wyolet/relay/pkg/catalogkind/provider"
-	"github.com/wyolet/relay/pkg/meta"
 )
 
-func TestGraphModels_DeprecationFilter(t *testing.T) {
-	snap := catalogtest.Catalog{
-		Providers: []*provider.Provider{{Meta: meta.Metadata{ID: "P1", Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
-	}.Snapshot()
-	live := &model.Model{Meta: meta.Metadata{ID: "M1", Name: "live", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
-	dep := &model.Model{Meta: meta.Metadata{ID: "M2", Name: "old", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
-	dep.Spec.DeprecationDate = "2025-01-01"
-	idx := &resolveIndex{snap: snap, allModels: []*model.Model{live, dep}}
+func TestCatalogGraph(t *testing.T) {
+	r, api := testAPI(t, scopeActors)
+	registerCatalogGraph(api, Deps{Catalog: resolveCatalog().Load(t)}, nil)
+	openai := []graphBinding{{HostID: "H1", Adapter: "openai"}}
+	gpt35 := graphModel{ID: "M1", Name: "gpt-3-5", ProviderID: "P1", Pointer: "gpt-3-5-snap"}
+	gpt4o := graphModel{ID: "M2", Name: "gpt-4o", DisplayName: "GPT-4o", ProviderID: "P1", Featured: true, Capabilities: model.Capabilities{Tools: true},
+		ContextWindowTotal: 128000, ContextWindowInput: 100000, Pointer: "gpt-4o-snap", Bindings: append(openai[:1:1], graphBinding{HostID: "H2", Adapter: "openai"})}
+	legacy := graphModel{ID: "M3", Name: "legacy", ProviderID: "P1", Deprecated: "deprecated", Pointer: "legacy-snap", Bindings: openai}
 
-	excl := graphModels(idx, false, nil)
-	if len(excl) != 1 || excl[0].Name != "live" {
-		t.Fatalf("includeDeprecated=false: got %d models %+v, want only 'live'", len(excl), excl)
+	for _, tc := range []struct {
+		name, query string
+		want        []graphModel
+	}{
+		{"enabled models, deprecated left out", "", []graphModel{gpt35, gpt4o}},
+		{"deprecated models flagged", "?includeDeprecated=true", []graphModel{gpt35, gpt4o, legacy}},
+		{"every label must match", "?label=featured=true&label=tier=flagship", []graphModel{gpt4o}},
+		{"one label missing", "?label=featured=true&label=tier=budget", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var want, got graphOutput
+			want.Body.Providers = []graphProvider{{ID: "P2", Name: "acme"}, {ID: "P1", Name: "openai", DisplayName: "OpenAI"}}
+			want.Body.Hosts = []graphHost{{ID: "H1", Name: "cloud", DisplayName: "Cloud", IconPath: "icons/cloud.svg"}, {ID: "H2", Name: "edge"}}
+			want.Body.Models = tc.want
+			w := scopeReq(t, r, "alice", http.MethodGet, "/catalog/graph"+tc.query, "")
+			wantJSON(t, w, http.StatusOK, &got.Body)
+			if diff := cmp.Diff(want.Body, got.Body, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("graph (-want +got):\n%s", diff)
+			}
+			if got.Body.Models == nil || slices.ContainsFunc(got.Body.Models, func(m graphModel) bool { return m.Bindings == nil }) {
+				t.Errorf("models and their bindings must be arrays, never null: %s", w.Body)
+			}
+		})
 	}
 
-	incl := graphModels(idx, true, nil)
-	if len(incl) != 2 {
-		t.Fatalf("includeDeprecated=true: got %d models, want 2", len(incl))
-	}
-	var oldEntry *graphModel
-	for i := range incl {
-		if incl[i].Name == "old" {
-			oldEntry = &incl[i]
-		}
-	}
-	if oldEntry == nil || oldEntry.Deprecated == "" {
-		t.Fatalf("deprecated model should be present and flagged, got %+v", incl)
-	}
+	wantAPIError(t, scopeReq(t, r, "alice", http.MethodGet, "/catalog/graph?label=featured", ""), http.StatusBadRequest, "", "label: must be key=value")
+	r, api = testAPI(t, scopeActors)
+	registerCatalogGraph(api, Deps{}, nil)
+	wantAPIError(t, scopeReq(t, r, "alice", http.MethodGet, "/catalog/graph", ""), http.StatusInternalServerError, "internal_error", "catalog not ready")
 }
 
-func TestGraphModels_LabelSelector(t *testing.T) {
-	snap := catalogtest.Catalog{
-		Providers: []*provider.Provider{{Meta: meta.Metadata{ID: "P1", Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
-	}.Snapshot()
-	feat := &model.Model{Meta: meta.Metadata{ID: "M1", Name: "feat", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}, Labels: map[string]string{"featured": "true"}}}
-	plain := &model.Model{Meta: meta.Metadata{ID: "M2", Name: "plain", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
-	idx := &resolveIndex{snap: snap, allModels: []*model.Model{feat, plain}}
-
-	got := graphModels(idx, false, map[string]string{"featured": "true"})
-	if len(got) != 1 || got[0].Name != "feat" || !got[0].Featured {
-		t.Fatalf("label selector featured=true: got %+v, want only 'feat'", got)
+// A snapshot can still hold a disabled binding of an enabled model; the graph offers only hosts that serve.
+func TestGraphModels_PrunesDisabledBindings(t *testing.T) {
+	idx := resolveIndexes(t)["disabled rows indexed"]
+	if n := len(idx.snap.BindingsForModel("M1")); n != 1 {
+		t.Fatalf("the snapshot holds %d bindings of gpt-3-5, want its disabled one", n)
 	}
-
-	if all := graphModels(idx, false, nil); len(all) != 2 {
-		t.Fatalf("nil selector should match all: got %d", len(all))
+	if got := graphModels(idx, false, nil)[0]; got.Name != "gpt-3-5" || got.Bindings == nil || len(got.Bindings) != 0 {
+		t.Fatalf("model = %+v, want gpt-3-5 with no bindings", got)
 	}
 }
 
 func TestParseLabelSelector(t *testing.T) {
-	if _, err := parseLabelSelector([]string{"nokey"}); err == nil {
-		t.Fatal("malformed selector should 400")
-	}
-	sel, err := parseLabelSelector([]string{"featured=true", "tier=flagship"})
-	if err != nil || sel["featured"] != "true" || sel["tier"] != "flagship" {
-		t.Fatalf("got %v err=%v", sel, err)
+	for _, tc := range []struct {
+		name    string
+		raw     []string
+		want    map[string]string
+		wantErr bool
+	}{
+		{name: "none"},
+		{name: "pairs", raw: []string{"featured=true", "tier=flagship"}, want: map[string]string{"featured": "true", "tier": "flagship"}},
+		{name: "value keeps later equals signs", raw: []string{"a=b=c"}, want: map[string]string{"a": "b=c"}},
+		{name: "empty value", raw: []string{"a="}, want: map[string]string{"a": ""}},
+		{name: "no equals sign", raw: []string{"a=b", "nokey"}, wantErr: true},
+		{name: "empty key", raw: []string{"=v"}, wantErr: true},
+	} {
+		got, err := parseLabelSelector(tc.raw)
+		if tc.wantErr != (err != nil) || (err != nil && err.Error() != "label: must be key=value") {
+			t.Errorf("%s: err = %v, want error %v", tc.name, err, tc.wantErr)
+		}
+		if diff := cmp.Diff(tc.want, got); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", tc.name, diff)
+		}
 	}
 }
 
-func TestGraphModels_PrunesDisabledBindings(t *testing.T) {
-	hostID1 := meta.NewID()
-	hostID2 := meta.NewID()
-	modID := meta.NewID()
-	provID := meta.NewID()
-
-	prov := &provider.Provider{Meta: meta.Metadata{ID: provID, Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	h1 := &host.Host{Meta: meta.Metadata{ID: hostID1, Name: "h1", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "http://h1.example"}}
-	h2 := &host.Host{Meta: meta.Metadata{ID: hostID2, Name: "h2", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "http://h2.example"}}
-	m := &model.Model{
-		Meta: meta.Metadata{ID: modID, Name: "m", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m-snap"}}, Pointer: "m-snap"},
-	}
-	enabled := true
-	disabled := false
-	b1 := &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "b1", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: modID, HostID: hostID1, Adapter: adapters.OpenAI, Enabled: &enabled},
-	}
-	b2 := &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "b2", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: modID, HostID: hostID2, Adapter: adapters.OpenAI, Enabled: &disabled},
-	}
-
-	snap := catalogtest.Catalog{
-		Providers: []*provider.Provider{prov},
-		Hosts:     []*host.Host{h1, h2},
-		Models:    []*model.Model{m},
-		Bindings:  []*binding.Binding{b1, b2},
-	}.Snapshot()
-	idx := &resolveIndex{snap: snap, allModels: []*model.Model{m}}
-
-	got := graphModels(idx, false, nil)
-	if len(got) != 1 || len(got[0].Bindings) != 1 || got[0].Bindings[0].HostID != hostID1 {
-		t.Fatalf("disabled binding not pruned: %+v", got)
+func TestDeprecationStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec model.Spec
+		want string
+	}{
+		{"no marker", model.Spec{}, ""},
+		{"a date alone", model.Spec{DeprecationDate: "2025-01-01"}, "deprecated"},
+		{"a status wins over the date", model.Spec{DeprecationDate: "2025-01-01", Deprecation: &model.Deprecation{Status: model.DeprecationSunset}}, "sunset"},
+		{"an empty status falls back to the date", model.Spec{DeprecationDate: "2025-01-01", Deprecation: &model.Deprecation{}}, "deprecated"},
+		{"an empty status and no date", model.Spec{Deprecation: &model.Deprecation{}}, ""},
+	} {
+		if got := deprecationStatus(&model.Model{Spec: tc.spec}); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

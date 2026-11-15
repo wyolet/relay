@@ -62,3 +62,9 @@ func thinkingToReasoning(thinking, signature string) *v1.Reasoning {
 		ProviderData: pd,
 	}
 }
+
+// redactedThinkingToReasoning maps a redacted_thinking block: it has no plaintext, so the encrypted data rides whole in ProviderData for same-vendor replay.
+func redactedThinkingToReasoning(data string) *v1.Reasoning {
+	pd, _ := json.Marshal(map[string]string{"type": "redacted_thinking", "data": data})
+	return &v1.Reasoning{ProviderData: pd}
+}

@@ -66,18 +66,23 @@ func ClientIP(r *http.Request, trusted []*net.IPNet) string {
 	if peer == nil || !isTrustedProxy(peer, trusted) {
 		return remote
 	}
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" {
-		return remote
-	}
-	parts := strings.Split(xff, ",")
-	for i := len(parts) - 1; i >= 0; i-- {
-		ip := net.ParseIP(strings.TrimSpace(parts[i]))
-		if ip == nil {
-			continue
-		}
-		if !isTrustedProxy(ip, trusted) {
-			return ip.String()
+	// Repeated header lines are one list in order, so the walk spans every line, starting from the last.
+	lines := r.Header.Values("X-Forwarded-For")
+	for i := len(lines) - 1; i >= 0; i-- {
+		for list := lines[i]; list != ""; {
+			entry := list
+			if j := strings.LastIndexByte(list, ','); j >= 0 {
+				entry, list = list[j+1:], list[:j]
+			} else {
+				list = ""
+			}
+			ip := net.ParseIP(strings.TrimSpace(entry))
+			if ip == nil {
+				continue
+			}
+			if !isTrustedProxy(ip, trusted) {
+				return ip.String()
+			}
 		}
 	}
 	return remote

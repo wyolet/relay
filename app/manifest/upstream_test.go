@@ -2,13 +2,19 @@ package manifest_test
 
 import (
 	"errors"
-	"reflect"
+	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/pkg/meta"
 	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 )
 
 const upstreamYAML = `
@@ -33,131 +39,132 @@ metadata: {name: openai-key-1, owner: {kind: system}}
 spec: {hostId: anthropic-direct, account: acme-anthropic, valueFrom: {kind: env, env: KEY}}
 `
 
+// Names resolve to ids, a pool's selection and a budget's period and mode take their defaults, and the exports name everything again.
 func TestUpstreamKinds_RoundTrip(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(upstreamYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if len(docs) != 4 || docs[0].Account == nil || docs[1].Pool == nil || docs[2].Budget == nil || docs[3].HostKey == nil {
-		t.Fatalf("want Account, Pool, Budget, HostKey; got %v", docs)
-	}
+	docs := parseDocs(t, upstreamYAML, 4)
+	system := meta.Owner{Kind: meta.OwnerSystem}
 
-	a, err := manifest.ToAccount(*docs[0].Account, testResolver)
-	if err != nil {
-		t.Fatalf("ToAccount: %v", err)
-	}
-	if a.Spec.HostID != "host-bbb" || a.Spec.OrgID != "org-1" {
-		t.Errorf("account spec = %+v", a.Spec)
-	}
-	if back := manifest.FromAccount(a, testRev); back.Spec.Host != "anthropic-direct" || back.Kind != "Account" {
-		t.Errorf("FromAccount = %+v", back)
-	}
+	a := translated(t, "ToAccount", &account.Account{
+		Meta: meta.Metadata{Name: "acme-anthropic", Owner: system},
+		Spec: account.Spec{HostID: "host-bbb", OrgID: "org-1"},
+	})(manifest.ToAccount(*docs[0].Account, testResolver))
+	exported(t, "FromAccount", *docs[0].Account, manifest.FromAccount(a, testRev))
 
-	p, err := manifest.ToPool(*docs[1].Pool, testResolver)
-	if err != nil {
-		t.Fatalf("ToPool: %v", err)
-	}
-	if p.Spec.HostID != "host-ccc" || !reflect.DeepEqual(p.Spec.CredentialIDs, []string{"hk-hhh"}) || p.Spec.Selection != keypool.KeySelectionPrioritized {
-		t.Errorf("pool spec = %+v (selection defaults to prioritized)", p.Spec)
-	}
-	if back := manifest.FromPool(p, testRev); back.Spec.Host != "bedrock-us-east" || back.Spec.Credentials[0] != "bedrock-key-prod" {
-		t.Errorf("FromPool = %+v", back)
-	}
+	p := translated(t, "ToPool", &pool.Pool{
+		Meta: meta.Metadata{Name: "bedrock-claude", Owner: system},
+		Spec: pool.Spec{HostID: "host-ccc", CredentialIDs: []string{"hk-hhh"}, Selection: keypool.KeySelectionPrioritized},
+	})(manifest.ToPool(*docs[1].Pool, testResolver))
+	wantPool := *docs[1].Pool
+	wantPool.Spec.Selection = "prioritized"
+	exported(t, "FromPool", wantPool, manifest.FromPool(p, testRev))
 
-	b, err := manifest.ToBudget(*docs[2].Budget, testResolver)
-	if err != nil {
-		t.Fatalf("ToBudget: %v", err)
-	}
-	if b.Spec.AmountUSD != "2000" || b.Spec.Period != budget.PeriodMonth || b.Spec.Mode != budget.ModeHard {
-		t.Errorf("budget spec = %+v (period and mode default)", b.Spec)
-	}
+	b := translated(t, "ToBudget", &budget.Budget{
+		Meta: meta.Metadata{Name: "monthly", Owner: system},
+		Spec: budget.Spec{AmountUSD: "2000", Period: budget.PeriodMonth, Mode: budget.ModeHard},
+	})(manifest.ToBudget(*docs[2].Budget, testResolver))
+	wantBudget := *docs[2].Budget
+	wantBudget.Spec.Period, wantBudget.Spec.Mode = "month", "hard"
+	exported(t, "FromBudget", wantBudget, manifest.FromBudget(b, testRev))
 
-	k, err := manifest.ToHostKey(*docs[3].HostKey, testResolver)
+	k := translated(t, "ToHostKey", &hostkey.HostKey{
+		Meta: meta.Metadata{Name: "openai-key-1", Owner: system},
+		Spec: hostkey.Spec{HostID: "host-bbb", AccountID: "acc-mmm", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "KEY"}},
+	})(manifest.ToHostKey(*docs[3].HostKey, testResolver))
+	exported(t, "FromHostKey", *docs[3].HostKey, manifest.FromHostKey(k, testRev))
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"account at an unknown host", second(manifest.ToAccount(*docs[0].Account, manifest.MapResolver{})), `account "acme-anthropic": host "anthropic-direct" not found`},
+		{"pool at an unknown host", second(manifest.ToPool(*docs[1].Pool, manifest.MapResolver{})), `pool "bedrock-claude": host "bedrock-us-east" not found`},
+		{"pool of an unknown key", second(manifest.ToPool(*docs[1].Pool, manifest.MapResolver{Hosts: testResolver.Hosts})), `pool "bedrock-claude": credential "bedrock-key-prod" not found`},
+		{"host key in an unknown account", second(manifest.ToHostKey(*docs[3].HostKey, manifest.MapResolver{Hosts: testResolver.Hosts})), `hostkey "openai-key-1": account "acme-anthropic" not found`},
+	} {
+		var notFound *manifest.RefNotFoundError
+		if got := errText(tc.err); got != tc.want || !errors.As(tc.err, &notFound) {
+			t.Errorf("%s:\n got %q\nwant %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+func second[R any](_ R, err error) error { return err }
+
+// A host's param renames, keyed by adapter, survive parse, translation, export, render and parse again.
+func TestHostParamRenames_RoundTrip(t *testing.T) {
+	doc := parseOne(t, `
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Host
+metadata: {name: openai, owner: {kind: system}}
+spec:
+  baseURL: https://api.openai.com
+  requestParamRenames:
+    openai: {max_tokens: max_completion_tokens}
+`)
+	renames := map[adapters.Name]map[string]string{"openai": {"max_tokens": "max_completion_tokens"}}
+	h := translated(t, "ToHost", &host.Host{
+		Meta: meta.Metadata{Name: "openai", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: host.Spec{BaseURL: "https://api.openai.com", RequestParamRenames: renames},
+	})(manifest.ToHost(*doc.Host, testResolver))
+	out := manifest.FromHost(h, testRev)
+	exported(t, "FromHost", *doc.Host, out)
+
+	rendered, err := manifest.Render([]manifest.Document{{Host: &out}}, "")
 	if err != nil {
-		t.Fatalf("ToHostKey: %v", err)
+		t.Fatalf("Render: %v", err)
 	}
-	if k.Spec.AccountID != "acc-mmm" {
-		t.Errorf("host key account = %q", k.Spec.AccountID)
-	}
-	if back := manifest.FromHostKey(k, testRev); back.Spec.Account != "acme-anthropic" {
-		t.Errorf("FromHostKey account = %q", back.Spec.Account)
-	}
+	back := parseOne(t, string(rendered))
+	exported(t, "rendered Host", *doc.Host, *back.Host)
 }
 
 // A provider account written without an owner is the system's, like a host key written without one, so the pair needs no owner to match.
 func TestProviderAccountWithoutOwnerIsTheSystems(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha3\nkind: Account\nmetadata: {name: acme}\nspec: {host: anthropic-direct}\n"))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	a, err := manifest.ToAccount(*docs[0].Account, testResolver)
-	if err != nil {
-		t.Fatalf("ToAccount: %v", err)
-	}
-	if a.Meta.Owner.Kind != "system" {
-		t.Errorf("owner = %+v, want the system", a.Meta.Owner)
-	}
-}
-
-func TestUpstreamKinds_UnknownNames(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(upstreamYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	var notFound *manifest.RefNotFoundError
-	if _, err := manifest.ToAccount(*docs[0].Account, manifest.MapResolver{}); !errors.As(err, &notFound) {
-		t.Errorf("account with unknown host: %v", err)
-	}
-	if _, err := manifest.ToPool(*docs[1].Pool, manifest.MapResolver{Hosts: testResolver.Hosts}); !errors.As(err, &notFound) {
-		t.Errorf("pool with unknown credential: %v", err)
-	}
-	if _, err := manifest.ToHostKey(*docs[3].HostKey, manifest.MapResolver{Hosts: testResolver.Hosts}); !errors.As(err, &notFound) {
-		t.Errorf("host key with unknown account: %v", err)
-	}
+	doc := parseOne(t, "apiVersion: relay.wyolet.dev/v1alpha3\nkind: Account\nmetadata: {name: acme}\nspec: {host: anthropic-direct}\n")
+	translated(t, "ToAccount", &account.Account{
+		Meta: meta.Metadata{Name: "acme", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: account.Spec{HostID: "host-bbb"},
+	})(manifest.ToAccount(*doc.Account, testResolver))
 }
 
 // A policy binding names its accounts, which resolve by name and render back.
 func TestPolicyBinding_AccountsRoundTrip(t *testing.T) {
-	const doc = `
+	doc := parseOne(t, `
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata: {name: tiers, owner: {kind: system}}
 spec:
   policy: cheap-tier
   accounts: [acme-anthropic]
-`
-	docs, err := manifest.Parse(strings.NewReader(doc))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	b, err := manifest.ToPolicyBinding(*docs[0].PolicyBinding, testResolver)
-	if err != nil {
-		t.Fatalf("ToPolicyBinding: %v", err)
-	}
-	if !reflect.DeepEqual(b.Spec.AccountIDs, []string{"acc-mmm"}) {
-		t.Fatalf("accounts = %v", b.Spec.AccountIDs)
-	}
-	if back := manifest.FromPolicyBinding(b, testRev); !reflect.DeepEqual(back.Spec.Accounts, []string{"acme-anthropic"}) {
-		t.Errorf("rendered accounts = %v", back.Spec.Accounts)
-	}
+`)
+	b := translated(t, "ToPolicyBinding", &policybinding.PolicyBinding{
+		Meta: meta.Metadata{Name: "tiers", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: policybinding.Spec{PolicyID: "policy-ddd", AccountIDs: []string{"acc-mmm"}},
+	})(manifest.ToPolicyBinding(*doc.PolicyBinding, testResolver))
+	exported(t, "FromPolicyBinding", *doc.PolicyBinding, manifest.FromPolicyBinding(b, testRev))
+
+	_, err := manifest.ToPolicyBinding(*doc.PolicyBinding, manifest.MapResolver{Policies: testResolver.Policies})
 	var notFound *manifest.RefNotFoundError
-	if _, err := manifest.ToPolicyBinding(*docs[0].PolicyBinding, manifest.MapResolver{Policies: testResolver.Policies}); !errors.As(err, &notFound) {
-		t.Errorf("binding an unknown account: %v", err)
+	if got, want := errText(err), `policybinding "tiers": account "acme-anthropic" not found`; got != want || !errors.As(err, &notFound) {
+		t.Errorf("binding an unknown account:\n got %q\nwant %s", got, want)
 	}
 }
 
 // The v0.20 fields a policy and a binding no longer have are refused, not dropped: a silently dropped restriction would widen access.
-func TestRemovedFieldsAreRefused(t *testing.T) {
-	for field, doc := range map[string]string{
-		"credentials":           "kind: Policy\nmetadata: {name: p}\nspec: {credentials: [k]}",
-		"includeDeprecated":     "kind: Policy\nmetadata: {name: p}\nspec: {includeDeprecated: true}",
-		"payloadLoggingEnabled": "kind: Policy\nmetadata: {name: p}\nspec: {payloadLoggingEnabled: true}",
-		"subjects":              "kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, subjects: [{kind: team, name: t}]}",
-		"project":               "kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, project: x, accounts: [a]}",
+func TestRemovedPolicyAndBindingFieldsAreRefused(t *testing.T) {
+	for _, tc := range []struct{ doc, want string }{
+		{"kind: Policy\nmetadata: {name: p}\nspec: {credentials: [k]}", "wire: doc 0 kind=Policy name=p: Policy no longer has spec.credentials (use pools (a Pool of the one host key))"},
+		{"kind: Policy\nmetadata: {name: p}\nspec: {includeDeprecated: true}", "wire: doc 0 kind=Policy name=p: Policy no longer has spec.includeDeprecated (use nothing: models grant deprecated models like any other)"},
+		{"kind: Policy\nmetadata: {name: p}\nspec: {payloadLoggingEnabled: true}", "wire: doc 0 kind=Policy name=p: Policy no longer has spec.payloadLoggingEnabled (use payloadLogging on the accounts the policy is bound to)"},
+		{"kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, subjects: [{kind: team, name: t}]}", "wire: doc 0 kind=PolicyBinding name=b: PolicyBinding no longer has spec.subjects (use accounts (account names))"},
+		{"kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, project: x, accounts: [a]}", "wire: doc 0 kind=PolicyBinding name=b: PolicyBinding no longer has spec.project (use metadata.owner)"},
+		{"kind: ServiceAccount\nmetadata: {name: sa}\nspec: {project: p, policy: x}", "wire: doc 0 kind=ServiceAccount name=sa: ServiceAccount no longer has spec.policy (use a PolicyBinding on the service account's account)"},
+		{"kind: HostKey\nmetadata: {name: k}\nspec: {hostId: h, policyId: p}", "wire: doc 0 kind=HostKey name=k: HostKey no longer has spec.policyId (use account, plus a PolicyBinding of the account's tier policy)"},
+		{"kind: RelayKey\nmetadata: {name: legacy}\nspec: {policy: p}", `wire: doc 0 kind=RelayKey name=legacy: unknown kind "RelayKey"`},
 	} {
-		_, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha3\n" + doc))
-		if err == nil || !strings.Contains(err.Error(), "spec."+field) {
-			t.Errorf("%s: err = %v, want a refusal naming spec.%s", field, err, field)
+		_, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha3\n" + tc.doc))
+		if got := errText(err); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %s", tc.doc, got, tc.want)
 		}
 	}
 }

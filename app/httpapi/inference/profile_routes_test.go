@@ -1,7 +1,8 @@
 package inference
 
 import (
-	"encoding/json"
+	"crypto/tls"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,14 +10,18 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-cmp/cmp"
 
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/clientprofile"
 )
 
-// stubRoutedProfile adds the optional Router and ModelLister seams on top
-// of stubProfile, so a full Mount exercises both.
-type stubRoutedProfile struct{ stubProfile }
+// stubRoutedProfile adds the optional Router and ModelLister seams on top of stubProfile, so a full Mount exercises both. Its list is the ids it was handed, or err.
+type stubRoutedProfile struct {
+	stubProfile
+	err error
+}
 
 func (stubRoutedProfile) Routes() []clientprofile.Route {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -27,154 +32,112 @@ func (stubRoutedProfile) Routes() []clientprofile.Route {
 	}
 }
 
-func (stubRoutedProfile) Models([]clientprofile.ModelEntry) ([]byte, string, error) {
-	return []byte(`{"data":[]}`), "application/json", nil
+func (p stubRoutedProfile) Models(entries []clientprofile.ModelEntry) ([]byte, string, error) {
+	body := "ids:"
+	for _, e := range entries {
+		body += " " + e.ID
+	}
+	return []byte(body), "text/plain", p.err
 }
 
-func mountWithRoutedProfile(t *testing.T) chi.Router {
-	t.Helper()
+// A profile's public routes answer without a credential; its other routes, its model list included, run the relay-key chain of /v1/*. The /a/{account}/ prefix serves under every route Mount registers, with no route of its own.
+func TestMount_ProfileRoutes(t *testing.T) {
 	cat, _ := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	d := buildDeps(t, cat)
 	d.Pinger = stubPinger{}
-
-	profiles := clientprofile.New()
-	if err := profiles.Register(stubRoutedProfile{}); err != nil {
-		t.Fatalf("register profile: %v", err)
-	}
-	d.Profiles = profiles
-
+	d.Profiles = profileRegistry(stubRoutedProfile{})
 	r := chi.NewRouter()
 	Mount(r, d)
-	return r
-}
 
-func TestMount_ProfileHelloIsPublic(t *testing.T) {
-	r := mountWithRoutedProfile(t)
-	for _, method := range []string{http.MethodHead, http.MethodGet} {
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, httptest.NewRequest(method, "/stub/api/hello", nil))
-		if rec.Code != http.StatusOK {
-			t.Errorf("%s /stub/api/hello = %d, want 200 without credentials", method, rec.Code)
+	for _, prefix := range []string{"", "/a/acme-ml"} {
+		for _, tc := range []struct {
+			method, path string
+			status       int
+		}{
+			{http.MethodHead, "/stub/api/hello", http.StatusOK},
+			{http.MethodGet, "/stub/api/hello", http.StatusOK},
+			{http.MethodGet, "/healthz", http.StatusOK},
+			{http.MethodGet, "/stub/api/private", http.StatusUnauthorized},
+			{http.MethodGet, "/stub/v1/models", http.StatusUnauthorized},
+			{http.MethodGet, "/v1/models", http.StatusUnauthorized},
+			{http.MethodGet, "/stub/api/hidden", http.StatusNotFound},
+			{http.MethodPost, "/stub/api/hello", http.StatusMethodNotAllowed},
+		} {
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(tc.method, prefix+tc.path, nil))
+			if rec.Code != tc.status {
+				t.Errorf("%s %s = %d, want %d", tc.method, prefix+tc.path, rec.Code, tc.status)
+			}
+			if tc.status == http.StatusUnauthorized {
+				wantUnauthenticated(t, rec, "missing relay key")
+			}
 		}
 	}
 }
 
-func TestMount_ProfileNonPublicRouteNeedsARelayKey(t *testing.T) {
-	r := mountWithRoutedProfile(t)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stub/api/private", nil))
-	if rec.Code == http.StatusOK {
-		t.Fatal("a non-public profile route must run the relay-key auth chain")
+// Each profile that renders a model list gets it at its own path under its prefix, rendered from what the caller's key reaches.
+func TestProfileModels(t *testing.T) {
+	const codexEntry = `{"slug":"test-model","display_name":"test-model","description":"anthropic","base_instructions":"","supported_reasoning_levels":[],"shell_type":"unified_exec","visibility":"list","supported_in_api":true,"priority":0,"support_verbosity":false,"truncation_policy":{"mode":"bytes","limit":10000},"experimental_supported_tools":[],"availability_nux":null,"upgrade":null,"default_verbosity":null,"apply_patch_tool_type":null}`
+	opencode := func(api string) string {
+		return `{"relay":{"id":"relay","name":"Wyolet Relay","env":["RELAY_API_KEY"],"npm":"@ai-sdk/openai-compatible","api":"` + api + `","models":{}}}`
 	}
-}
-
-func TestMount_ProfileModelsRouteRegistered(t *testing.T) {
-	r := mountWithRoutedProfile(t)
-	var found bool
-	err := chi.Walk(r, func(method string, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if method == http.MethodGet && route == "/stub/v1/models" {
-			found = true
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk routes: %v", err)
-	}
-	if !found {
-		t.Fatal("GET /stub/v1/models not registered for a ModelLister profile")
-	}
-}
-
-// OpenCode reads its catalog as a models.dev document rather than a
-// list-models response, so its profile declares its own path — and the
-// document has to name the endpoint the reader should call back on.
-func TestProfileModels_OpenCodeCatalogPathAndAPIURL(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
-	for _, m := range cat.Current().AllModels() {
-		cp := *m
-		cp.Spec.ContextWindowTotal = 128000
-		if err := applyModel(t, cat, &cp); err != nil {
-			t.Fatal(err)
-		}
-	}
-	d := buildDeps(t, cat)
-	profiles := clientprofile.New()
-	if err := profiles.Register(clientprofile.OpenCode()); err != nil {
-		t.Fatalf("register profile: %v", err)
-	}
-	d.Profiles = profiles
-
-	get := func(t *testing.T, d Deps) map[string]struct {
-		API    string                     `json:"api"`
-		Models map[string]json.RawMessage `json:"models"`
+	for _, tc := range []struct {
+		name      string
+		profile   clientprofile.Profile
+		publicURL string
+		target    string
+		edit      func(*http.Request)
+		anonymous bool // the 401's envelope: TestListModels_NoCredentialCarriesTheCode
+		status    int
+		ctype     string
+		body      string
+	}{
+		{name: "plain lister", profile: stubRoutedProfile{}, target: "/stub/v1/models", status: 200, ctype: "text/plain", body: "ids: test-model"},
+		// Codex asks {base_url}/models?client_version=<v>: a query the endpoint never declared is ignored, not rejected.
+		{name: "codex, undeclared query", profile: clientprofile.Codex(), target: "/codex/v1/models?client_version=0.153.4", status: 200, ctype: "application/json", body: `{"models":[` + codexEntry + `]}`},
+		// OpenCode reads a models.dev document at its own path, which names the endpoint its reader calls back on: the origin the request arrived at unless the deployment declares a public URL.
+		{name: "opencode, request origin", profile: clientprofile.OpenCode(), target: "http://relay.internal:8080/opencode/api.json", status: 200, ctype: "application/json",
+			body: opencode("http://relay.internal:8080/opencode/v1")},
+		{name: "opencode, TLS request", profile: clientprofile.OpenCode(), target: "http://relay.internal/opencode/api.json", edit: func(r *http.Request) { r.TLS = &tls.ConnectionState{} },
+			status: 200, ctype: "application/json", body: opencode("https://relay.internal/opencode/v1")},
+		{name: "opencode, forwarded scheme", profile: clientprofile.OpenCode(), target: "http://relay.internal/opencode/api.json", edit: func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", " https , http") },
+			status: 200, ctype: "application/json", body: opencode("https://relay.internal/opencode/v1")},
+		{name: "opencode, declared public URL", profile: clientprofile.OpenCode(), publicURL: "https://relay.example.com/", target: "http://relay.internal:8080/opencode/api.json",
+			status: 200, ctype: "application/json", body: opencode("https://relay.example.com/opencode/v1")},
+		{name: "render fails", profile: stubRoutedProfile{err: errors.New("no template")}, target: "/stub/v1/models", status: 500, ctype: "application/json",
+			body: `{"error":{"type":"api_error","code":"render_models","message":"no template"}}`},
+		{name: "no credential", profile: stubRoutedProfile{}, target: "/stub/v1/models", anonymous: true, status: 401},
+		{name: "profile without a list", profile: stubProfile{}, target: "/stub/v1/models", status: 404},
 	} {
-		t.Helper()
-		r := chi.NewRouter()
-		api := humachi.New(r, huma.DefaultConfig("test", "1"))
-		registerProfileModels(api, d, nil)
+		t.Run(tc.name, func(t *testing.T) {
+			httpapi.InstallErrorRewriter()
+			cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+			d := buildDeps(t, cat)
+			d.Profiles, d.PublicURL = profileRegistry(tc.profile), tc.publicURL
+			r := chi.NewRouter()
+			registerProfileModels(humachi.New(r, huma.DefaultConfig("test", "1")), d, nil)
 
-		rec := httptest.NewRecorder()
-		req := withNormalContext(httptest.NewRequest(http.MethodGet, "http://relay.internal:8080/opencode/api.json", nil), rk)
-		r.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /opencode/api.json = %d — body: %s", rec.Code, rec.Body.String())
-		}
-		var doc map[string]struct {
-			API    string                     `json:"api"`
-			Models map[string]json.RawMessage `json:"models"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
-			t.Fatalf("catalog document: %v — body: %s", err, rec.Body.String())
-		}
-		return doc
-	}
-
-	// No configured public URL: the document names the origin the request
-	// arrived on.
-	if got := get(t, d)["relay"]; got.API != "http://relay.internal:8080/opencode/v1" {
-		t.Errorf("api = %q, want the request's own origin", got.API)
-	} else if len(got.Models) == 0 {
-		t.Error("granted models must appear in the catalog document")
-	}
-
-	// Configured: that wins, since the caller may have reached an internal
-	// address the client cannot use.
-	d.PublicURL = "https://relay.example.com/"
-	if got := get(t, d)["relay"].API; got != "https://relay.example.com/opencode/v1" {
-		t.Errorf("api = %q, want the configured public URL", got)
-	}
-}
-
-// The Codex CLI resolves the list endpoint against its base URL as
-// {base_url}/models?client_version=<v>, so with base_url at the profile
-// prefix the path is /codex/v1/models and the query is one the endpoint
-// never declared: it must be ignored, not rejected.
-func TestProfileModels_CodexPathAndUnknownQuery(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
-	d := buildDeps(t, cat)
-	profiles := clientprofile.New()
-	if err := profiles.Register(clientprofile.Codex()); err != nil {
-		t.Fatalf("register profile: %v", err)
-	}
-	d.Profiles = profiles
-
-	r := chi.NewRouter()
-	api := humachi.New(r, huma.DefaultConfig("test", "1"))
-	registerProfileModels(api, d, nil)
-
-	rec := httptest.NewRecorder()
-	req := withNormalContext(httptest.NewRequest(http.MethodGet, "/codex/v1/models?client_version=0.153.4", nil), rk)
-	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /codex/v1/models?client_version= = %d, want 200 — body: %s", rec.Code, rec.Body.String())
-	}
-	var doc struct {
-		Models []json.RawMessage `json:"models"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
-		t.Fatalf("catalog document: %v — body: %s", err, rec.Body.String())
-	}
-	if len(doc.Models) == 0 {
-		t.Error("granted models must appear in the catalog document")
+			req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+			if !tc.anonymous {
+				req = withNormalContext(req, rk)
+			}
+			if tc.edit != nil {
+				tc.edit(req)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
+			}
+			if tc.body == "" {
+				return
+			}
+			if diff := cmp.Diff(tc.body, rec.Body.String()); diff != "" {
+				t.Errorf("body (-want +got):\n%s", diff)
+			}
+			if got := rec.Header().Get("Content-Type"); got != tc.ctype {
+				t.Errorf("Content-Type = %q, want %q", got, tc.ctype)
+			}
+		})
 	}
 }

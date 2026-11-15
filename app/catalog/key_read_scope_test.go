@@ -27,23 +27,20 @@ func TestKeyHashesForUserCoversDisabledKeys(t *testing.T) {
 	}
 	c := New(provList{}, hostList{}, polList{}, modList{}, keyList{}, rlList{},
 		rkList{live, disabled}, rcList{}, bndList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
+	must(t, c.Reload(context.Background()))
+	hashes := slices.Sorted(slices.Values(c.Current().KeyHashesForUser(userID)))
+	if want := []string{"hash-live", "hash-old"}; !slices.Equal(hashes, want) {
+		t.Errorf("hashes = %v, want %v", hashes, want)
 	}
-	hashes := c.Current().KeyHashesForUser(userID)
-	for _, want := range []string{"hash-live", "hash-old"} {
-		if !slices.Contains(hashes, want) {
-			t.Errorf("hashes = %v, want %q included", hashes, want)
-		}
+	if got := c.Current().KeyHashesForUser(meta.NewID()); len(got) != 0 {
+		t.Errorf("another user's read scope holds %v", got)
 	}
 
 	// Disabling a live key through the NOTIFY path keeps its hash too.
 	off2 := false
 	turnedOff := *live
 	turnedOff.Spec.Enabled = &off2
-	if err := c.ApplyKeyUpsert(&turnedOff); err != nil {
-		t.Fatalf("disable key: %v", err)
-	}
+	must(t, c.ApplyKeyUpsert(&turnedOff))
 	if _, ok := c.Current().KeyByHash("hash-live"); ok {
 		t.Error("a disabled key still routes")
 	}

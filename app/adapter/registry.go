@@ -9,7 +9,7 @@ import (
 )
 
 // Registry holds all registered adapter specs. Built once at boot in
-// cmd/relay/main.go via NewRegistry. Read-only after construction.
+// cmd/relay via NewRegistry over internal/adapterspecs. Read-only after construction.
 type Registry struct {
 	specs    []*Spec
 	byName   map[adapters.Name]*Spec

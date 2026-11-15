@@ -1,198 +1,242 @@
 package aws
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/secret"
+	cloudaws "github.com/wyolet/relay/secret/cloud/aws"
 )
 
-func TestParsePath(t *testing.T) {
-	name, key, err := parsePath("prod/openai:apiKey")
-	if err != nil || name != "prod/openai" || key != "apiKey" {
-		t.Fatalf("got %q %q err %v", name, key, err)
+var testNow = time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+
+func testConfig(endpoint string) Config {
+	return Config{
+		Region:      "us-east-1",
+		Endpoint:    endpoint,
+		Credentials: Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"},
+		Now:         func() time.Time { return testNow },
 	}
-	name, key, err = parsePath("plain-secret")
-	if err != nil || name != "plain-secret" || key != "" {
-		t.Fatalf("plain: %q %q err %v", name, key, err)
-	}
-	for _, p := range []string{"", ":onlykey", "name:"} {
-		if _, _, err := parsePath(p); err == nil {
-			t.Fatalf("parsePath(%q): want error", p)
+}
+
+// fakeSecretsManager answers GetSecretValue from replies keyed by request body, after checking the request is the signed call the API expects.
+func fakeSecretsManager(t *testing.T, creds Credentials, replies map[string]string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		resign, _ := http.NewRequest(http.MethodPost, "http://"+r.Host+"/", nil)
+		resign.Header.Set("Content-Type", "application/x-amz-json-1.1")
+		resign.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
+		if err := cloudaws.SignRequest(resign, body, creds, "us-east-1", "secretsmanager", testNow); err != nil {
+			t.Errorf("re-sign: %v", err)
 		}
+		want := resign.Header.Clone()
+		want.Del("Host")
+		got := http.Header{}
+		for k := range want {
+			got[k] = r.Header[k]
+		}
+		if d := cmp.Diff(want, got); d != "" || r.Method != http.MethodPost || r.URL.RequestURI() != "/" {
+			t.Errorf("%s %s is not the signed GetSecretValue call (-want +got):\n%s", r.Method, r.URL.RequestURI(), d)
+		}
+		reply, ok := replies[string(body)]
+		if !ok {
+			t.Errorf("unexpected request body %s", body)
+		}
+		status, payload, _ := strings.Cut(reply, " ")
+		w.WriteHeader(map[string]int{"200": 200, "400": 400, "500": 500}[status])
+		_, _ = io.WriteString(w, payload)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestResolver_Resolve(t *testing.T) {
+	id := func(s string) string { return `{"SecretId":"` + s + `"}` }
+	srv := fakeSecretsManager(t, Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}, map[string]string{
+		id("plain"):       `200 {"SecretString":"upstream-api-key"}`,
+		id("prod/openai"): `200 {"SecretString":"{\"apiKey\":\"sk-live\",\"org\":\"acme\",\"port\":8080,\"nested\":{\"a\":1}}"}`,
+		id("binary"):      `200 {"SecretBinary":"aGVsbG8="}`,
+		id("both"):        `200 {"SecretString":"text","SecretBinary":"aGVsbG8="}`,
+		id("bad-binary"):  `200 {"SecretBinary":"!!!"}`,
+		id("neither"):     `200 {"ARN":"arn:aws:secretsmanager:x"}`,
+		id("not-json"):    `200 <html>`,
+		id("missing"):     `400 {"__type":"ResourceNotFoundException","Message":"secret not found"}`,
+		id("type-only"):   `400 {"__type":"AccessDeniedException"}`,
+		id("opaque"):      `500 upstream exploded`,
+	})
+	res := New(testConfig(srv.URL))
+
+	for _, tc := range []struct {
+		path, want, wantErr string
+	}{
+		{"plain", "upstream-api-key", ""},
+		{"prod/openai:apiKey", "sk-live", ""},
+		{"prod/openai:port", "8080", ""},
+		{"prod/openai:nested", `{"a":1}`, ""},
+		{"prod/openai", `{"apiKey":"sk-live","org":"acme","port":8080,"nested":{"a":1}}`, ""},
+		{"binary", "hello", ""},
+		{"both", "text", ""},
+		{"prod/openai:noKey", "", `secret/aws: json key "noKey" not found in secret`},
+		{"prod/openai:APIKEY", "", `secret/aws: json key "APIKEY" not found in secret`},
+		{"plain:apiKey", "", `secret/aws: secret is not valid JSON for key "apiKey": invalid character 'u' looking for beginning of value`},
+		{"bad-binary", "", "secret/aws: decode SecretBinary: illegal base64 data at input byte 0"},
+		{"neither", "", `secret/aws: response for "neither" has neither SecretString nor SecretBinary`},
+		{"not-json", "", "secret/aws: decode response: invalid character '<' looking for beginning of value"},
+		{"missing", "", "secret/aws: secret not found (HTTP 400)"},
+		{"type-only", "", "secret/aws: AccessDeniedException (HTTP 400)"},
+		{"opaque", "", "secret/aws: secrets manager returned HTTP 500"},
+		{"", "", "secret/aws: path is empty"},
+		{":onlykey", "", `secret/aws: path ":onlykey": missing secret name before ":"`},
+		{"name:", "", `secret/aws: path "name:": missing json key after ":"`},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			got, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: tc.path})
+			if string(got) != tc.want || (tc.wantErr == "") != (err == nil) || (err != nil && err.Error() != tc.wantErr) {
+				t.Errorf("Resolve = %q, %v; want %q, %q", got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+
+	t.Run("empty json value", func(t *testing.T) {
+		srv := fakeSecretsManager(t, Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}, map[string]string{
+			id("s"): `200 {"SecretString":"{\"apiKey\":\"\",\"org\":null}"}`,
+		})
+		for _, key := range []string{"apiKey", "org"} {
+			got, err := New(testConfig(srv.URL)).Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "s:" + key})
+			if want := `secret/aws: json key "` + key + `" is empty`; err == nil || err.Error() != want {
+				t.Errorf("Resolve = %q, %v; want %q", got, err, want)
+			}
+		}
+	})
+}
+
+func TestResolver_SessionTokenIsSentAndSigned(t *testing.T) {
+	creds := Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET", SessionToken: "sess-tok"}
+	srv := fakeSecretsManager(t, creds, map[string]string{`{"SecretId":"s"}`: `200 {"SecretString":"x"}`})
+	cfg := testConfig(srv.URL)
+	cfg.Credentials = creds
+	got, err := New(cfg).Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "s"})
+	if err != nil || string(got) != "x" {
+		t.Fatalf("Resolve = %q, %v", got, err)
+	}
+}
+
+// roundTrip records the one request it is given and answers it with a plain secret.
+type roundTrip struct{ req *http.Request }
+
+func (rt *roundTrip) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt.req = r
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"SecretString":"v"}`))}, nil
+}
+
+func TestResolver_Endpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint, wantURL string
+	}{
+		{"regional default", "", "https://secretsmanager.eu-west-3.amazonaws.com/"},
+		{"bare host", "vpce-1.example:8443", "https://vpce-1.example:8443/"},
+		{"url with a path", "http://localhost:4566/ignored?x=1", "http://localhost:4566/?x=1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &roundTrip{}
+			cfg := testConfig(tc.endpoint)
+			cfg.Region, cfg.HTTPClient = "eu-west-3", &http.Client{Transport: rt}
+			got, err := New(cfg).Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "s"})
+			if err != nil || string(got) != "v" {
+				t.Fatalf("Resolve = %q, %v", got, err)
+			}
+			if rt.req.URL.String() != tc.wantURL || rt.req.Host != rt.req.URL.Host {
+				t.Errorf("request to %s (Host %s), want %s", rt.req.URL, rt.req.Host, tc.wantURL)
+			}
+			if auth := rt.req.Header.Get("Authorization"); !strings.HasPrefix(auth, "AWS4-HMAC-SHA256 Credential=AKID/20200102/eu-west-3/secretsmanager/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-target, Signature=") {
+				t.Errorf("Authorization = %q", auth)
+			}
+		})
+	}
+}
+
+func TestResolver_RefusesBeforeAnyRequest(t *testing.T) {
+	rt := &roundTrip{}
+	with := func(f func(*Config)) Config {
+		cfg := testConfig("")
+		cfg.HTTPClient = &http.Client{Transport: rt}
+		f(&cfg)
+		return cfg
+	}
+	aws := secret.Ref{Kind: secret.KindAWS, Path: "s"}
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		ref  secret.Ref
+		want string
+	}{
+		{"wrong kind", with(func(*Config) {}), secret.Ref{Kind: secret.KindEnv, Path: "x"}, `secret/aws: wrong kind "env"`},
+		{"no region", with(func(c *Config) { c.Region = " " }), aws, "secret/aws: region is not configured"},
+		{"no access key", with(func(c *Config) { c.Credentials.AccessKeyID = "" }), aws, "secret/aws: credentials are not configured"},
+		{"no secret key", with(func(c *Config) { c.Credentials.SecretAccessKey = "" }), aws, "secret/aws: credentials are not configured"},
+		{"endpoint does not parse", with(func(c *Config) { c.Endpoint = "http://bad host" }), aws, `secret/aws: parse endpoint: parse "http://bad host": invalid character " " in host name`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := New(tc.cfg).Resolve(context.Background(), tc.ref)
+			if err == nil || err.Error() != tc.want || got != nil || rt.req != nil {
+				t.Errorf("Resolve = %q, %v (request sent: %v); want %q", got, err, rt.req != nil, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolver_TransportFailure(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close()
+	got, err := New(testConfig(srv.URL)).Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "s"})
+	if err == nil || !strings.HasPrefix(err.Error(), "secret/aws: request failed: ") || got != nil {
+		t.Fatalf("Resolve = %q, %v", got, err)
+	}
+
+	// A body cut short of its declared length fails the read, not the decode.
+	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 10))
+	}))
+	defer short.Close()
+	got, err = New(testConfig(short.URL)).Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "s"})
+	if err == nil || err.Error() != "secret/aws: read response: unexpected EOF" || got != nil {
+		t.Fatalf("Resolve over a short body = %q, %v", got, err)
 	}
 }
 
 func TestConfigFromEnv(t *testing.T) {
-	t.Setenv("AWS_REGION", "us-west-2")
-	t.Setenv("AWS_ACCESS_KEY_ID", "AKID")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "SECRET")
-	t.Setenv("AWS_SESSION_TOKEN", "TOKEN")
-
+	set := func(region, ak, sk, tok string) {
+		t.Setenv("AWS_REGION", region)
+		t.Setenv("AWS_ACCESS_KEY_ID", ak)
+		t.Setenv("AWS_SECRET_ACCESS_KEY", sk)
+		t.Setenv("AWS_SESSION_TOKEN", tok)
+	}
+	set(" us-west-2\n", " AKID ", "\tSECRET", " TOKEN ")
 	cfg, err := ConfigFromEnv()
-	if err != nil {
-		t.Fatal(err)
+	want := Config{Region: "us-west-2", Credentials: Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET", SessionToken: "TOKEN"}}
+	if d := cmp.Diff(want, cfg); d != "" || err != nil {
+		t.Fatalf("ConfigFromEnv: %v (-want +got):\n%s", err, d)
 	}
-	if cfg.Region != "us-west-2" || cfg.Credentials.AccessKeyID != "AKID" ||
-		cfg.Credentials.SecretAccessKey != "SECRET" || cfg.Credentials.SessionToken != "TOKEN" {
-		t.Fatalf("cfg: %+v", cfg)
-	}
-}
 
-func TestResolver_PlainSecretString(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Amz-Target") != targetGet {
-			http.Error(w, "bad target", http.StatusBadRequest)
-			return
-		}
-		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256") {
-			http.Error(w, "unsigned", http.StatusUnauthorized)
-			return
-		}
-		var req getSecretRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SecretID != "my-secret" {
-			http.Error(w, "bad secret id", http.StatusBadRequest)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(getSecretResponse{
-			SecretString: ptr("upstream-api-key"),
-		})
-	}))
-	defer srv.Close()
-
-	res := New(testConfig(testHost(t, srv)))
-	got, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "my-secret"})
-	if err != nil || string(got) != "upstream-api-key" {
-		t.Fatalf("resolve: %q err %v", got, err)
-	}
-}
-
-func TestResolver_JSONKeyExtraction(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req getSecretRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if req.SecretID != "prod/openai" {
-			http.Error(w, "wrong id", http.StatusBadRequest)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(getSecretResponse{
-			SecretString: ptr(`{"apiKey":"sk-live","org":"acme"}`),
-		})
-	}))
-	defer srv.Close()
-
-	res := New(testConfig(testHost(t, srv)))
-	ref := secret.Ref{Kind: secret.KindAWS, Path: "prod/openai:apiKey"}
-	got, err := res.Resolve(context.Background(), ref)
-	if err != nil || string(got) != "sk-live" {
-		t.Fatalf("resolve: %q err %v", got, err)
-	}
-}
-
-func TestResolver_SecretBinary(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(getSecretResponse{
-			SecretBinary: ptr("aGVsbG8="),
-		})
-	}))
-	defer srv.Close()
-
-	res := New(testConfig(testHost(t, srv)))
-	got, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "bin"})
-	if err != nil || string(got) != "hello" {
-		t.Fatalf("resolve: %q err %v", got, err)
-	}
-}
-
-func TestResolver_SessionTokenHeader(t *testing.T) {
-	var seenToken string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seenToken = r.Header.Get("X-Amz-Security-Token")
-		_ = json.NewEncoder(w).Encode(getSecretResponse{SecretString: ptr("x")})
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(testHost(t, srv))
-	cfg.Credentials.SessionToken = "sess-tok"
-	res := New(cfg)
-	if _, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "s"}); err != nil {
-		t.Fatal(err)
-	}
-	if seenToken != "sess-tok" {
-		t.Fatalf("token header: %q", seenToken)
-	}
-}
-
-func TestResolver_Errors(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req getSecretRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if req.SecretID == "plain" {
-			_ = json.NewEncoder(w).Encode(getSecretResponse{SecretString: ptr("not-json-body")})
-			return
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"__type":"ResourceNotFoundException","Message":"secret not found"}`))
-	}))
-	defer srv.Close()
-
-	res := New(testConfig(testHost(t, srv)))
-
-	cases := []struct {
-		ref secret.Ref
-		sub string
-	}{
-		{secret.Ref{Kind: secret.KindEnv, Path: "x"}, "wrong kind"},
-		{secret.Ref{Kind: secret.KindAWS, Path: "missing"}, "secret not found"},
-		{secret.Ref{Kind: secret.KindAWS, Path: "plain:missingKey"}, "not valid JSON"},
-	}
-	for _, tc := range cases {
-		_, err := res.Resolve(context.Background(), tc.ref)
-		if err == nil || !strings.Contains(err.Error(), tc.sub) {
-			t.Fatalf("ref %+v: got err %v want %q", tc.ref, err, tc.sub)
+	const noRegion, noKeys = "secret/aws: AWS_REGION is unset or empty", "secret/aws: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required"
+	for _, tc := range []struct{ region, ak, sk, want string }{
+		{" ", "AKID", "SECRET", noRegion},
+		{"us-west-2", "", "SECRET", noKeys},
+		{"us-west-2", "AKID", " ", noKeys},
+	} {
+		set(tc.region, tc.ak, tc.sk, "")
+		if cfg, err := ConfigFromEnv(); err == nil || err.Error() != tc.want || !cmp.Equal(cfg, Config{}) {
+			t.Errorf("ConfigFromEnv(%q, %q, %q) = %+v, %v; want %q", tc.region, tc.ak, tc.sk, cfg, err, tc.want)
 		}
 	}
-
-	// JSON key missing in object
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(getSecretResponse{SecretString: ptr(`{"other":"v"}`)})
-	}))
-	defer srv2.Close()
-	res2 := New(testConfig(testHost(t, srv2)))
-	_, err := res2.Resolve(context.Background(), secret.Ref{Kind: secret.KindAWS, Path: "s:noKey"})
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("missing json key: %v", err)
-	}
 }
-
-func testHost(t *testing.T, srv *httptest.Server) string {
-	t.Helper()
-	u, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u.Host
-}
-
-func testConfig(host string) Config {
-	return Config{
-		Region:   "us-east-1",
-		Endpoint: "http://" + host,
-		Credentials: Credentials{
-			AccessKeyID:     "AKID",
-			SecretAccessKey: "SECRET",
-		},
-		HTTPClient: http.DefaultClient,
-		Now: func() time.Time {
-			return time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
-		},
-	}
-}
-
-func ptr[T any](v T) *T { return &v }

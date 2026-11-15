@@ -29,6 +29,9 @@ type canonicalToGeminiStream struct {
 	fcName         string
 	fcCallID       string
 	fcArgs         strings.Builder
+	// inReasoning and inMessage mark an open reasoning or message item, whose thoughtSignature arrives only on item.completed.
+	inReasoning bool
+	inMessage   bool
 }
 
 func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
@@ -52,6 +55,8 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		if err := json.Unmarshal(data, &e); err != nil {
 			return nil, fmt.Errorf("canonical→gemini: item.started: %w", err)
 		}
+		s.inReasoning = e.ItemType == v1.ItemTypeReasoning
+		s.inMessage = e.ItemType == v1.ItemTypeMessage
 		if e.ItemType == v1.ItemTypeFunctionCall {
 			// Begin buffering a function call; args arrive as deltas and the
 			// complete functionCall is emitted on item.completed.
@@ -93,24 +98,45 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		return geminiSSEBytes(frame)
 
 	case v1.EventItemCompleted:
-		if !s.inFunctionCall {
-			// Text/reasoning content already streamed via deltas.
+		if !s.inFunctionCall && !s.inReasoning && !s.inMessage {
 			return nil, nil
 		}
-		// Flush the buffered function call as one complete frame. The
-		// accumulated args are a complete JSON object string; embed verbatim
-		// (fall back to {} if empty or invalid).
-		s.inFunctionCall = false
-		args := json.RawMessage("{}")
-		if a := s.fcArgs.String(); a != "" && json.Valid([]byte(a)) {
-			args = json.RawMessage(a)
+		// Only the item's provider_data is read; the rest already streamed or was buffered.
+		var e struct {
+			Item struct {
+				ProviderData json.RawMessage `json:"provider_data"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal(data, &e); err != nil {
+			return nil, fmt.Errorf("canonical→gemini: item.completed: %w", err)
+		}
+		sig, emptyPart := itemSignatureFrom(e.Item.ProviderData)
+		var part geminiPart
+		if s.inReasoning || s.inMessage {
+			// The text already streamed; like Gemini, the signature rides a trailing part with empty text.
+			part = geminiPart{Thought: s.inReasoning && !emptyPart, ThoughtSignature: sig}
+			s.inReasoning, s.inMessage = false, false
+			if sig == "" {
+				return nil, nil
+			}
+		} else {
+			// Flush the buffered function call as one complete frame. The
+			// accumulated args are a complete JSON object string; embed verbatim
+			// (fall back to {} if empty or invalid).
+			s.inFunctionCall = false
+			args := json.RawMessage("{}")
+			if a := s.fcArgs.String(); a != "" && json.Valid([]byte(a)) {
+				args = json.RawMessage(a)
+			}
+			part = geminiPart{
+				FunctionCall:     &geminiFC{ID: geminiWireCallID(s.fcCallID, s.fcName), Name: s.fcName, Args: args},
+				ThoughtSignature: sig,
+			}
 		}
 		frame := geminiResponse{
 			Candidates: []candidate{{
-				Content: &geminiContent{Role: "model", Parts: []geminiPart{{
-					FunctionCall: &geminiFC{ID: geminiWireCallID(s.fcCallID, s.fcName), Name: s.fcName, Args: args},
-				}}},
-				Index: 0,
+				Content: &geminiContent{Role: "model", Parts: []geminiPart{part}},
+				Index:   0,
 			}},
 			ModelVersion: s.model,
 			ResponseID:   s.responseID,

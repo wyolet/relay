@@ -1,445 +1,59 @@
 package bitwarden
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
-	"fmt"
-	"strings"
+	"hash"
+	"sync"
 	"testing"
 
-	"golang.org/x/crypto/pbkdf2"
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestParseCipherString_Type2(t *testing.T) {
-	iv := make([]byte, 16)
-	ct := make([]byte, 32)
-	mac := make([]byte, 32)
-	for i := range iv {
-		iv[i] = byte(i)
-	}
-	for i := range ct {
-		ct[i] = byte(i + 16)
-	}
-	for i := range mac {
-		mac[i] = byte(i + 48)
-	}
+var b64 = base64.StdEncoding.EncodeToString
 
-	s := "2." + base64.StdEncoding.EncodeToString(iv) + "|" +
-		base64.StdEncoding.EncodeToString(ct) + "|" +
-		base64.StdEncoding.EncodeToString(mac)
-
-	cs, err := parseCipherString(s)
-	if err != nil {
-		t.Fatalf("parseCipherString failed: %v", err)
+// seq returns n bytes counting up from start.
+func seq(start byte, n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = start + byte(i)
 	}
-	if cs.typ != 2 {
-		t.Errorf("expected type 2, got %d", cs.typ)
-	}
-	if len(cs.iv) != 16 {
-		t.Errorf("expected IV length 16, got %d", len(cs.iv))
-	}
-	if len(cs.ct) != 32 {
-		t.Errorf("expected CT length 32, got %d", len(cs.ct))
-	}
-	if len(cs.mac) != 32 {
-		t.Errorf("expected MAC length 32, got %d", len(cs.mac))
-	}
+	return b
 }
 
-func TestParseCipherString_Type0(t *testing.T) {
-	iv := make([]byte, 16)
-	ct := make([]byte, 32)
-	s := "0." + base64.StdEncoding.EncodeToString(iv) + "|" +
-		base64.StdEncoding.EncodeToString(ct)
-
-	cs, err := parseCipherString(s)
-	if err != nil {
-		t.Fatalf("parseCipherString failed: %v", err)
-	}
-	if cs.typ != 0 {
-		t.Errorf("expected type 0, got %d", cs.typ)
-	}
-	if cs.mac != nil {
-		t.Error("expected nil MAC for type 0")
-	}
+func symKey(seed byte) symmetricKey {
+	return symmetricKey{encKey: seq(seed, 32), macKey: seq(seed+32, 32)}
 }
 
-func TestParseCipherString_Invalid(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-	}{
-		{"empty", ""},
-		{"no type", "abcdef"},
-		{"bad type", "x.abc|def|ghi"},
-		{"type 2 missing mac", "2.abc|def"},
-		{"type 0 extra parts", "0.abc|def|ghi"},
-		{"unsupported type", "5.abc|def"},
+var testRSAKey = sync.OnceValue(func() *rsa.PrivateKey {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
 	}
+	return key
+})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := parseCipherString(tt.input)
-			if err == nil {
-				t.Error("expected error, got nil")
-			}
-		})
-	}
+// encryptType0 returns plaintext as an AesCbc256_B64 cipher string (no MAC) under a fixed IV.
+func encryptType0(t *testing.T, encKey, plaintext []byte) string {
+	t.Helper()
+	iv, ct := cbcEncrypt(t, encKey, plaintext)
+	return "0." + b64(iv) + "|" + b64(ct)
 }
 
-func TestPKCS7Unpad(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   []byte
-		want    []byte
-		wantErr bool
-	}{
-		{
-			name:  "1 byte padding",
-			input: []byte{0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x01},
-			want:  []byte{0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F},
-		},
-		{
-			name:  "full block padding",
-			input: append(make([]byte, 0), 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10),
-			want:  []byte{},
-		},
-		{"empty input", []byte{}, nil, true},
-		{
-			name:    "zero padding byte",
-			input:   []byte{0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x00},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := pkcs7Unpad(tt.input, 16)
-			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(got) != len(tt.want) {
-				t.Errorf("length mismatch: got %d, want %d", len(got), len(tt.want))
-			}
-		})
-	}
-}
-
-func TestDecrypt_Type2_RoundTrip(t *testing.T) {
-	encKey := make([]byte, 32)
-	macKey := make([]byte, 32)
-	for i := range encKey {
-		encKey[i] = byte(i)
-	}
-	for i := range macKey {
-		macKey[i] = byte(i + 32)
-	}
-	key := symmetricKey{encKey: encKey, macKey: macKey}
-
-	plaintext := []byte("Hello, Vaultwarden!")
-	s := encryptType2(t, key, plaintext)
-
-	cs, err := parseCipherString(s)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	result, err := cs.decrypt(key)
-	if err != nil {
-		t.Fatalf("decrypt: %v", err)
-	}
-
-	if string(result) != "Hello, Vaultwarden!" {
-		t.Errorf("got %q, want %q", result, "Hello, Vaultwarden!")
-	}
-}
-
-func TestDecrypt_MACVerificationFails(t *testing.T) {
-	key := symmetricKey{encKey: make([]byte, 32), macKey: make([]byte, 32)}
-
-	iv := make([]byte, 16)
-	ct := make([]byte, 16)
-	wrongMAC := make([]byte, 32)
-	for i := range wrongMAC {
-		wrongMAC[i] = 0xFF
-	}
-
-	s := "2." + base64.StdEncoding.EncodeToString(iv) + "|" +
-		base64.StdEncoding.EncodeToString(ct) + "|" +
-		base64.StdEncoding.EncodeToString(wrongMAC)
-
-	cs, err := parseCipherString(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = cs.decrypt(key)
-	if err == nil {
-		t.Error("expected MAC verification error")
-	}
-	if !strings.Contains(err.Error(), "MAC verification failed") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestMakeMasterKey_PBKDF2(t *testing.T) {
-	key, err := makeMasterKey("password123", "user@example.com", kdfPBKDF2, 600000, nil, nil)
-	if err != nil {
-		t.Fatalf("makeMasterKey failed: %v", err)
-	}
-	if len(key) != 32 {
-		t.Errorf("expected 32 bytes, got %d", len(key))
-	}
-
-	expected := pbkdf2.Key([]byte("password123"), []byte("user@example.com"), 600000, 32, sha256.New)
-	for i := range key {
-		if key[i] != expected[i] {
-			t.Fatalf("key mismatch at byte %d", i)
-		}
-	}
-}
-
-func TestMakeMasterKey_Argon2id(t *testing.T) {
-	mem := 64
-	par := 4
-	key, err := makeMasterKey("password123", "user@example.com", kdfArgon2id, 3, &mem, &par)
-	if err != nil {
-		t.Fatalf("makeMasterKey failed: %v", err)
-	}
-	if len(key) != 32 {
-		t.Errorf("expected 32 bytes, got %d", len(key))
-	}
-}
-
-func TestStretchKey(t *testing.T) {
-	masterKey := make([]byte, 32)
-	for i := range masterKey {
-		masterKey[i] = byte(i)
-	}
-
-	key, err := stretchKey(masterKey)
-	if err != nil {
-		t.Fatalf("stretchKey failed: %v", err)
-	}
-
-	if len(key.encKey) != 32 {
-		t.Errorf("expected 32-byte enc key, got %d", len(key.encKey))
-	}
-	if len(key.macKey) != 32 {
-		t.Errorf("expected 32-byte mac key, got %d", len(key.macKey))
-	}
-
-	same := true
-	for i := range key.encKey {
-		if key.encKey[i] != key.macKey[i] {
-			same = false
-			break
-		}
-	}
-	if same {
-		t.Error("enc and mac keys should differ")
-	}
-}
-
-func TestDecryptStr_Empty(t *testing.T) {
-	key := symmetricKey{encKey: make([]byte, 32), macKey: make([]byte, 32)}
-	result, err := decryptStr("", key)
-	if err != nil {
-		t.Fatalf("decryptStr empty should not error: %v", err)
-	}
-	if result != "" {
-		t.Errorf("expected empty string, got %q", result)
-	}
-}
-
-func TestParseCipherString_Type3_RSA_SHA256(t *testing.T) {
-	ct := make([]byte, 256)
-	for i := range ct {
-		ct[i] = byte(i)
-	}
-	s := "3." + base64.StdEncoding.EncodeToString(ct)
-
-	cs, err := parseCipherString(s)
-	if err != nil {
-		t.Fatalf("parseCipherString type 3 failed: %v", err)
-	}
-	if cs.typ != encTypeRsa2048OaepSha256B64 {
-		t.Errorf("expected type %d, got %d", encTypeRsa2048OaepSha256B64, cs.typ)
-	}
-	if len(cs.ct) != 256 {
-		t.Errorf("expected CT length 256, got %d", len(cs.ct))
-	}
-}
-
-func TestDecryptRSA_OAEP_SHA1_RoundTrip(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate RSA key: %v", err)
-	}
-
-	orgKeyPlain := make([]byte, 64)
-	for i := range orgKeyPlain {
-		orgKeyPlain[i] = byte(i)
-	}
-
-	ciphertext, err := rsa.EncryptOAEP(sha1.New(), rand.Reader, &privateKey.PublicKey, orgKeyPlain, nil)
-	if err != nil {
-		t.Fatalf("RSA encrypt: %v", err)
-	}
-
-	csStr := "4." + base64.StdEncoding.EncodeToString(ciphertext)
-	cs, err := parseCipherString(csStr)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	decrypted, err := cs.decryptRSA(privateKey)
-	if err != nil {
-		t.Fatalf("decryptRSA: %v", err)
-	}
-
-	if len(decrypted) != 64 {
-		t.Fatalf("expected 64 bytes, got %d", len(decrypted))
-	}
-	for i := range orgKeyPlain {
-		if decrypted[i] != orgKeyPlain[i] {
-			t.Fatalf("mismatch at byte %d", i)
-		}
-	}
-}
-
-func TestDecryptPrivateKey_RoundTrip(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate RSA key: %v", err)
-	}
-
-	derBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
-	if err != nil {
-		t.Fatalf("marshal PKCS8: %v", err)
-	}
-
-	encKey := make([]byte, 32)
-	macKey := make([]byte, 32)
-	for i := range encKey {
-		encKey[i] = byte(i)
-	}
-	for i := range macKey {
-		macKey[i] = byte(i + 32)
-	}
-	symKey := symmetricKey{encKey: encKey, macKey: macKey}
-
-	csStr := encryptType2(t, symKey, derBytes)
-
-	decryptedKey, err := decryptPrivateKey(csStr, symKey)
-	if err != nil {
-		t.Fatalf("decryptPrivateKey: %v", err)
-	}
-
-	if decryptedKey.N.Cmp(privateKey.N) != 0 {
-		t.Error("decrypted private key N mismatch")
-	}
-	if decryptedKey.D.Cmp(privateKey.D) != 0 {
-		t.Error("decrypted private key D mismatch")
-	}
-}
-
-func TestDecryptOrgKey_RoundTrip(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate RSA key: %v", err)
-	}
-
-	orgKeyPlain := make([]byte, 64)
-	for i := 0; i < 32; i++ {
-		orgKeyPlain[i] = byte(i)
-		orgKeyPlain[32+i] = byte(i + 64)
-	}
-
-	ciphertext, err := rsa.EncryptOAEP(sha1.New(), rand.Reader, &privateKey.PublicKey, orgKeyPlain, nil)
-	if err != nil {
-		t.Fatalf("RSA encrypt: %v", err)
-	}
-
-	csStr := "4." + base64.StdEncoding.EncodeToString(ciphertext)
-
-	orgKey, err := decryptOrgKey(csStr, privateKey)
-	if err != nil {
-		t.Fatalf("decryptOrgKey: %v", err)
-	}
-
-	for i := 0; i < 32; i++ {
-		if orgKey.encKey[i] != byte(i) {
-			t.Fatalf("encKey mismatch at byte %d", i)
-		}
-	}
-	for i := 0; i < 32; i++ {
-		if orgKey.macKey[i] != byte(i+64) {
-			t.Fatalf("macKey mismatch at byte %d", i)
-		}
-	}
-}
-
-func TestDecryptOrgKey_WrongLength(t *testing.T) {
-	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	plaintext := make([]byte, 32)
-	ct, _ := rsa.EncryptOAEP(sha1.New(), rand.Reader, &privateKey.PublicKey, plaintext, nil)
-	csStr := "4." + base64.StdEncoding.EncodeToString(ct)
-
-	_, err := decryptOrgKey(csStr, privateKey)
-	if err == nil {
-		t.Error("expected error for wrong org key length")
-	}
-	if !strings.Contains(err.Error(), "unexpected org key length") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestDecryptCipher_WithOrgKey(t *testing.T) {
-	personalKey := symmetricKey{encKey: make([]byte, 32), macKey: make([]byte, 32)}
-	orgKey := symmetricKey{encKey: make([]byte, 32), macKey: make([]byte, 32)}
-	for i := range orgKey.encKey {
-		orgKey.encKey[i] = byte(i + 100)
-	}
-	for i := range orgKey.macKey {
-		orgKey.macKey[i] = byte(i + 132)
-	}
-
-	encryptedName := encryptType2String(t, orgKey, "ORG_SECRET")
-	orgID := "org-123"
-	cipher := syncCipher{
-		ID:             "cipher-1",
-		Type:           cipherTypeLogin,
-		OrganizationID: &orgID,
-		Name:           encryptedName,
-	}
-
-	_, err := decryptCipher(cipher, personalKey)
-	if err == nil {
-		t.Error("expected error when decrypting org cipher with personal key")
-	}
-
-	item, err := decryptCipher(cipher, orgKey)
-	if err != nil {
-		t.Fatalf("decryptCipher with org key failed: %v", err)
-	}
-	if item.name != "ORG_SECRET" {
-		t.Errorf("got name %q, want %q", item.name, "ORG_SECRET")
-	}
+// encryptType2 returns plaintext as an AesCbc256_HmacSha256_B64 cipher string under a fixed IV.
+func encryptType2(t *testing.T, key symmetricKey, plaintext []byte) string {
+	t.Helper()
+	iv, ct := cbcEncrypt(t, key.encKey, plaintext)
+	mac := hmac.New(sha256.New, key.macKey)
+	mac.Write(iv)
+	mac.Write(ct)
+	return "2." + b64(iv) + "|" + b64(ct) + "|" + b64(mac.Sum(nil))
 }
 
 func encryptType2String(t *testing.T, key symmetricKey, plaintext string) string {
@@ -447,36 +61,167 @@ func encryptType2String(t *testing.T, key symmetricKey, plaintext string) string
 	return encryptType2(t, key, []byte(plaintext))
 }
 
-func encryptType2(t *testing.T, key symmetricKey, plaintext []byte) string {
+func cbcEncrypt(t *testing.T, encKey, plaintext []byte) (iv, ct []byte) {
 	t.Helper()
+	padLen := aes.BlockSize - len(plaintext)%aes.BlockSize
+	padded := append(bytes.Clone(plaintext), bytes.Repeat([]byte{byte(padLen)}, padLen)...)
+	block, err := aes.NewCipher(encKey)
+	must(t, err)
+	iv, ct = seq(100, 16), make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ct, padded)
+	return iv, ct
+}
 
-	padLen := aes.BlockSize - (len(plaintext) % aes.BlockSize)
-	padded := make([]byte, len(plaintext)+padLen)
-	copy(padded, plaintext)
-	for i := len(plaintext); i < len(padded); i++ {
-		padded[i] = byte(padLen)
+func rsaEncrypt(t *testing.T, typ string, h hash.Hash, plaintext []byte) string {
+	t.Helper()
+	ct, err := rsa.EncryptOAEP(h, rand.Reader, &testRSAKey().PublicKey, plaintext, nil)
+	must(t, err)
+	return typ + "." + b64(ct)
+}
+
+// wantErr reports whether err is exactly want, where "" means no error.
+func wantErr(err error, want string) bool {
+	if want == "" {
+		return err == nil
+	}
+	return err != nil && err.Error() == want
+}
+
+func TestParseCipherString(t *testing.T) {
+	iv, ct, mac := seq(0, 16), seq(16, 32), seq(48, 32)
+	for _, tc := range []struct {
+		name, in string
+		want     *cipherString
+		wantErr  string
+	}{
+		{"type 0", "0." + b64(iv) + "|" + b64(ct), &cipherString{typ: 0, iv: iv, ct: ct}, ""},
+		{"type 2", "2." + b64(iv) + "|" + b64(ct) + "|" + b64(mac), &cipherString{typ: 2, iv: iv, ct: ct, mac: mac}, ""},
+		{"type 3", "3." + b64(ct), &cipherString{typ: 3, ct: ct}, ""},
+		{"type 4", "4." + b64(ct), &cipherString{typ: 4, ct: ct}, ""},
+		{"empty", "", nil, "bitwarden: empty cipher string"},
+		{"no type", "abcdef", nil, "bitwarden: invalid cipher string: missing type separator"},
+		{"type is not a number", "x.abc|def|ghi", nil, `bitwarden: invalid encryption type: strconv.Atoi: parsing "x": invalid syntax`},
+		{"type 2 without a mac", "2." + b64(iv) + "|" + b64(ct), nil, "bitwarden: AesCbc256_HmacSha256_B64 expects 3 parts, got 2"},
+		{"type 0 with a mac", "0." + b64(iv) + "|" + b64(ct) + "|" + b64(mac), nil, "bitwarden: AesCbc256_B64 expects 2 parts, got 3"},
+		{"type 1", "1." + b64(iv) + "|" + b64(ct) + "|" + b64(mac), nil, "bitwarden: unsupported encryption type: 1"},
+		{"type 5", "5." + b64(ct), nil, "bitwarden: unsupported encryption type: 5"},
+		{"type 0 bad iv", "0.!|" + b64(ct), nil, "bitwarden: invalid IV: illegal base64 data at input byte 0"},
+		{"type 0 bad ciphertext", "0." + b64(iv) + "|!", nil, "bitwarden: invalid ciphertext: illegal base64 data at input byte 0"},
+		{"type 2 bad iv", "2.!|" + b64(ct) + "|" + b64(mac), nil, "bitwarden: invalid IV: illegal base64 data at input byte 0"},
+		{"type 2 bad ciphertext", "2." + b64(iv) + "|!|" + b64(mac), nil, "bitwarden: invalid ciphertext: illegal base64 data at input byte 0"},
+		{"type 2 bad mac", "2." + b64(iv) + "|" + b64(ct) + "|!", nil, "bitwarden: invalid MAC: illegal base64 data at input byte 0"},
+		{"type 4 bad ciphertext", "4.a|b", nil, "bitwarden: invalid RSA ciphertext: illegal base64 data at input byte 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseCipherString(tc.in)
+			if d := cmp.Diff(tc.want, got, cmp.AllowUnexported(cipherString{})); d != "" || !wantErr(err, tc.wantErr) {
+				t.Errorf("parseCipherString: %v, want %q (-want +got):\n%s", err, tc.wantErr, d)
+			}
+		})
+	}
+}
+
+func TestCipherString_Decrypt(t *testing.T) {
+	key := symKey(0)
+	const plain = "Hello, Vaultwarden!"
+	parse := func(s string) *cipherString {
+		cs, err := parseCipherString(s)
+		must(t, err)
+		return cs
+	}
+	with := func(f func(*cipherString)) *cipherString {
+		cs := parse(encryptType2String(t, key, plain))
+		f(cs)
+		return cs
+	}
+	const macFailed = "bitwarden: MAC verification failed"
+
+	for _, tc := range []struct {
+		name    string
+		cs      *cipherString
+		key     symmetricKey
+		want    string
+		wantErr string
+	}{
+		{"type 2", with(func(*cipherString) {}), key, plain, ""},
+		{"type 0", parse(encryptType0(t, key.encKey, []byte(plain))), symmetricKey{encKey: key.encKey}, plain, ""},
+		{"a whole block of padding", parse(encryptType2(t, key, seq(0, 16))), key, string(seq(0, 16)), ""},
+		{"empty plaintext", parse(encryptType2(t, key, nil)), key, "", ""},
+		{"mac bit flipped", with(func(cs *cipherString) { cs.mac[0] ^= 1 }), key, "", macFailed},
+		{"mac truncated", with(func(cs *cipherString) { cs.mac = cs.mac[:31] }), key, "", macFailed},
+		{"no mac", with(func(cs *cipherString) { cs.mac = nil }), key, "", macFailed},
+		{"ciphertext bit flipped", with(func(cs *cipherString) { cs.ct[0] ^= 1 }), key, "", macFailed},
+		{"last ciphertext block dropped", with(func(cs *cipherString) { cs.ct = cs.ct[:16] }), key, "", macFailed},
+		{"iv bit flipped", with(func(cs *cipherString) { cs.iv[0] ^= 1 }), key, "", macFailed},
+		{"another mac key", with(func(*cipherString) {}), symmetricKey{encKey: key.encKey, macKey: seq(99, 32)}, "", macFailed},
+		{"key without a mac key", with(func(*cipherString) {}), symmetricKey{encKey: key.encKey}, "", "bitwarden: MAC key required for type 2 decryption"},
+		{"short iv", with(func(cs *cipherString) { cs.iv = cs.iv[:15] }), key, "", "bitwarden: invalid IV length: 15"},
+		{"no iv", parse("4." + b64(seq(0, 32))), key, "", "bitwarden: invalid IV length: 0"},
+		{"ciphertext off the block size", with(func(cs *cipherString) { cs.ct = cs.ct[:17] }), key, "", "bitwarden: invalid ciphertext length: 17"},
+		{"empty ciphertext", with(func(cs *cipherString) { cs.ct = nil }), key, "", "bitwarden: invalid ciphertext length: 0"},
+		{"enc key of the wrong size", parse(encryptType0(t, key.encKey, []byte(plain))), symmetricKey{encKey: seq(0, 7)}, "", "bitwarden: aes cipher: crypto/aes: invalid key size 7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.cs.decrypt(tc.key)
+			if string(got) != tc.want || !wantErr(err, tc.wantErr) || (err != nil && got != nil) {
+				t.Errorf("decrypt = %q, %v; want %q, %q", got, err, tc.want, tc.wantErr)
+			}
+		})
 	}
 
-	iv := make([]byte, 16)
-	for i := range iv {
-		iv[i] = byte(i + 100)
-	}
+	t.Run("type 2 relabelled as type 0", func(t *testing.T) {
+		cs := with(func(cs *cipherString) { cs.typ, cs.mac = encTypeAesCbc256B64, nil; cs.iv[0] ^= 1 })
+		if got, err := cs.decrypt(key); err == nil {
+			t.Errorf("decrypt = %q, want an error: the key carries a MAC key and the value carries no MAC", got)
+		}
+	})
+}
 
-	block, err := aes.NewCipher(key.encKey)
+func TestPKCS7Unpad(t *testing.T) {
+	block := func(data string, pad ...byte) []byte { return append([]byte(data), pad...) }
+	for _, tc := range []struct {
+		name    string
+		in      []byte
+		want    string
+		wantErr string
+	}{
+		{"one byte", block("ABCDEFGHIJKLMNO", 1), "ABCDEFGHIJKLMNO", ""},
+		{"three bytes", block("ABCDEFGHIJKLM", 3, 3, 3), "ABCDEFGHIJKLM", ""},
+		{"whole block", bytes.Repeat([]byte{16}, 16), "", ""},
+		{"second block is all padding", block("ABCDEFGHIJKLMNOP", bytes.Repeat([]byte{16}, 16)...), "ABCDEFGHIJKLMNOP", ""},
+		{"empty", nil, "", "bitwarden: empty data"},
+		{"not block-aligned", block("ABCDEFGHIJKLMN", 1), "", "bitwarden: data not block-aligned"},
+		{"zero pad byte", block("ABCDEFGHIJKLMNO", 0), "", "bitwarden: invalid padding length: 0"},
+		{"pad longer than a block", block("ABCDEFGHIJKLMNO", 17), "", "bitwarden: invalid padding length: 17"},
+		{"pad bytes disagree", block("ABCDEFGHIJKLM", 3, 2, 3), "", "bitwarden: invalid PKCS7 padding"},
+		{"pad runs into the data", block("ABCDEFGHIJKLMN", 3, 3), "", "bitwarden: invalid PKCS7 padding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pkcs7Unpad(tc.in, 16)
+			if string(got) != tc.want || !wantErr(err, tc.wantErr) || (err != nil && got != nil) {
+				t.Errorf("pkcs7Unpad = %q, %v; want %q, %q", got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestDecryptStr(t *testing.T) {
+	key := symKey(0)
+	for _, tc := range []struct{ name, in, want, wantErr string }{
+		{"empty stays empty", "", "", ""},
+		{"value", encryptType2String(t, key, "sk-value"), "sk-value", ""},
+		{"not a cipher string", "plaintext", "", "bitwarden: invalid cipher string: missing type separator"},
+		{"another key's value", encryptType2String(t, symKey(1), "sk-value"), "", "bitwarden: MAC verification failed"},
+	} {
+		if got, err := decryptStr(tc.in, key); got != tc.want || !wantErr(err, tc.wantErr) {
+			t.Errorf("%s: decryptStr = %q, %v; want %q, %q", tc.name, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ct := make([]byte, len(padded))
-	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ct, padded)
-
-	mac := hmac.New(sha256.New, key.macKey)
-	mac.Write(iv)
-	mac.Write(ct)
-	macBytes := mac.Sum(nil)
-
-	return fmt.Sprintf("2.%s|%s|%s",
-		base64.StdEncoding.EncodeToString(iv),
-		base64.StdEncoding.EncodeToString(ct),
-		base64.StdEncoding.EncodeToString(macBytes),
-	)
 }

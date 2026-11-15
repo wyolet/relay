@@ -4,52 +4,99 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-func TestCounterIDs_Golden(t *testing.T) {
-	rl := &ratelimit.RateLimit{Meta: meta.Metadata{ID: "rl1"}}
-	r := ratelimit.Rule{Meter: ratelimit.MeterRequests, Amount: 60, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}
+var (
+	testLimit = &ratelimit.RateLimit{Meta: meta.Metadata{ID: "rl1"}}
+	perMinute = ratelimit.Rule{Meter: ratelimit.MeterRequests, Amount: 60, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}
+)
+
+// A counter's ID decides which bucket it counts in and its Group which store call it rides, so both are pinned whole.
+func TestCounterConstructors(t *testing.T) {
 	b := &budget.Budget{Meta: meta.Metadata{ID: "b1"}, Spec: budget.Spec{AmountUSD: "10", Period: budget.PeriodMonth}}
-	for _, tc := range []struct{ got, want string }{
-		{CallerRule(RungTeam, rl, r, "p1", "team:t1", "team:t1").ID, "r:rl1:token-bucket:60:requests:p:p1:s:team:t1"},
-		{UpstreamRule(RungAccount, rl, r, "p2", "account:a1", "", "account:a1").ID, "r:rl1:token-bucket:60:requests:o:account:a1"},
-		{UpstreamRule(RungAccount, rl, r, "p2", "account:a1", "m1", "account:a1").ID, "r:rl1:token-bucket:60:requests:o:account:a1:m:m1"},
-		{BudgetCounter(RungProject, b, "p3", "project:x", "team:t1").ID, "b:b1:month:s:project:x"},
+	const rule = "r:rl1:token-bucket:60:requests"
+	for _, tc := range []struct {
+		name      string
+		got, want Counter
+	}{
+		{"caller rule", CallerRule(RungTeam, testLimit, perMinute, "p1", "team:t1", "g"),
+			Counter{Kind: KindRule, Rung: RungTeam, PolicyID: "p1", SubjectID: "team:t1", RateLimitID: "rl1", Rule: perMinute, ID: rule + ":p:p1:s:team:t1", Group: "g"}},
+		{"upstream rule", UpstreamRule(RungAccount, testLimit, perMinute, "p2", "account:a1", "", "g"),
+			Counter{Kind: KindRule, Rung: RungAccount, PolicyID: "p2", SubjectID: "account:a1", RateLimitID: "rl1", Rule: perMinute, ID: rule + ":o:account:a1", Group: "g"}},
+		{"upstream rule scoped to a model", UpstreamRule(RungAccount, testLimit, perMinute, "p2", "account:a1", "m1", "g"),
+			Counter{Kind: KindRule, Rung: RungAccount, PolicyID: "p2", SubjectID: "account:a1", ModelID: "m1", RateLimitID: "rl1", Rule: perMinute, ID: rule + ":o:account:a1:m:m1", Group: "g"}},
+		{"system rule", SystemRule(testLimit, perMinute, "ip:10.0.0.1"),
+			Counter{Kind: KindRule, Rung: RungSystem, SubjectID: "ip:10.0.0.1", RateLimitID: "rl1", Rule: perMinute, ID: rule + ":s:ip:10.0.0.1", Group: "system:ip:10.0.0.1"}},
+		{"budget", BudgetCounter(RungProject, b, "p3", "project:x", "g"),
+			Counter{Kind: KindBudget, Rung: RungProject, PolicyID: "p3", SubjectID: "project:x", Budget: b, ID: "b:b1:month:s:project:x", Group: "g"}},
+		{"per lane", CallerRule(RungTeam, testLimit, perMinute, "p1", "team:t1", "g").ForLane("account:a"),
+			Counter{Kind: KindRule, Rung: RungTeam, PolicyID: "p1", SubjectID: "team:t1", Lane: "account:a", RateLimitID: "rl1", Rule: perMinute, ID: rule + ":p:p1:s:team:t1:l:account:a", Group: "g"}},
 	} {
-		if tc.got != tc.want {
-			t.Errorf("id = %q, want %q", tc.got, tc.want)
+		if diff := cmp.Diff(tc.want, tc.got); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", tc.name, diff)
+		}
+	}
+	shared := CallerRule(RungTeam, testLimit, perMinute, "p1", "team:t1", "g")
+	if shared.ForLane("account:a"); shared.Lane != "" || shared.ID != rule+":p:p1:s:team:t1" {
+		t.Errorf("ForLane changed the shared counter: %+v", shared)
+	}
+}
+
+// What is and is not part of a counter's identity: an edit that keeps the ID keeps the count.
+func TestCounterIdentity(t *testing.T) {
+	caller := func(r ratelimit.Rule, policy string) string {
+		return CallerRule(RungLane, testLimit, r, policy, "account:a", "g").ID
+	}
+	upstream := func(policy string) string {
+		return UpstreamRule(RungAccount, testLimit, perMinute, policy, "account:a", "", "g").ID
+	}
+	budgetID := func(amount string, mode budget.Mode, period budget.Period) string {
+		b := &budget.Budget{Meta: meta.Metadata{ID: "b1"}, Spec: budget.Spec{AmountUSD: amount, Mode: mode, Period: period}}
+		return BudgetCounter(RungTeam, b, "p", "team:t", "g").ID
+	}
+	edit := func(f func(*ratelimit.Rule)) ratelimit.Rule {
+		r := perMinute
+		f(&r)
+		return r
+	}
+	for _, tc := range []struct {
+		name string
+		a, b string
+		same bool
+	}{
+		{"a rule's amount", caller(perMinute, "p"), caller(edit(func(r *ratelimit.Rule) { r.Amount = 5000 }), "p"), true},
+		{"a rule's window", caller(perMinute, "p"), caller(edit(func(r *ratelimit.Rule) { r.Window = ratelimit.Window(time.Hour) }), "p"), false},
+		{"a rule's meter", caller(perMinute, "p"), caller(edit(func(r *ratelimit.Rule) { r.Meter = ratelimit.MeterTokens }), "p"), false},
+		{"a rule's strategy", caller(perMinute, "p"), caller(edit(func(r *ratelimit.Rule) { r.Strategy = ratelimit.StrategyFixedWindow }), "p"), false},
+		{"a caller rule's policy", caller(perMinute, "p"), caller(perMinute, "q"), false},
+		{"an upstream rule's policy", upstream("p"), upstream("q"), true},
+		{"a budget's amount and mode", budgetID("10", budget.ModeHard, budget.PeriodMonth), budgetID("99", budget.ModeAlert, budget.PeriodMonth), true},
+		{"a budget's period", budgetID("10", budget.ModeHard, budget.PeriodMonth), budgetID("10", budget.ModeHard, budget.PeriodDay), false},
+	} {
+		if (tc.a == tc.b) != tc.same {
+			t.Errorf("%s: ids %q and %q, want same = %v", tc.name, tc.a, tc.b, tc.same)
 		}
 	}
 }
 
-func TestCounterIDs_AmountKeepsWindowChanges(t *testing.T) {
-	rl := &ratelimit.RateLimit{Meta: meta.Metadata{ID: "rl1"}}
-	base := ratelimit.Rule{Meter: ratelimit.MeterTokens, Amount: 1000, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategySlidingWindow}
-	raised, wider := base, base
-	raised.Amount = 5000
-	wider.Window = ratelimit.Window(time.Hour)
-	id := func(r ratelimit.Rule) string { return CallerRule(RungLane, rl, r, "p", "account:a", "account:a").ID }
-	if id(base) != id(raised) {
-		t.Error("an amount edit changed the counter identity")
+func TestRungReadingAndRefused(t *testing.T) {
+	for r, want := range map[Rung]bool{RungAccount: true, RungTeam: false, RungProject: false, RungLane: false, RungSystem: false} {
+		if r.Upstream() != want {
+			t.Errorf("%s.Upstream() = %v, want %v", r, !want, want)
+		}
 	}
-	if id(base) == id(wider) {
-		t.Error("a window edit kept the counter identity")
+	for _, tc := range []struct{ used, amount, want int64 }{{0, 10, 10}, {4, 10, 6}, {10, 10, 0}, {15, 10, 0}} {
+		if got := (Reading{Used: tc.used, Amount: tc.amount}).Remaining(); got != tc.want {
+			t.Errorf("Remaining of %d used of %d = %d, want %d", tc.used, tc.amount, got, tc.want)
+		}
 	}
-}
-
-// A link with shared off counts once per lane: the lane joins the identity, so two lanes under one bound account count apart while the shared count stays one.
-func TestCounterIDs_PerLane(t *testing.T) {
-	rl := &ratelimit.RateLimit{Meta: meta.Metadata{ID: "rl1"}}
-	r := ratelimit.Rule{Meter: ratelimit.MeterRequests, Amount: 10, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}
-	shared := CallerRule(RungTeam, rl, r, "p", "account:team", "account:team")
-	a, b := shared.ForLane("account:a"), shared.ForLane("account:b")
-	if a.ID == b.ID || a.ID == shared.ID {
-		t.Fatalf("per-lane ids %q, %q and shared %q must all differ", a.ID, b.ID, shared.ID)
-	}
-	if a.Lane != "account:a" || shared.Lane != "" || a.Group != shared.Group {
-		t.Fatalf("lane %q / %q, group %q / %q", a.Lane, shared.Lane, a.Group, shared.Group)
+	c := CallerRule(RungTeam, testLimit, perMinute, "p1", "team:t1", "g")
+	if got, want := (&Refused{Counter: &c}).Error(), "limits: team policy p1 refused counter r:rl1:token-bucket:60:requests:p:p1:s:team:t1"; got != want {
+		t.Errorf("Refused.Error() = %q, want %q", got, want)
 	}
 }

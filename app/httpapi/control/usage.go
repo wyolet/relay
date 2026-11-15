@@ -11,6 +11,7 @@ package control
 import (
 	"context"
 	"encoding/base64"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -583,7 +584,7 @@ func parseInterval(raw string) (time.Duration, error) {
 	if strings.TrimSpace(raw) == "" {
 		return 0, huma.Error400BadRequest("`interval` is required (e.g. \"1h\", \"1d\")")
 	}
-	d, err := parseSince(raw)
+	d, err := parseSpan(raw)
 	if err != nil {
 		return 0, err
 	}
@@ -593,24 +594,38 @@ func parseInterval(raw string) (time.Duration, error) {
 	return d, nil
 }
 
-// parseSince accepts "1h", "24h", "7d", or empty (defaults to 1h).
-// Returns the resulting time.Duration. Empty input returns 1h.
+// parseSince accepts "1h", "24h", "7d", or empty (defaults to 1h). A
+// negative window is a 400.
 func parseSince(raw string) (time.Duration, error) {
+	d, err := parseSpan(raw)
+	if err == nil && d < 0 {
+		return 0, huma.Error400BadRequest("invalid `since` value: " + strings.TrimSpace(raw)).(error)
+	}
+	return d, err
+}
+
+// parseSpan parses a Go duration, or a plain day count with a d suffix
+// ("7d", "1.5d"). Empty input returns 1h.
+func parseSpan(raw string) (time.Duration, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return time.Hour, nil
 	}
-	// "7d" / "30d" — Go's time.ParseDuration doesn't accept day units.
-	if strings.HasSuffix(raw, "d") {
-		days, err := time.ParseDuration(strings.TrimSuffix(raw, "d") + "h")
-		if err != nil {
-			return 0, huma.Error400BadRequest("invalid `since` value: " + raw).(error)
+	invalid := huma.Error400BadRequest("invalid `since` value: " + raw).(error)
+	// Go's time.ParseDuration doesn't accept day units.
+	if n, ok := strings.CutSuffix(raw, "d"); ok {
+		if n == "" || strings.Trim(n, "0123456789.") != "" {
+			return 0, invalid
 		}
-		return days * 24, nil
+		hours, err := time.ParseDuration(n + "h")
+		if err != nil || hours > math.MaxInt64/24 {
+			return 0, invalid
+		}
+		return hours * 24, nil
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, huma.Error400BadRequest("invalid `since` value: " + raw).(error)
+		return 0, invalid
 	}
 	return d, nil
 }

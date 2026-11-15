@@ -36,7 +36,7 @@ func newMetrics(s *Server) *metrics {
 		}),
 		builds: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: ns, Name: "builds_total",
-			Help: "Release files rebuilt from the mirror, by asset (catalog, data).",
+			Help: "Release files rebuilt from the mirror, by asset (catalog, data, mcp).",
 		}, []string{"asset"}),
 		buildFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: ns, Name: "build_failures_total",

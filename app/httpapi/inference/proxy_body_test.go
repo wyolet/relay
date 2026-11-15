@@ -129,3 +129,18 @@ func TestScannedBody_Refusals(t *testing.T) {
 		})
 	}
 }
+
+// A connection that takes no read deadline is read without one, and a read after the handler returned fails without touching the connection, which may be serving its next request by then.
+func TestIdleDeadlineBody(t *testing.T) {
+	// A recorder supports no deadlines.
+	b := &idleDeadlineBody{body: strings.NewReader("abc"), rc: http.NewResponseController(httptest.NewRecorder()), idle: time.Second}
+	if got, err := io.ReadAll(b); string(got) != "abc" || err != nil || !b.off {
+		t.Fatalf("read %q, %v (deadlines off: %v); want the body with deadlines given up", got, err, b.off)
+	}
+
+	b = &idleDeadlineBody{body: unreadBody{t}, rc: http.NewResponseController(httptest.NewRecorder()), idle: time.Second}
+	b.done.Store(true)
+	if n, err := b.Read(make([]byte, 8)); n != 0 || err != errHandlerReturned {
+		t.Fatalf("read after the handler returned: %d, %v", n, err)
+	}
+}

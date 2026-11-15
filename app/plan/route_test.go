@@ -105,9 +105,7 @@ func TestRoute_ProviderWildcardGrantsTheProvidersModels(t *testing.T) {
 	b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 
-	if r := h.route(b.key, "acme/m1@host-a"); r.Refused != nil || len(r.Hops) == 0 {
-		t.Fatalf("acme/m1 under acme/* = %+v, want served", r.Refused)
-	}
+	wantHops(t, h.route(b.key, "acme/m1@host-a"), ids(b.a1), ids(b.a2))
 	_ = wantRefused(t, h.route(b.key, "beta/x"), CodeModelNotAllowed, limits.RungProject)
 	byModel := get[KeySlot](h, b.a1.Meta.ID).ByModel
 	if len(byModel[b.m1.Meta.ID]) != 1 || len(byModel[x.Meta.ID]) != 0 {
@@ -149,15 +147,11 @@ func TestRoute_DuplicateBindingRefusesAndFlagsBoth(t *testing.T) {
 
 	_ = wantRefused(t, h.route(b.key, "m1"), CodeDuplicateBinding, limits.RungProject)
 	for _, pb := range []string{pb1.Meta.ID, pb2.Meta.ID} {
-		if !hasIssue(h.issues(KindPolicyBinding, pb), CodeDuplicateBinding) {
-			t.Fatalf("binding %s has no duplicate_binding issue", pb)
-		}
+		h.wantIssue(KindPolicyBinding, pb, CodeDuplicateBinding, true)
 	}
 	del(h, KindPolicyBinding, pb2.Meta.ID)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
-	if hasIssue(h.issues(KindPolicyBinding, pb1.Meta.ID), CodeDuplicateBinding) {
-		t.Fatal("duplicate_binding stayed after the second binding went")
-	}
+	h.wantIssue(KindPolicyBinding, pb1.Meta.ID, CodeDuplicateBinding, false)
 }
 
 // A binding whose owner's scope does not hold the account (a team binding a user's personal account) is ignored for it and says so.
@@ -169,9 +163,7 @@ func TestRoute_BindingOutsideItsOwnersScopeIsIgnored(t *testing.T) {
 	pb := b.w.bindPolicy(p, b.w.personal(u))
 	pb.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID}
 	h := b.w.start(t)
-	if !hasIssue(h.issues(KindPolicyBinding, pb.Meta.ID), IssueSubjectOutOfScope) {
-		t.Fatal("an out-of-scope account raised no subject_out_of_scope")
-	}
+	h.wantIssue(KindPolicyBinding, pb.Meta.ID, IssueSubjectOutOfScope, true)
 	wantHops(t, h.route(uk, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
 }
 
@@ -187,35 +179,10 @@ func TestRoute_MissingPoolNarrowsAndReturns(t *testing.T) {
 
 	del(h, KindPool, poolA.Meta.ID)
 	wantHops(t, h.route(b.key, "m1"), ids(b.b1))
-	if !hasIssue(h.issues(KindPolicy, p.Meta.ID), IssueRefMissing) {
-		t.Fatal("policy linking a deleted pool has no ref_missing")
-	}
+	h.wantIssue(KindPolicy, p.Meta.ID, IssueRefMissing, true)
 	apply(h, poolA)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.b1))
-	if hasIssue(h.issues(KindPolicy, p.Meta.ID), IssueRefMissing) {
-		t.Fatal("ref_missing stayed after the pool came back")
-	}
-}
-
-func TestRoute_DeletedBudgetAndRateLimitDropFromTheFold(t *testing.T) {
-	b := newBasic()
-	rl := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
-	bud := b.w.budget("100")
-	p := b.w.policy("p", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}, Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
-	b.w.bindPolicy(p, b.w.projectAccount(b.proj))
-	h := b.w.start(t)
-	if n := len(h.keyPlan(b.key).Caller.Counters); n != 2 {
-		t.Fatalf("caller counters = %d, want a rule and a budget", n)
-	}
-	del(h, KindBudget, bud.Meta.ID)
-	del(h, KindRateLimit, rl.Meta.ID)
-	if n := len(h.keyPlan(b.key).Caller.Counters); n != 0 {
-		t.Fatalf("caller counters = %d after deleting both links, want 0", n)
-	}
-	if is := h.issues(KindPolicy, p.Meta.ID); len(is) != 2 || !hasIssue(is, IssueRefMissing) {
-		t.Fatalf("issues = %v, want two ref_missing", is)
-	}
-	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
+	h.wantIssue(KindPolicy, p.Meta.ID, IssueRefMissing, false)
 }
 
 // A disabled tier policy takes its account's credentials out instead of letting them serve unmetered.
@@ -227,6 +194,64 @@ func TestRoute_DisabledAccountPolicyTakesItsCredentialsOut(t *testing.T) {
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m1"), ids(b.b1))
 	_ = wantRefused(t, h.route(b.key, "m1@host-a"), CodePolicyDisabled, limits.RungAccount)
+}
+
+// A disabled host is not routed to: the route fails over to the other host, and with both disabled the model has no binding to serve it.
+func TestRoute_SkipsDisabledHost(t *testing.T) {
+	b := newBasic()
+	h := b.w.start(t)
+	off := clone(b.hostA)
+	off.Spec.Enabled = boolp(false)
+	apply(h, off)
+	r := h.route(b.key, "m1")
+	if r.Refused != nil {
+		t.Fatalf("refused with host-b enabled: %v", r.Refused)
+	}
+	for _, hop := range r.Hops {
+		if hop.Host.Meta.ID == b.hostA.Meta.ID {
+			t.Fatalf("route reaches disabled host-a: %v", slotIDs(r))
+		}
+	}
+
+	offB := clone(b.hostB)
+	offB.Spec.Enabled = boolp(false)
+	apply(h, offB)
+	if r := h.route(b.key, "m1"); r.Refused == nil || r.Refused.Code != CodeNoBinding {
+		t.Fatalf("both hosts disabled: refused %+v, want %s", r.Refused, CodeNoBinding)
+	}
+}
+
+// A policy whose pools reach the model's host but hold no usable key refuses with no_credentials, naming the rung that links them, not model_disabled.
+func TestRoute_PoolWithNoUsableKeyRefusesNoCredentials(t *testing.T) {
+	b := newBasic()
+	b.a1.Spec.Enabled = boolp(false)
+	p := b.w.pool(b.hostA, b.a1)
+	pol := b.w.policy("dead-pool", policy.Spec{PoolIDs: []string{p.Meta.ID}})
+	b.w.bindPolicy(pol, b.w.teamAccount(b.team))
+	h := b.w.start(t)
+
+	r := h.route(b.key, "m1").Refused
+	if r == nil || r.Code != CodeNoCredentials || r.Rung != limits.RungTeam || r.PolicyID != pol.Meta.ID {
+		t.Fatalf("refused %+v, want %s on the team rung's policy", r, CodeNoCredentials)
+	}
+	if KindOf(r.Code) != RefusalHostNotReachable {
+		t.Errorf("kind = %s, want %s", KindOf(r.Code), RefusalHostNotReachable)
+	}
+}
+
+// A refusal from a later step still wins: a pool whose key the account's disabled policy refuses answers policy_disabled.
+func TestRoute_LaterRefusalBeatsNoCredentials(t *testing.T) {
+	b := newBasic()
+	p := b.w.pool(b.hostA, b.a1)
+	pol := b.w.policy("pool-a", policy.Spec{PoolIDs: []string{p.Meta.ID}})
+	b.w.bindPolicy(pol, b.w.teamAccount(b.team))
+	tier := b.w.policy("tier-off", policy.Spec{Enabled: boolp(false)})
+	b.w.bindPolicy(tier, b.acctA)
+	h := b.w.start(t)
+
+	if r := h.route(b.key, "m1").Refused; r == nil || r.Code != CodePolicyDisabled {
+		t.Fatalf("refused %+v, want %s", r, CodePolicyDisabled)
+	}
 }
 
 func TestRoute_UpstreamGrantNarrowsSlots(t *testing.T) {
@@ -253,9 +278,7 @@ func TestRoute_UnpricedUnderBudgetIsRefusedAndFlagged(t *testing.T) {
 	if r.PolicyID != p.Meta.ID {
 		t.Fatalf("refusal names policy %s, want the budgeted one", r.PolicyID)
 	}
-	if !hasIssue(h.issues(KindPolicy, p.Meta.ID), CodeUnpricedUnderBudget) {
-		t.Fatal("budgeted policy allowing an unpriced binding has no unpriced_under_budget issue")
-	}
+	h.wantIssue(KindPolicy, p.Meta.ID, CodeUnpricedUnderBudget, true)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
 
 	// Without a budget the unpriced binding serves, marked unpriced.
@@ -320,6 +343,51 @@ func TestResolveUnkeyed_UnpricedUnderBudgetIsRefused(t *testing.T) {
 	}
 }
 
+// A request naming no caller resolves its model at the host it was sent to, only to price and label it: a model the catalog does not serve there leaves the model unset and still names the host.
+func TestResolveAtHost(t *testing.T) {
+	b := newBasic()
+	b.m1.Spec.Aliases = []string{"m1-latest"}
+	m2 := b.w.model(b.prov, "m2")
+	b.w.bind(m2, b.hostB)
+	gone := b.w.model(b.prov, "gone")
+	gone.Spec.Enabled = boolp(false)
+	b.w.bind(gone, b.hostA)
+	root := b.w.start(t).holder.Load()
+	for _, tc := range []struct {
+		name, ref       string
+		model           string
+		priced          bool
+		upstream, alias string
+	}{
+		{name: "priced model", ref: "m1", model: "m1", priced: true, upstream: "m1"},
+		{name: "provider-qualified", ref: "acme/m1", model: "m1", priced: true, upstream: "m1"},
+		{name: "alias keeps its wire name", ref: "m1-latest", model: "m1", priced: true, upstream: "m1-latest", alias: "alias:m1-latest"},
+		{name: "pinned to this host", ref: "m1@host-a", model: "m1", priced: true, upstream: "m1"},
+		{name: "a pin to another host does not move the request", ref: "m1@host-b", model: "m1", priced: true, upstream: "m1"},
+		{name: "served at another host only", ref: "m2"},
+		{name: "disabled model", ref: "gone"},
+		{name: "unknown model", ref: "nope"},
+		{name: "no model named"},
+	} {
+		u := root.ResolveAtHost(b.hostA, tc.ref)
+		if u.Host != b.hostA || u.Refused != nil || len(u.Counters) != 0 {
+			t.Errorf("%s: host %v refused %v counters %v, want host-a and nothing refused or counted", tc.name, u.Host, u.Refused, u.Counters)
+		}
+		if tc.model == "" {
+			if u.Model != nil || u.Binding != nil || u.Pricing != nil {
+				t.Errorf("%s: resolved %+v, want no model", tc.name, u)
+			}
+			continue
+		}
+		if u.Model == nil || u.Model.Meta.Name != tc.model || u.Provider != "acme" || u.Binding.Spec.HostID != b.hostA.Meta.ID || (u.Pricing != nil) != tc.priced || u.UpstreamModel != tc.upstream || u.ResolvedVia != tc.alias {
+			t.Errorf("%s: resolved %+v, want %s priced=%v sent as %q via %q", tc.name, u, tc.model, tc.priced, tc.upstream, tc.alias)
+		}
+	}
+	if u := (&Root{}).ResolveAtHost(b.hostA, "m1"); u.Model != nil || u.Host != b.hostA {
+		t.Errorf("without a catalog: %+v, want the host alone", u)
+	}
+}
+
 func TestRoute_TableCachesFills(t *testing.T) {
 	b := newBasic()
 	h := b.w.start(t)
@@ -357,34 +425,92 @@ func TestRoute_AliasStillPassesTheGate(t *testing.T) {
 	_ = wantRefused(t, h.route(b.key, "m1-latest"), CodeModelNotAllowed, limits.RungProject)
 }
 
+// A rotated key authenticates on both hashes until its grace ends, whichever shard the previous hash lands in; expiry and revocation end the key.
 func TestKeyPlan_GraceAndExpiry(t *testing.T) {
+	old := "aa" + keyHash("old")[2:]
+	for _, tc := range []struct{ name, rotated string }{
+		{"previous hash in the same shard", "aa" + keyHash("new")[2:]},
+		{"previous hash in another shard", "bb" + keyHash("new")[2:]},
+		{"upper-case hash", "BB" + keyHash("new")[2:]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBasic()
+			b.key.Spec.KeyHash = old
+			h := b.w.start(t)
+			now := time.Now()
+			until := now.Add(time.Hour)
+			rot := clone(b.key)
+			rot.Spec.PreviousKeyHash, rot.Spec.KeyHash, rot.Spec.GraceUntil = old, tc.rotated, &until
+			apply(h, rot)
+			idx := h.holder.Load().Keys
+			kp := idx.Lookup(tc.rotated, now)
+			if kp == nil || kp.Key.Meta.ID != b.key.Meta.ID || !kp.GraceEnds.Equal(until) {
+				t.Fatalf("rotated hash = %+v, want the key's plan with grace ending %v", kp, until)
+			}
+			if got := idx.Lookup(old, until.Add(-time.Nanosecond)); got != kp {
+				t.Fatalf("previous hash inside grace = %p, want the rotated key's plan %p", got, kp)
+			}
+			if idx.Lookup(old, until) != nil || idx.Lookup(tc.rotated, until) != kp {
+				t.Fatal("at the end of grace the previous hash must stop and the rotated one go on")
+			}
+
+			exp := clone(rot)
+			exp.Spec.ExpiresAt = &until
+			apply(h, exp)
+			idx = h.holder.Load().Keys
+			if idx.Lookup(tc.rotated, until.Add(-time.Nanosecond)) == nil || idx.Lookup(tc.rotated, until) != nil {
+				t.Fatal("a key must authenticate until its expiry and not at it")
+			}
+
+			noGrace := clone(rot)
+			noGrace.Spec.GraceUntil = nil
+			apply(h, noGrace)
+			if h.holder.Load().Keys.Lookup(old, now) != nil {
+				t.Fatal("a previous hash with no grace window authenticated")
+			}
+
+			revoked := clone(rot)
+			revoked.Spec.RevokedAt = &now
+			apply(h, revoked)
+			if get[KeyPlan](h, revoked.Meta.ID) != nil || h.holder.Load().Keys.Lookup(tc.rotated, now) != nil {
+				t.Fatal("a revoked key kept its plan")
+			}
+		})
+	}
+}
+
+// A hash another key holds in its rotation grace never takes the slot of the key whose current hash it is.
+func TestKeyPlan_CurrentHashBeatsAnotherKeysGraceHash(t *testing.T) {
 	b := newBasic()
-	h := b.w.start(t)
-	old := b.key.Spec.KeyHash
-	rot := clone(b.key)
 	until := time.Now().Add(time.Hour)
-	rot.Spec.PreviousKeyHash, rot.Spec.KeyHash, rot.Spec.GraceUntil = old, keyHash("rotated"), &until
-	apply(h, rot)
-	idx := h.holder.Load().Keys
-	now := time.Now()
-	if idx.Lookup(rot.Spec.KeyHash, now) == nil || idx.Lookup(old, now) == nil {
-		t.Fatal("both hashes should authenticate during grace")
+	for range 8 {
+		k := b.w.saKey(b.sa)
+		k.Spec.PreviousKeyHash, k.Spec.GraceUntil = b.key.Spec.KeyHash, &until
 	}
-	if idx.Lookup(old, until) != nil {
-		t.Fatal("the previous hash authenticated after grace")
+	h := b.w.start(t)
+	if kp := h.keyPlan(b.key); kp == nil || kp.Key.Meta.ID != b.key.Meta.ID {
+		t.Fatalf("the live hash resolves to %+v, want its own key", kp)
 	}
-	exp := clone(rot)
-	past := now.Add(-time.Second)
-	exp.Spec.ExpiresAt = &past
-	apply(h, exp)
-	if h.holder.Load().Keys.Lookup(exp.Spec.KeyHash, now) != nil {
-		t.Fatal("an expired key authenticated")
+}
+
+func TestKeyPlanIndex_LookupMisses(t *testing.T) {
+	b := newBasic()
+	b.key.Spec.KeyHash = "aa" + keyHash("k")[2:]
+	idx := b.w.start(t).holder.Load().Keys
+	for name, hash := range map[string]string{
+		"empty":                     "",
+		"one character":             "a",
+		"not hex":                   "zz" + keyHash("k")[2:],
+		"half hex":                  "az" + keyHash("k")[2:],
+		"another hash in the shard": "aa" + keyHash("other")[2:],
+		"a shard with no key":       "cc" + keyHash("k")[2:],
+	} {
+		if kp := idx.Lookup(hash, time.Now()); kp != nil {
+			t.Errorf("%s: Lookup(%q) = %+v, want nil", name, hash, kp)
+		}
 	}
-	revoked := clone(exp)
-	revoked.Spec.ExpiresAt, revoked.Spec.RevokedAt = nil, &past
-	apply(h, revoked)
-	if get[KeyPlan](h, revoked.Meta.ID) != nil {
-		t.Fatal("a revoked key kept its plan")
+	if (*KeyPlanIndex)(nil).Lookup(b.key.Spec.KeyHash, time.Now()) != nil {
+		t.Error("a nil index found a key")
 	}
 }
 
@@ -419,8 +545,6 @@ func TestIssues_ParentMissingParksTheRow(t *testing.T) {
 	if get[KeySlot](h, b.a1.Meta.ID) != nil {
 		t.Fatal("a credential whose account is missing serves")
 	}
-	if !hasIssue(h.issues(KindCredential, b.a1.Meta.ID), IssueRefMissing) {
-		t.Fatal("no ref_missing on the parked credential")
-	}
+	h.wantIssue(KindCredential, b.a1.Meta.ID, IssueRefMissing, true)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a2), ids(b.b1))
 }

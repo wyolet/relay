@@ -11,9 +11,7 @@ import (
 func rfc8037Key(t *testing.T) ed25519.PublicKey {
 	t.Helper()
 	seed, err := base64.RawURLEncoding.DecodeString("nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	pub, _ := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
 	return pub
 }
@@ -31,9 +29,7 @@ func TestJWK_RFC8037Vector(t *testing.T) {
 		t.Errorf("kid = %q, want KeyID %q so it matches the token header", k.Kid, KeyID(pub))
 	}
 	raw, err := json.Marshal(k)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	want := `{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","kid":"` + KeyID(pub) + `","use":"sig","alg":"EdDSA"}`
 	if string(raw) != want {
 		t.Errorf("JSON =\n %s\nwant\n %s", raw, want)
@@ -61,13 +57,9 @@ func TestJWKSet_OrderAndDuplicates(t *testing.T) {
 	}
 
 	empty, err := JWKSet()
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	raw, err := json.Marshal(empty)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if string(raw) != `{"keys":[]}` {
 		t.Errorf("empty set = %s, want {\"keys\":[]}", raw)
 	}

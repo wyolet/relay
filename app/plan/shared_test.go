@@ -151,9 +151,7 @@ func TestShare_RealAccountGone(t *testing.T) {
 	if r := h.route(bobKey, "m1"); r.Refused == nil || r.Refused.Code != CodeNoCredentials {
 		t.Fatalf("after the real account went: %+v, want no_credentials", r.Refused)
 	}
-	if is := h.issues(KindAccount, shared.Meta.ID); !hasIssue(is, IssueSharedAccountMissing) {
-		t.Errorf("issues on the share = %+v, want %s", is, IssueSharedAccountMissing)
-	}
+	h.wantIssue(KindAccount, shared.Meta.ID, IssueSharedAccountMissing, true)
 }
 
 // Keys added to the real account and rotations of its keys reach every share on the next plan, with the breaker of the new value.
@@ -229,9 +227,7 @@ func TestShare_ServiceAccountOnly(t *testing.T) {
 	if r := h.route(mineKey, "m1"); r.Refused != nil || !slices.Equal(slotIDs(r)[0], ids(s.key)) {
 		t.Fatalf("the holder's route %v refused %v", slotIDs(r), r.Refused)
 	}
-	if r := h.route(otherKey, "m1"); r.Refused == nil {
-		t.Errorf("another service account of the project reaches %v", slotIDs(r))
-	}
+	_ = wantRefused(t, h.route(otherKey, "m1"), CodeNoCredentials, limits.RungProject)
 }
 
 // A pool tries its accounts first, in their order and each account's keys in creation order, then its credentials; a key reached twice keeps its first place.
@@ -276,9 +272,7 @@ func TestPool_DrawsOnAShare(t *testing.T) {
 	if r.Refused != nil || len(r.Hops) != 1 || len(r.Hops[0].Slots) != 1 || r.Hops[0].Slots[0].Via.Account.Meta.ID != shared.Meta.ID {
 		t.Fatalf("route %v refused %v, want the team's share alone", slotIDs(r), r.Refused)
 	}
-	if is := h.issues(KindPolicyBinding, b.Meta.ID); !hasIssue(is, IssueLinkOutOfScope) {
-		t.Errorf("binding issues %+v, want %s for the sibling project's share", is, IssueLinkOutOfScope)
-	}
+	h.wantIssue(KindPolicyBinding, b.Meta.ID, IssueLinkOutOfScope, true)
 	if got := len(get[PoolPlan](h, p.Meta.ID).Slots); got != 2 {
 		t.Errorf("pool slots = %d, want 2: each share reaches the key under its own limits", got)
 	}

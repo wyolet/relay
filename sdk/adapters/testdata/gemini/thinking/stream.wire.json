@@ -43,6 +43,26 @@
       "candidates": [
         {
           "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "",
+                "thoughtSignature": "CtwBAdHtim9AnswerSignature"
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-pro",
+      "responseId": "gemini-<now>"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
             "parts": [],
             "role": "model"
           },

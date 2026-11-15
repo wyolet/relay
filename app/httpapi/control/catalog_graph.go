@@ -209,9 +209,13 @@ func matchesLabels(labels, sel map[string]string) bool {
 }
 
 // deprecationStatus returns a non-empty marker when the model is deprecated:
-// the explicit status if present, else "deprecated" when only a date is set.
+// the explicit status if present (active is not deprecated), else
+// "deprecated" when only a date is set.
 func deprecationStatus(m *model.Model) string {
 	if m.Spec.Deprecation != nil && m.Spec.Deprecation.Status != "" {
+		if m.Spec.Deprecation.Status == model.DeprecationActive {
+			return ""
+		}
 		return string(m.Spec.Deprecation.Status)
 	}
 	if m.Spec.DeprecationDate != "" {

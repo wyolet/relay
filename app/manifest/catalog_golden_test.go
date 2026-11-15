@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"github.com/google/go-cmp/cmp"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -102,10 +103,8 @@ func TestCatalogTreeGolden(t *testing.T) {
 	if want.Tree != tree {
 		t.Skipf("RELAY_CATALOG_DIR holds a different tree (%s) than the golden was taken from (%s)", tree, want.Tree)
 	}
-	g, _ := json.Marshal(got)
-	w, _ := json.Marshal(want)
-	if string(g) != string(w) {
-		t.Fatalf("catalog tree output changed:\n got %s\nwant %s", g, w)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("catalog tree output changed (-golden +got):\n%s", diff)
 	}
 
 	// The catalog-only parser must yield the same documents and translations.
@@ -142,6 +141,18 @@ func relayTranslate(d manifest.Document, idx manifest.MapResolver) (any, error) 
 		return manifest.ToPricing(*d.Pricing, idx)
 	case d.HostBinding != nil:
 		return manifest.ToHostBinding(*d.HostBinding, idx)
+	case d.Team != nil:
+		return manifest.ToTeam(*d.Team, idx)
+	case d.Project != nil:
+		return manifest.ToProject(*d.Project, idx)
+	case d.ServiceAccount != nil:
+		return manifest.ToServiceAccount(*d.ServiceAccount, idx)
+	case d.Group != nil:
+		return manifest.ToGroup(*d.Group, idx)
+	case d.Role != nil:
+		return manifest.ToRole(*d.Role, idx)
+	case d.RoleBinding != nil:
+		return manifest.ToRoleBinding(*d.RoleBinding, idx)
 	}
 	return nil, nil
 }

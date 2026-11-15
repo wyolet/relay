@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/overlay"
@@ -46,7 +47,7 @@ func TestOverlay_AppliedAtBuild(t *testing.T) {
 	s := c.Current()
 
 	eff, _ := s.Model(id)
-	if eff.Spec.Family != "custom" || len(eff.Spec.Aliases) != 1 {
+	if eff.Spec.Family != "custom" || !slices.Equal(eff.Spec.Aliases, []string{"my-custom-nick"}) || eff.Spec.Pointer != "gpt-4o-2025-01-01" {
 		t.Fatalf("effective not merged: %+v", eff.Spec)
 	}
 	if !resolvesAlias(s, "my-custom-nick", id) {
@@ -117,6 +118,12 @@ func TestOverlay_SurvivesTemplateReseed(t *testing.T) {
 	if eff.Spec.Family != "custom" {
 		t.Error("overlay field clobbered by reseed")
 	}
+	if got := slices.Sorted(slices.Values(eff.Spec.Aliases)); !slices.Equal(got, []string{"catalog-shipped[1m]", "my-custom-nick"}) {
+		t.Errorf("effective aliases = %v, want the template's and the overlay's", eff.Spec.Aliases)
+	}
+	if tmpl := s.templateModel(id); tmpl.Spec.Family != "" || !slices.Equal(tmpl.Spec.Aliases, []string{"catalog-shipped[1m]"}) {
+		t.Errorf("stashed template = %+v, want the re-seeded row without the overlay", tmpl.Spec)
+	}
 	// Union: catalog-shipped alias AND the user's both resolve.
 	if !resolvesAlias(s, "catalog-shipped[1m]", id) {
 		t.Error("template alias lost")
@@ -142,8 +149,8 @@ func TestOverlay_QuarantineServesTemplate(t *testing.T) {
 	if !ok {
 		t.Fatal("model vanished under quarantined overlay")
 	}
-	if eff.Spec.Pointer == "no-such-snapshot" {
-		t.Fatal("invalid merge served instead of pristine template")
+	if eff != s.templateModel(id) || eff.Spec.Pointer != "gpt-4o-2025-01-01" {
+		t.Fatalf("served %+v under a quarantined overlay, want the pristine template row", eff.Spec)
 	}
 	// Still routable by its real name.
 	if _, _, _, ok := s.ResolveSnapshot(slug.From("gpt-4o-2025-01-01")); !ok {
@@ -181,6 +188,38 @@ func TestOverlay_InertWhenTargetMissing(t *testing.T) {
 	}
 }
 
+// An overlay outlives its target: registered while the model is absent, it merges the moment the model is written again.
+func TestOverlay_MergesWhenItsTargetAppears(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
+	if err := c.Reload(t.Context()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	m := models[0]
+	if err := c.ApplyModelDelete(m.Meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The store holds the overlay row too: a model the snapshot lacks is re-listed with its overlays.
+	c.UseOverlays(ovlList{aliasOverlay(m.Meta.ID)})
+	if err := c.ApplyOverlayUpsert(aliasOverlay(m.Meta.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Current().Model(m.Meta.ID); ok || resolvesAlias(c.Current(), "my-custom-nick", m.Meta.ID) {
+		t.Fatal("an overlay brought back a deleted model")
+	}
+	if err := c.ApplyModelUpsert(m); err != nil {
+		t.Fatal(err)
+	}
+	s := c.Current()
+	eff, ok := s.Model(m.Meta.ID)
+	if !ok || eff.Spec.Family != "custom" || !resolvesAlias(s, "my-custom-nick", m.Meta.ID) {
+		t.Fatalf("model written under a waiting overlay = %+v (found %v), want the overlay merged", eff, ok)
+	}
+	if tmpl := s.templateModel(m.Meta.ID); tmpl == eff || tmpl.Spec.Family != "" || len(tmpl.Spec.Aliases) != 0 {
+		t.Errorf("template = %+v, want the written row without the overlay", tmpl.Spec)
+	}
+}
+
 func TestOverlay_CloneIsolation(t *testing.T) {
 	c := catalogFromFixture(t)
 	id := fixtureModelID(t, c, "gpt-4o")
@@ -197,5 +236,8 @@ func TestOverlay_CloneIsolation(t *testing.T) {
 	}
 	if !resolvesAlias(before, "my-custom-nick", id) {
 		t.Error("old snapshot lost overlay alias after reconcile")
+	}
+	if tmpl, stashed := before.modelTemplates[id]; !stashed || tmpl.Spec.Family != "" {
+		t.Error("old snapshot lost its pristine template after reconcile")
 	}
 }

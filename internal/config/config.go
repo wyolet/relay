@@ -113,8 +113,15 @@ type Config struct {
 	// server sends release webhooks to (RELAY_CATALOG_WEBHOOK_URL); empty
 	// registers none.
 	CatalogWebhookURL string
-	InstanceID        string
-	EventlogDir       string
+	// CatalogPrune runs the prune of detached catalog rows after every
+	// versioned reseed and on a following relay's checks (RELAY_CATALOG_PRUNE,
+	// default on).
+	CatalogPrune bool
+	// CatalogPruneIdle is how long a detached model or host binding must have
+	// served no request to be pruned (RELAY_CATALOG_PRUNE_IDLE, default 720h).
+	CatalogPruneIdle time.Duration
+	InstanceID       string
+	EventlogDir      string
 	// UsageQueueSize is how many usage events wait in memory for the sink before new ones are dropped (RELAY_USAGE_QUEUE_SIZE); 0 = usagelog.DefaultQueueSize.
 	UsageQueueSize int
 	// UsageRefusedQueueSize is the same for events of requests that never reached an upstream (RELAY_USAGE_REFUSED_QUEUE_SIZE); 0 = usagelog.DefaultRefusedQueueSize.
@@ -170,6 +177,9 @@ type Config struct {
 
 	// StreamUsage makes same-shape streamed requests ask the upstream for token usage when the wire shape reports it only on request (RELAY_STREAM_USAGE, default on). The extra usage frame is removed from the caller's stream unless the caller asked for it.
 	StreamUsage bool
+
+	// LastUsed records when each relay key and host key last served a request (RELAY_LAST_USED, default on).
+	LastUsed bool
 
 	// BatchMaxItems caps the items in one batch submission (RELAY_BATCH_MAX_ITEMS, default 50000).
 	BatchMaxItems int
@@ -324,12 +334,12 @@ func Load() (*Config, error) {
 	cfg.RedisAddr = os.Getenv("RELAY_REDIS_ADDR")
 	cfg.RedisPassword = os.Getenv("RELAY_REDIS_PASSWORD")
 	if v, err := envPositiveInt("RELAY_REDIS_POOL_SIZE", DefaultRedisPoolSizePerCPU*runtime.GOMAXPROCS(0)); err != nil {
-		return nil, fmt.Errorf("RELAY_REDIS_POOL_SIZE must be >= 1")
+		return nil, err
 	} else {
 		cfg.RedisPoolSize = v
 	}
 	if v, err := envPositiveInt("RELAY_REDIS_MIN_IDLE_CONNS", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_REDIS_MIN_IDLE_CONNS must be >= 1")
+		return nil, err
 	} else {
 		cfg.RedisMinIdleConns = v
 	}
@@ -377,8 +387,8 @@ func Load() (*Config, error) {
 	default:
 		return nil, fmt.Errorf(`RELAY_MIGRATE_ON_BOOT must be "on" or "off", got %q`, v)
 	}
-	if v := envInt("RELAY_MIGRATE_LOCK_TIMEOUT_S", 10); v < 0 {
-		return nil, fmt.Errorf("RELAY_MIGRATE_LOCK_TIMEOUT_S must be >= 0")
+	if v, err := envIntMin("RELAY_MIGRATE_LOCK_TIMEOUT_S", 10, 0); err != nil {
+		return nil, err
 	} else {
 		cfg.MigrateLockTimeout = time.Duration(v) * time.Second
 	}
@@ -426,36 +436,45 @@ func Load() (*Config, error) {
 	if err := loadCatalogFollow(cfg); err != nil {
 		return nil, err
 	}
+	if err := loadCatalogPrune(cfg); err != nil {
+		return nil, err
+	}
 
 	cfg.InstanceID = os.Getenv("RELAY_INSTANCE_ID")
 	cfg.EventlogDir = os.Getenv("RELAY_EVENTLOG_DIR")
 	if v, err := envPositiveInt("RELAY_USAGE_QUEUE_SIZE", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_USAGE_QUEUE_SIZE must be >= 1")
+		return nil, err
 	} else {
 		cfg.UsageQueueSize = v
 	}
 	if v, err := envPositiveInt("RELAY_USAGE_REFUSED_QUEUE_SIZE", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_USAGE_REFUSED_QUEUE_SIZE must be >= 1")
+		return nil, err
 	} else {
 		cfg.UsageRefusedQueueSize = v
 	}
 	if v, err := envPositiveInt("RELAY_PAYLOAD_QUEUE_BYTES", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_PAYLOAD_QUEUE_BYTES must be >= 1")
+		return nil, err
 	} else {
 		cfg.PayloadQueueBytes = v
 	}
 	if v, err := envPositiveInt("RELAY_PAYLOAD_REFUSED_QUEUE_BYTES", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_PAYLOAD_REFUSED_QUEUE_BYTES must be >= 1")
+		return nil, err
 	} else {
 		cfg.PayloadRefusedQueueBytes = v
 	}
 
-	if v := envInt64("RELAY_MAX_REQUEST_BYTES", 0); v > 0 {
+	if v, err := envInt64("RELAY_MAX_REQUEST_BYTES", 0); err != nil {
+		return nil, err
+	} else if v > 0 {
 		cfg.MaxRequestBytes = v
 	}
 
 	// RELAY_MAX_INFLIGHT bounds concurrent in-flight inference requests per pod (the admission cap). 0 = derived from the memory limit where the Admission is constructed.
-	cfg.MaxInflight = envInt("RELAY_MAX_INFLIGHT", 0)
+	if v, err := envInt("RELAY_MAX_INFLIGHT", 0); err != nil {
+		return nil, err
+	} else {
+		cfg.MaxInflight = v
+	}
 	if v, err := envDuration("RELAY_INFLIGHT_SCHED_P99", 20*time.Millisecond); err != nil || v < 0 {
 		return nil, fmt.Errorf("RELAY_INFLIGHT_SCHED_P99 must be a non-negative Go duration (e.g. 20ms), or 0 to turn the adaptive in-flight limit off")
 	} else {
@@ -463,29 +482,29 @@ func Load() (*Config, error) {
 	}
 
 	if v, err := envPositiveInt("RELAY_BATCH_MAX_ITEMS", 50000); err != nil {
-		return nil, fmt.Errorf("RELAY_BATCH_MAX_ITEMS must be >= 1")
+		return nil, err
 	} else {
 		cfg.BatchMaxItems = v
 	}
 
 	if v, err := envPositiveInt("RELAY_UPSTREAM_MAX_IDLE_PER_HOST", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_UPSTREAM_MAX_IDLE_PER_HOST must be >= 1")
+		return nil, err
 	} else {
 		cfg.UpstreamMaxIdlePerHost = v
 	}
 
 	if v, err := envPositiveInt("RELAY_UPSTREAM_DIAL_TIMEOUT_S", 10); err != nil {
-		return nil, fmt.Errorf("RELAY_UPSTREAM_DIAL_TIMEOUT_S must be >= 1")
+		return nil, err
 	} else {
 		cfg.UpstreamDialTimeout = time.Duration(v) * time.Second
 	}
 	if v, err := envPositiveInt("RELAY_MAX_CONNS", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_MAX_CONNS must be >= 1")
+		return nil, err
 	} else {
 		cfg.MaxConns = v
 	}
-	if v := envInt("RELAY_CONN_QUEUE", 1024); v < 0 {
-		return nil, fmt.Errorf("RELAY_CONN_QUEUE must be >= 0")
+	if v, err := envIntMin("RELAY_CONN_QUEUE", 1024, 0); err != nil {
+		return nil, err
 	} else {
 		cfg.ConnQueue = v
 	}
@@ -495,13 +514,13 @@ func Load() (*Config, error) {
 		cfg.ConnQueueTimeout = v
 	}
 	cfg.ConnCloseIdle = os.Getenv("RELAY_CONN_CLOSE_IDLE") == "1"
-	if v := envInt("RELAY_KEY_BREAKER_THRESHOLD", 0); v < 0 {
-		return nil, fmt.Errorf("RELAY_KEY_BREAKER_THRESHOLD must be >= 0")
+	if v, err := envIntMin("RELAY_KEY_BREAKER_THRESHOLD", 0, 0); err != nil {
+		return nil, err
 	} else {
 		cfg.KeyBreakerThreshold = v
 	}
-	if v := envInt("RELAY_KEY_BREAKER_WINDOW_S", 0); v < 0 {
-		return nil, fmt.Errorf("RELAY_KEY_BREAKER_WINDOW_S must be >= 0")
+	if v, err := envIntMin("RELAY_KEY_BREAKER_WINDOW_S", 0, 0); err != nil {
+		return nil, err
 	} else {
 		cfg.KeyBreakerWindow = time.Duration(v) * time.Second
 	}
@@ -514,29 +533,29 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf(`RELAY_LIMITER must be "lua" or "hybrid", got %q`, v)
 	}
 	if v, err := envPositiveInt("RELAY_LIMITER_SYNC_MS", 1000); err != nil {
-		return nil, fmt.Errorf("RELAY_LIMITER_SYNC_MS must be >= 1")
+		return nil, err
 	} else {
 		cfg.LimiterSync = time.Duration(v) * time.Millisecond
 	}
-	if v := envInt("RELAY_PLAN_CELL_IDLE_S", 600); v < 1 {
-		return nil, fmt.Errorf("RELAY_PLAN_CELL_IDLE_S must be >= 1")
+	if v, err := envPositiveInt("RELAY_PLAN_CELL_IDLE_S", 600); err != nil {
+		return nil, err
 	} else {
 		cfg.PlanCellIdle = time.Duration(v) * time.Second
 	}
-	if v := envInt("RELAY_PLAN_RESYNC_S", 600); v < 0 {
-		return nil, fmt.Errorf("RELAY_PLAN_RESYNC_S must be >= 0")
+	if v, err := envIntMin("RELAY_PLAN_RESYNC_S", 600, 0); err != nil {
+		return nil, err
 	} else {
 		cfg.PlanResync = time.Duration(v) * time.Second
 	}
 
-	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.
-	if v := envInt("RELAY_STREAM_KEEPALIVE_S", 15); v < 0 {
-		return nil, fmt.Errorf("RELAY_STREAM_KEEPALIVE_S must be >= 0")
+	// Streaming knobs are seconds and accept 0 (= disabled), so they take a floor of 0 rather than envPositiveInt.
+	if v, err := envIntMin("RELAY_STREAM_KEEPALIVE_S", 15, 0); err != nil {
+		return nil, err
 	} else {
 		cfg.StreamKeepAlive = time.Duration(v) * time.Second
 	}
-	if v := envInt("RELAY_PROXY_BODY_IDLE_S", 30); v < 0 {
-		return nil, fmt.Errorf("RELAY_PROXY_BODY_IDLE_S must be >= 0")
+	if v, err := envIntMin("RELAY_PROXY_BODY_IDLE_S", 30, 0); err != nil {
+		return nil, err
 	} else {
 		cfg.ProxyBodyIdle = time.Duration(v) * time.Second
 	}
@@ -552,19 +571,27 @@ func Load() (*Config, error) {
 	default:
 		return nil, fmt.Errorf(`RELAY_STREAM_USAGE must be "on" or "off", got %q`, v)
 	}
-	if v := envInt("RELAY_STREAM_IDLE_TIMEOUT_S", 600); v < 0 {
-		return nil, fmt.Errorf("RELAY_STREAM_IDLE_TIMEOUT_S must be >= 0")
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_LAST_USED"))); v {
+	case "", "on", "1", "true":
+		cfg.LastUsed = true
+	case "off", "0", "false":
+		cfg.LastUsed = false
+	default:
+		return nil, fmt.Errorf(`RELAY_LAST_USED must be "on" or "off", got %q`, v)
+	}
+	if v, err := envIntMin("RELAY_STREAM_IDLE_TIMEOUT_S", 600, 0); err != nil {
+		return nil, err
 	} else {
 		cfg.StreamIdleTimeout = time.Duration(v) * time.Second
 	}
 
 	if v, err := envPositiveInt("RELAY_HEALTHZ_DEADLINE_MS", 500); err != nil {
-		return nil, fmt.Errorf("RELAY_HEALTHZ_DEADLINE_MS must be >= 1")
+		return nil, err
 	} else {
 		cfg.HealthzDeadlineMS = v
 	}
 	if v, err := envPositiveInt("RELAY_SHUTDOWN_DEADLINE_S", 15); err != nil {
-		return nil, fmt.Errorf("RELAY_SHUTDOWN_DEADLINE_S must be >= 1")
+		return nil, err
 	} else {
 		cfg.ShutdownDeadlineS = v
 	}

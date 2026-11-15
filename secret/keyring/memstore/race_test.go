@@ -28,9 +28,7 @@ func TestDestroyAtomicWithWrites(t *testing.T) {
 		return false
 	}
 	s := memstore.New(memstore.WithInUse(inUse))
-	if err := s.InsertPrimary(ctx, primary(0, "s", t0), nil); err != nil {
-		t.Fatal(err)
-	}
+	must(t, s.InsertPrimary(ctx, primary(0, "s", t0), nil))
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})

@@ -27,16 +27,6 @@ import (
 
 const defaultMaxTokensCanonical = 4096
 
-// structuredOutputToolName is the synthetic tool injected to implement
-// Output.Format (json_schema / json_object) via the forced-tool trick.
-// The double-underscore prefix and "relay" namespace make collisions with
-// real caller tools practically impossible.
-const structuredOutputToolName = "__relay_structured_output"
-
-// defaultJSONObjectSchema is used for json_object format (and json_schema with
-// no schema provided) — the model must return any valid JSON object.
-var defaultJSONObjectSchema = json.RawMessage(`{"type":"object"}`)
-
 // AnthropicTranslator implements v1.Translator for the Anthropic Messages API.
 type AnthropicTranslator struct{}
 
@@ -60,7 +50,13 @@ type anthropicCanonReq struct {
 }
 
 type anthropicOutputConfig struct {
-	Effort string `json:"effort,omitempty"` // low | medium | high | xhigh | max
+	Effort string                 `json:"effort,omitempty"` // low | medium | high | xhigh | max
+	Format *anthropicOutputFormat `json:"format,omitempty"`
+}
+
+type anthropicOutputFormat struct {
+	Type   string          `json:"type"` // json_schema
+	Schema json.RawMessage `json:"schema"`
 }
 
 type anthropicCanonMsg struct {
@@ -159,6 +155,8 @@ type anthropicRespBlock struct {
 	// thinking block
 	Thinking  string `json:"thinking,omitempty"`
 	Signature string `json:"signature,omitempty"`
+	// redacted_thinking block
+	Data string `json:"data,omitempty"`
 	// citations
 	Citations []anthropicCitation `json:"citations,omitempty"`
 }
@@ -180,4 +178,15 @@ type anthropicCitation struct {
 	Title      string `json:"title,omitempty"`
 	StartIndex int    `json:"start_index,omitempty"`
 	EndIndex   int    `json:"end_index,omitempty"`
+	// raw is the whole citation object, carried verbatim for types canonical does not model.
+	raw json.RawMessage
+}
+
+func (c *anthropicCitation) UnmarshalJSON(b []byte) error {
+	type fields anthropicCitation
+	if err := json.Unmarshal(b, (*fields)(c)); err != nil {
+		return err
+	}
+	c.raw = append(json.RawMessage(nil), b...)
+	return nil
 }

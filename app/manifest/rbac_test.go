@@ -1,7 +1,9 @@
 package manifest_test
 
 import (
-	"strings"
+	"errors"
+	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/role"
 	"testing"
 
 	"github.com/wyolet/relay/app/manifest"
@@ -78,142 +80,76 @@ var rbacRev = manifest.MapReverseResolver{
 	Users:           map[string]string{aliceUUID: "alice"},
 }
 
+// Names resolve to ids, a binding's owner mirrors its scope, and each row exports back to the document it came from.
 func TestRoundTrip_RBAC(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(rbacYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if len(docs) != 4 || docs[0].Role == nil || docs[1].RoleBinding == nil ||
-		docs[2].RoleBinding == nil || docs[3].PolicyBinding == nil {
-		t.Fatalf("want Role + 2 RoleBinding + PolicyBinding docs, got %d", len(docs))
-	}
+	docs := parseDocs(t, rbacYAML, 4)
+	rev := rbacRev
+	rev.Accounts = map[string]string{projectAccountUUID: "project-ml-search"}
+	system := meta.Owner{Kind: meta.OwnerSystem}
+	team := meta.Owner{Kind: meta.OwnerTeam, ID: teamUUID}
 
-	r, err := manifest.ToRole(*docs[0].Role, rbacResolver)
-	if err != nil {
-		t.Fatalf("ToRole: %v", err)
-	}
-	if err := func() error { r.Meta.ID = meta.NewID(); return r.Validate() }(); err != nil {
-		t.Fatalf("role validate: %v", err)
-	}
-	if len(r.Spec.Rules) != 2 || r.Spec.Rules[0].Kinds[0] != "keys" {
-		t.Fatalf("rules = %+v", r.Spec.Rules)
-	}
-	if back := manifest.FromRole(r, rbacRev); back.Spec.Rules[1].Verbs[0] != "read" {
-		t.Errorf("FromRole rules = %+v", back.Spec.Rules)
-	}
+	r := translated(t, "ToRole", &role.Role{
+		Meta: meta.Metadata{Name: "developer", Owner: system},
+		Spec: role.Spec{Rules: []role.Rule{
+			{Kinds: []string{"keys", "service-accounts"}, Verbs: []string{"get", "list", "create", "rotate"}},
+			{Kinds: []string{"usage", "logs"}, Verbs: []string{"read"}},
+		}},
+	})(manifest.ToRole(*docs[0].Role, rbacResolver))
+	exported(t, "FromRole", *docs[0].Role, manifest.FromRole(r, rev))
 
-	scoped, err := manifest.ToRoleBinding(*docs[1].RoleBinding, rbacResolver)
-	if err != nil {
-		t.Fatalf("ToRoleBinding: %v", err)
-	}
-	scoped.Meta.ID = meta.NewID()
-	if err := scoped.Validate(); err != nil {
-		t.Fatalf("binding validate: %v", err)
-	}
-	if scoped.Spec.RoleID != roleUUID || scoped.Spec.Scope.ID != teamUUID {
-		t.Errorf("scope/role = %+v", scoped.Spec)
-	}
-	if scoped.Meta.Owner != scoped.Spec.Scope {
-		t.Errorf("owner %+v does not mirror scope %+v", scoped.Meta.Owner, scoped.Spec.Scope)
-	}
-	wantSubjects := []rolebinding.Subject{
-		{Kind: rolebinding.SubjectGroup, Name: "platform-eng"},
-		{Kind: rolebinding.SubjectUser, ID: aliceUUID},
-		{Kind: rolebinding.SubjectServiceAccount, ID: saUUID},
-	}
-	for i, want := range wantSubjects {
-		if scoped.Spec.Subjects[i] != want {
-			t.Errorf("subject %d = %+v, want %+v", i, scoped.Spec.Subjects[i], want)
+	scoped := translated(t, "ToRoleBinding", &rolebinding.RoleBinding{
+		Meta: meta.Metadata{Name: "platform-admins", Owner: team},
+		Spec: rolebinding.Spec{RoleID: roleUUID, Scope: team, Subjects: []rolebinding.Subject{
+			{Kind: rolebinding.SubjectGroup, Name: "platform-eng"},
+			{Kind: rolebinding.SubjectUser, ID: aliceUUID},
+			{Kind: rolebinding.SubjectServiceAccount, ID: saUUID},
+		}},
+	})(manifest.ToRoleBinding(*docs[1].RoleBinding, rbacResolver))
+	wantDoc := *docs[1].RoleBinding
+	wantDoc.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerTeam, Name: "platform"}
+	exported(t, "FromRoleBinding", wantDoc, manifest.FromRoleBinding(scoped, rev))
+
+	global := translated(t, "ToRoleBinding system-scoped", &rolebinding.RoleBinding{
+		Meta: meta.Metadata{Name: "everyone-viewer", Owner: system},
+		Spec: rolebinding.Spec{RoleID: roleUUID, Scope: system, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}}},
+	})(manifest.ToRoleBinding(*docs[2].RoleBinding, rbacResolver))
+	wantDoc = *docs[2].RoleBinding
+	wantDoc.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerSystem}
+	exported(t, "FromRoleBinding system-scoped", wantDoc, manifest.FromRoleBinding(global, rev))
+
+	pb := translated(t, "ToPolicyBinding", &policybinding.PolicyBinding{
+		Meta: meta.Metadata{Name: "ml-search-everyone", Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectUUID}},
+		Spec: policybinding.Spec{PolicyID: policyUUID, AccountIDs: []string{projectAccountUUID}},
+	})(manifest.ToPolicyBinding(*docs[3].PolicyBinding, rbacResolver))
+	exported(t, "FromPolicyBinding", *docs[3].PolicyBinding, manifest.FromPolicyBinding(pb, rev))
+
+	// What apply would write must pass each row's own rules once it has an id.
+	r.Meta.ID, scoped.Meta.ID, global.Meta.ID, pb.Meta.ID = meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	for kind, err := range map[string]error{"role": r.Validate(), "team binding": scoped.Validate(), "system binding": global.Validate(), "policy binding": pb.Validate()} {
+		if err != nil {
+			t.Errorf("%s does not validate: %v", kind, err)
 		}
 	}
-	back := manifest.FromRoleBinding(scoped, rbacRev)
-	if back.Spec.Role != "developer" || back.Spec.Scope.Kind != meta.OwnerTeam || back.Spec.Scope.Name != "platform" {
-		t.Errorf("FromRoleBinding = %+v", back.Spec)
-	}
-	if back.Spec.Subjects[0].Name != "platform-eng" || back.Spec.Subjects[1].Name != "alice" ||
-		back.Spec.Subjects[2].Name != "search-indexer" {
-		t.Errorf("FromRoleBinding subjects = %+v", back.Spec.Subjects)
-	}
-
-	global, err := manifest.ToRoleBinding(*docs[2].RoleBinding, rbacResolver)
-	if err != nil {
-		t.Fatalf("ToRoleBinding system-scoped: %v", err)
-	}
-	if global.Spec.Scope.Kind != meta.OwnerSystem || global.Spec.Scope.ID != "" {
-		t.Errorf("system scope = %+v, want the system owner with no id", global.Spec.Scope)
-	}
-	rendered := manifest.FromRoleBinding(global, rbacRev)
-	if rendered.Spec.Scope.Kind != meta.OwnerSystem || rendered.Spec.Scope.Name != "" {
-		t.Errorf("system scope rendered as %+v, want {kind: system}", rendered.Spec.Scope)
-	}
-
-	pb, err := manifest.ToPolicyBinding(*docs[3].PolicyBinding, rbacResolver)
-	if err != nil {
-		t.Fatalf("ToPolicyBinding: %v", err)
-	}
-	pb.Meta.ID = meta.NewID()
-	if err := pb.Validate(); err != nil {
-		t.Fatalf("policy binding validate: %v", err)
-	}
-	if pb.Meta.Owner.ID != projectUUID || pb.Spec.PolicyID != policyUUID || len(pb.Spec.AccountIDs) != 1 || pb.Spec.AccountIDs[0] != projectAccountUUID {
-		t.Errorf("policy binding refs = %+v owned by %+v", pb.Spec, pb.Meta.Owner)
-	}
 }
 
-func TestToRoleBinding_UnknownScopeTarget(t *testing.T) {
-	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha3
-kind: RoleBinding
-metadata:
-  name: ghost-team
-spec:
-  role: developer
-  scope: {kind: team, name: nowhere}
-  subjects:
-    - {kind: group, name: platform-eng}
----
-apiVersion: relay.wyolet.dev/v1alpha3
-kind: RoleBinding
-metadata:
-  name: ghost-project
-spec:
-  role: developer
-  scope: {kind: project, name: nowhere}
-  subjects:
-    - {kind: group, name: platform-eng}
-`
-	docs, err := manifest.Parse(strings.NewReader(yaml))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if _, err := manifest.ToRoleBinding(*docs[0].RoleBinding, rbacResolver); err == nil ||
-		!strings.Contains(err.Error(), `team "nowhere" not found`) {
-		t.Errorf("ToRoleBinding = %v, want an unknown-team error", err)
-	}
-	if _, err := manifest.ToRoleBinding(*docs[1].RoleBinding, rbacResolver); err == nil ||
-		!strings.Contains(err.Error(), `project "nowhere" not found`) {
-		t.Errorf("ToRoleBinding = %v, want an unknown-project error", err)
-	}
-}
-
-func TestToRoleBinding_UnknownSubject(t *testing.T) {
-	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha3
-kind: RoleBinding
-metadata:
-  name: ghosts
-spec:
-  role: developer
-  scope: {kind: system}
-  subjects:
-    - {kind: serviceaccount, name: nobody}
-`
-	docs, err := manifest.Parse(strings.NewReader(yaml))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if _, err := manifest.ToRoleBinding(*docs[0].RoleBinding, rbacResolver); err == nil ||
-		!strings.Contains(err.Error(), "service account") {
-		t.Fatalf("ToRoleBinding = %v, want an unknown-service-account error", err)
+// A binding naming a role, scope or subject the resolver does not know is refused by name, as a row the caller may not see.
+func TestToRoleBindingUnknownRefs(t *testing.T) {
+	group := manifest.SubjectDTO{Kind: "group", Name: "platform-eng"}
+	for _, tc := range []struct {
+		name string
+		spec manifest.RoleBindingSpec
+		want string
+	}{
+		{"team", manifest.RoleBindingSpec{Role: "developer", Scope: manifest.WireOwner{Kind: meta.OwnerTeam, Name: "nowhere"}, Subjects: []manifest.SubjectDTO{group}}, `rolebinding "ghost": team "nowhere" not found`},
+		{"project", manifest.RoleBindingSpec{Role: "developer", Scope: manifest.WireOwner{Kind: meta.OwnerProject, Name: "nowhere"}, Subjects: []manifest.SubjectDTO{group}}, `rolebinding "ghost": project "nowhere" not found`},
+		{"role", manifest.RoleBindingSpec{Role: "nobody", Scope: manifest.WireOwner{Kind: meta.OwnerSystem}, Subjects: []manifest.SubjectDTO{group}}, `rolebinding "ghost": role "nobody" not found`},
+		{"service account", manifest.RoleBindingSpec{Role: "developer", Scope: manifest.WireOwner{Kind: meta.OwnerSystem}, Subjects: []manifest.SubjectDTO{group, {Kind: "serviceaccount", Name: "nobody"}}}, `binding "ghost": service account "nobody" not found`},
+		{"user", manifest.RoleBindingSpec{Role: "developer", Scope: manifest.WireOwner{Kind: meta.OwnerSystem}, Subjects: []manifest.SubjectDTO{{Kind: "user", Name: "nobody"}}}, `binding "ghost": user "nobody" not found`},
+	} {
+		_, err := manifest.ToRoleBinding(manifest.RoleBindingDTO{Metadata: manifest.WireMeta{Name: "ghost"}, Spec: tc.spec}, rbacResolver)
+		var notFound *manifest.RefNotFoundError
+		if got := errText(err); got != tc.want || !errors.As(err, &notFound) {
+			t.Errorf("unknown %s:\n got %q\nwant %s", tc.name, got, tc.want)
+		}
 	}
 }

@@ -21,9 +21,7 @@ func hostKeyCatalog(t *testing.T, hostID string, keys ...*hostkey.HostKey) *Cata
 	tier := &policy.Policy{Meta: meta.Metadata{ID: "tier", Name: "tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}}
 	c := New(provList{}, hostList{h}, polList{tier}, modList{}, keyList(keys), rlList{},
 		rkList{}, rcList{}, bndList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	return c
 }
 
@@ -52,9 +50,7 @@ func TestUnresolvedHostKeyDroppedFromSnapshot(t *testing.T) {
 	}
 
 	// The incremental NOTIFY path drops it too.
-	if err := c.ApplyHostKeyUpsert(bad); err != nil {
-		t.Fatalf("apply unresolved key: %v", err)
-	}
+	must(t, c.ApplyHostKeyUpsert(bad))
 	if _, ok := c.Current().HostKey(bad.Meta.ID); ok {
 		t.Fatalf("unresolved key entered the snapshot through the NOTIFY path")
 	}

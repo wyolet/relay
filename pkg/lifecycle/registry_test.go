@@ -4,189 +4,37 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
-	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-// --- registration ---
-
-func TestRegisterNilSkipped(t *testing.T) {
-	r := New()
-	r.RegisterPreFlight(nil)
-	r.RegisterHook(nil)
-	r.RegisterCollector(nil)
-	if r.PreFlightCount() != 0 || r.HookCount() != 0 || r.CollectorCount() != 0 {
-		t.Fatalf("nil registrations should not be stored; counts: pre=%d hooks=%d collectors=%d",
-			r.PreFlightCount(), r.HookCount(), r.CollectorCount())
-	}
-}
-
-func TestEmptyRegistryNoPanic(t *testing.T) {
-	r := New()
-	lc := NewContext("req-1", "test", time.Now())
-	if err := r.RunPreFlight(context.Background(), lc, &PreFlightEvent{}); err != nil {
-		t.Fatalf("empty pre-flight: %v", err)
-	}
-	r.Finalize(context.Background(), lc, &PostFlightEvent{})
-}
-
-// collectorFn adapts a func to the Collector interface for tests.
 type collectorFn func(*Context)
 
 func (f collectorFn) Collect(lc *Context) { f(lc) }
 
-// hookFn is a Hook whose Fill runs fn and attaches its return.
 func hookFn(name string, fn func(lc *Context, ev *PostFlightEvent) (any, error)) Hook {
 	return HookFunc{HookName: name, Fn: fn}
 }
 
-// --- pre-flight semantics ---
-
-func TestPreFlightSequentialOrder(t *testing.T) {
-	r := New()
-	var order []string
-	r.RegisterPreFlight(func(_ context.Context, _ *Context, _ *PreFlightEvent) error {
-		order = append(order, "a")
-		return nil
-	})
-	r.RegisterPreFlight(func(_ context.Context, _ *Context, _ *PreFlightEvent) error {
-		order = append(order, "b")
-		return nil
-	})
-	r.RegisterPreFlight(func(_ context.Context, _ *Context, _ *PreFlightEvent) error {
-		order = append(order, "c")
-		return nil
-	})
-
-	if err := r.RunPreFlight(context.Background(), NewContext("r", "test", time.Now()), &PreFlightEvent{}); err != nil {
-		t.Fatalf("pre-flight: %v", err)
-	}
-	want := []string{"a", "b", "c"}
-	if !equalStrings(order, want) {
-		t.Fatalf("order: got %v want %v", order, want)
-	}
-}
-
-func TestPreFlightAbortOnError(t *testing.T) {
-	r := New()
-	abort := errors.New("budget exceeded")
-	var ran []string
-	r.RegisterPreFlight(func(_ context.Context, _ *Context, _ *PreFlightEvent) error {
-		ran = append(ran, "a")
-		return nil
-	})
-	r.RegisterPreFlight(func(_ context.Context, _ *Context, _ *PreFlightEvent) error {
-		ran = append(ran, "b")
-		return abort
-	})
-	r.RegisterPreFlight(func(_ context.Context, _ *Context, _ *PreFlightEvent) error {
-		ran = append(ran, "c") // must not run
-		return nil
-	})
-
-	err := r.RunPreFlight(context.Background(), NewContext("r", "test", time.Now()), &PreFlightEvent{})
-	if !errors.Is(err, abort) {
-		t.Fatalf("expected abort error to propagate, got %v", err)
-	}
-	if !equalStrings(ran, []string{"a", "b"}) {
-		t.Fatalf("expected [a b], got %v", ran)
-	}
-}
-
-func TestPreFlightMutatesContext(t *testing.T) {
-	r := New()
-	r.RegisterPreFlight(func(_ context.Context, lc *Context, _ *PreFlightEvent) error {
-		lc.PolicyID = "pol-123"
-		lc.Metadata["auth_user"] = "alice"
-		return nil
-	})
-	r.RegisterPreFlight(func(_ context.Context, lc *Context, _ *PreFlightEvent) error {
-		// Subsequent middleware sees prior mutations.
-		if lc.PolicyID != "pol-123" {
-			t.Errorf("expected PolicyID set by prior middleware, got %q", lc.PolicyID)
-		}
-		if lc.Metadata["auth_user"] != "alice" {
-			t.Errorf("expected metadata from prior middleware, got %v", lc.Metadata)
-		}
-		return nil
-	})
-
-	lc := NewContext("r", "test", time.Now())
-	if err := r.RunPreFlight(context.Background(), lc, &PreFlightEvent{}); err != nil {
-		t.Fatalf("pre-flight: %v", err)
-	}
-}
-
-// --- finalize semantics ---
-
-func TestFinalizeAllHooksFillAndAttach(t *testing.T) {
-	r := New()
-	for i, name := range []string{"a", "b", "c"} {
-		val := i + 1
-		r.RegisterHook(hookFn(name, func(_ *Context, _ *PostFlightEvent) (any, error) {
-			return val, nil
-		}))
-	}
-	lc := NewContext("r", "test", time.Now())
-	r.Finalize(context.Background(), lc, &PostFlightEvent{})
-
-	for _, name := range []string{"a", "b", "c"} {
-		if _, ok := lc.Collected(name); !ok {
-			t.Fatalf("hook %q result not attached to context", name)
+// collected reads the named results off lc; an absent name is left out.
+func collected(lc *Context, names ...string) map[string]any {
+	out := map[string]any{}
+	for _, n := range names {
+		if v, ok := lc.Collected(n); ok {
+			out[n] = v
 		}
 	}
+	return out
 }
 
-func TestFinalizeNilResultNotAttached(t *testing.T) {
-	r := New()
-	r.RegisterHook(hookFn("none", func(_ *Context, _ *PostFlightEvent) (any, error) {
-		return nil, nil // nothing to contribute
-	}))
-	lc := NewContext("r", "test", time.Now())
-	r.Finalize(context.Background(), lc, &PostFlightEvent{})
-	if _, ok := lc.Collected("none"); ok {
-		t.Fatal("nil hook result should not be attached")
-	}
-}
-
-func TestFinalizeCollectorsInOrderOnCallingGoroutine(t *testing.T) {
-	r := New()
-	caller := goroutineID()
-	var order []string
-	for _, name := range []string{"a", "b", "c", "d", "e"} {
-		r.RegisterCollector(collectorFn(func(_ *Context) {
-			if id := goroutineID(); id != caller {
-				t.Errorf("collector %q ran on goroutine %d, want caller %d", name, id, caller)
-			}
-			order = append(order, name)
-		}))
-	}
-	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	if want := []string{"a", "b", "c", "d", "e"}; !equalStrings(order, want) {
-		t.Fatalf("order: got %v want %v", order, want)
-	}
-}
-
-func TestFinalizePanickingCollectorDoesNotStopLaterOnes(t *testing.T) {
-	r := New()
-	var order []string
-	r.RegisterCollector(collectorFn(func(_ *Context) { order = append(order, "a") }))
-	r.RegisterCollector(collectorFn(func(_ *Context) { panic("intentional in test") }))
-	r.RegisterCollector(collectorFn(func(_ *Context) { order = append(order, "c") }))
-	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	if want := []string{"a", "c"}; !equalStrings(order, want) {
-		t.Fatalf("order: got %v want %v", order, want)
-	}
-}
-
-// goroutineID parses the current goroutine's id from its stack header
-// ("goroutine N [running]:").
+// goroutineID parses the current goroutine's id from its stack header ("goroutine N [running]:").
 func goroutineID() uint64 {
 	buf := make([]byte, 64)
 	buf = buf[:runtime.Stack(buf, false)]
@@ -195,327 +43,274 @@ func goroutineID() uint64 {
 	return id
 }
 
-func TestFinalizePanicIsolated(t *testing.T) {
+func TestRegisterSkipsNil(t *testing.T) {
 	r := New()
-	var hookRan, collRan int64
-
-	r.RegisterHook(hookFn("ok1", func(_ *Context, _ *PostFlightEvent) (any, error) {
-		atomic.AddInt64(&hookRan, 1)
-		return 1, nil
-	}))
-	r.RegisterHook(hookFn("boom", func(_ *Context, _ *PostFlightEvent) (any, error) {
-		panic("intentional in test")
-	}))
-	r.RegisterHook(hookFn("ok2", func(_ *Context, _ *PostFlightEvent) (any, error) {
-		atomic.AddInt64(&hookRan, 1)
-		return 2, nil
-	}))
-	r.RegisterCollector(collectorFn(func(_ *Context) { atomic.AddInt64(&collRan, 1) }))
-	r.RegisterCollector(collectorFn(func(_ *Context) { panic("intentional in test") }))
-	r.RegisterCollector(collectorFn(func(_ *Context) { atomic.AddInt64(&collRan, 1) }))
-
-	// Must not panic out of Finalize; non-panicking hooks + collectors run.
-	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	if got := atomic.LoadInt64(&hookRan); got != 2 {
-		t.Fatalf("expected 2 non-panicking hooks, got %d", got)
+	r.RegisterPreFlight(nil)
+	r.RegisterHook(nil)
+	r.RegisterCollector(nil)
+	r.RegisterStreamObserver(nil)
+	if got := [4]int{r.PreFlightCount(), r.HookCount(), r.CollectorCount(), r.StreamObserverCount()}; got != [4]int{} {
+		t.Fatalf("counts after nil registrations (pre-flight, hooks, collectors, stream observers) = %v, want all 0", got)
 	}
-	if got := atomic.LoadInt64(&collRan); got != 2 {
-		t.Fatalf("expected 2 non-panicking collectors, got %d", got)
+	r.RegisterPreFlight(func(context.Context, *Context, *PreFlightEvent) error { return nil })
+	r.RegisterHook(hookFn("h", nil))
+	r.RegisterHook(hookFn("h2", nil))
+	r.RegisterCollector(collectorFn(nil))
+	r.RegisterStreamObserver(&recordingFactory{})
+	if got := [4]int{r.PreFlightCount(), r.HookCount(), r.CollectorCount(), r.StreamObserverCount()}; got != [4]int{1, 2, 1, 1} {
+		t.Fatalf("counts = %v, want [1 2 1 1]", got)
 	}
 }
 
-func TestFinalizeHookSeesContextAndEvent(t *testing.T) {
+func TestEmptyRegistryRunsNothing(t *testing.T) {
 	r := New()
-	wantID, wantStatus := "req-shared", 200
-	var gotID string
-	var gotStatus int
-	r.RegisterHook(hookFn("probe", func(lc *Context, ev *PostFlightEvent) (any, error) {
-		gotID = lc.RequestID
-		gotStatus = ev.Status
-		return nil, nil
-	}))
-	r.Finalize(context.Background(), NewContext(wantID, "test", time.Now()), &PostFlightEvent{Status: wantStatus})
-	if gotID != wantID || gotStatus != wantStatus {
-		t.Fatalf("hook did not see lc/ev: id=%q status=%d", gotID, gotStatus)
+	lc := NewContext("req-1", "test", time.Now())
+	if err := r.RunPreFlight(context.Background(), lc, &PreFlightEvent{}); err != nil {
+		t.Fatalf("empty pre-flight: %v", err)
 	}
-}
-
-func TestCollectorReadsHookResult(t *testing.T) {
-	r := New()
-	r.RegisterHook(hookFn("usage", func(_ *Context, _ *PostFlightEvent) (any, error) {
-		return "the-result", nil
-	}))
-	var seen string
-	r.RegisterCollector(collectorFn(func(lc *Context) {
-		if v, ok := lc.Collected("usage"); ok {
-			seen, _ = v.(string)
-		}
-	}))
-	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	if seen != "the-result" {
-		t.Fatalf("collector did not read hook result off context: %q", seen)
-	}
-}
-
-func TestFinalizeObserverSeesFanOutDuration(t *testing.T) {
-	r := New()
-	r.RegisterHook(hookFn("slow", func(_ *Context, _ *PostFlightEvent) (any, error) {
-		time.Sleep(2 * time.Millisecond)
-		return nil, nil
-	}))
-	var calls int
-	var got time.Duration
-	r.SetFinalizeObserver(func(d time.Duration) { calls++; got = d })
-	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	if calls != 1 {
-		t.Fatalf("observer calls = %d, want 1", calls)
-	}
-	if got < 2*time.Millisecond {
-		t.Fatalf("observer duration = %v, want >= 2ms (the fan-out time)", got)
-	}
-}
-
-func BenchmarkFinalizeFiveCollectors(b *testing.B) {
-	r := New()
-	for range 5 {
-		r.RegisterCollector(collectorFn(func(_ *Context) {}))
-	}
-	lc := NewContext("r", "test", time.Now())
-	ev := &PostFlightEvent{}
-	ctx := context.Background()
-	b.ReportAllocs()
-	for b.Loop() {
-		r.Finalize(ctx, lc, ev)
-	}
-}
-
-// --- stream observers ---
-
-type testStreamFactory struct {
-	name string
-	obs  *testStreamObserver
-}
-
-func (f *testStreamFactory) Name() string { return f.name }
-func (f *testStreamFactory) NewObserver(_ *Context) StreamObserver {
-	f.obs = &testStreamObserver{}
-	return f.obs
-}
-
-type testStreamObserver struct {
-	frames int
-}
-
-func (o *testStreamObserver) Observe(_ []byte)     { o.frames++ }
-func (o *testStreamObserver) Result() (any, error) { return o.frames, nil }
-
-func TestStreamSession_ObserveFinishAttachesAndFills(t *testing.T) {
-	r := New()
-	f := &testStreamFactory{name: "frames"}
-	r.RegisterStreamObserver(f)
-
-	lc := NewContext("r", "test", time.Now())
-	sess := r.NewStreamSession(lc)
-	if sess == nil {
-		t.Fatal("expected a session for a registered factory")
-	}
-	sess.Observe([]byte("a"))
-	sess.Observe([]byte("b"))
-	sess.Finish()
-
-	if v, ok := lc.Collected("frames"); !ok || v.(int) != 2 {
-		t.Fatalf("stream observer result not attached: %v ok=%v", v, ok)
-	}
-	if !lc.filled {
-		t.Fatal("Finish must mark the context filled")
-	}
-
-	// A subsequent post-flight Finalize must NOT re-run hooks (collect-once):
-	// register a hook that would panic-mark if it ran.
-	ran := false
-	r.RegisterHook(hookFn("h", func(_ *Context, _ *PostFlightEvent) (any, error) {
-		ran = true
-		return 1, nil
-	}))
 	r.Finalize(context.Background(), lc, &PostFlightEvent{})
-	if ran {
-		t.Fatal("Finalize re-ran hooks despite stream session already filling")
+	r.Fill(nil, &PostFlightEvent{})
+	if s := r.NewStreamSession(lc); s != nil {
+		t.Fatal("a stream session without stream observers")
 	}
 }
 
-func TestNewStreamSession_NilWhenNoFactories(t *testing.T) {
-	r := New()
-	if s := r.NewStreamSession(NewContext("r", "test", time.Now())); s != nil {
-		t.Fatal("expected nil session with no factories")
+// Middlewares run in registration order, see each other's changes, and stop at the first error.
+func TestRunPreFlight(t *testing.T) {
+	abort := errors.New("budget exceeded")
+	for _, tc := range []struct {
+		name    string
+		failAt  string
+		wantRan []string
+		wantErr error
+	}{
+		{"all pass", "", []string{"a", "b", "c"}, nil},
+		{"the first error aborts the chain", "b", []string{"a", "b"}, abort},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := New()
+			var ran []string
+			for _, name := range []string{"a", "b", "c"} {
+				r.RegisterPreFlight(func(_ context.Context, lc *Context, _ *PreFlightEvent) error {
+					ran = append(ran, name)
+					seen, _ := lc.Metadata["seen"].(string)
+					lc.Metadata["seen"] = seen + name
+					lc.PolicyID = "set-by-" + name
+					if name == tc.failAt {
+						return abort
+					}
+					return nil
+				})
+			}
+			lc := NewContext("r", "test", time.Now())
+			if err := r.RunPreFlight(context.Background(), lc, &PreFlightEvent{}); err != tc.wantErr {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if diff := cmp.Diff(tc.wantRan, ran); diff != "" {
+				t.Errorf("middlewares run (-want +got):\n%s", diff)
+			}
+			last := tc.wantRan[len(tc.wantRan)-1]
+			if lc.Metadata["seen"] != strings.Join(tc.wantRan, "") || lc.PolicyID != "set-by-"+last {
+				t.Errorf("context after the chain: seen %v, policy %q", lc.Metadata["seen"], lc.PolicyID)
+			}
+		})
 	}
 }
 
-// The tee path: raw upstream bytes written to the session (io.Writer) are
-// reframed on the SSE "\n\n" separator and delivered to observers as whole
-// frames — across arbitrary Write boundaries — with only the trailing
-// partial frame flushed at Finish.
-func TestStreamSession_WriteReframesAcrossBoundaries(t *testing.T) {
+// Each hook's value is attached under its name; a nil value, an error and a panic attach nothing and stop no other hook.
+func TestFinalizeAttachesHookResults(t *testing.T) {
 	r := New()
-	f := &recordingFactory{}
-	r.RegisterStreamObserver(f)
+	ev := &PostFlightEvent{Status: 207}
+	var sawID string
+	var sawEvent *PostFlightEvent
+	r.RegisterHook(hookFn("first", func(lc *Context, ev *PostFlightEvent) (any, error) {
+		sawID, sawEvent = lc.RequestID, ev
+		return 1, nil
+	}))
+	r.RegisterHook(hookFn("nothing", func(*Context, *PostFlightEvent) (any, error) { return nil, nil }))
+	r.RegisterHook(hookFn("failed", func(*Context, *PostFlightEvent) (any, error) { return "partial", errors.New("no usage block") }))
+	r.RegisterHook(hookFn("panicked", func(*Context, *PostFlightEvent) (any, error) { panic("intentional in test") }))
+	r.RegisterHook(hookFn("last", func(*Context, *PostFlightEvent) (any, error) { return []string{"end"}, nil }))
+	var atCollect map[string]any
+	r.RegisterCollector(collectorFn(func(lc *Context) {
+		atCollect = collected(lc, "first", "nothing", "failed", "panicked", "last")
+	}))
 
-	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
-	// Two complete frames + a trailing partial, split mid-frame across Writes.
-	_, _ = io.WriteString(sess, "event: a\ndata: 1\n\nev")
-	_, _ = io.WriteString(sess, "ent: b\ndata: 2\n\ndata: tail-no-sep")
-	sess.Finish()
-
-	want := []string{"event: a\ndata: 1", "event: b\ndata: 2", "data: tail-no-sep"}
-	if len(f.obs.frames) != len(want) {
-		t.Fatalf("frames: got %q want %q", f.obs.frames, want)
+	lc := NewContext("req-7", "test", time.Now())
+	r.Finalize(context.Background(), lc, ev)
+	want := map[string]any{"first": 1, "last": []string{"end"}}
+	if diff := cmp.Diff(want, atCollect); diff != "" {
+		t.Errorf("results a collector reads (-want +got):\n%s", diff)
 	}
-	for i, w := range want {
-		if f.obs.frames[i] != w {
-			t.Fatalf("frame %d: got %q want %q", i, f.obs.frames[i], w)
+	if sawID != "req-7" || sawEvent != ev {
+		t.Errorf("hook saw request %q and event %p, want req-7 and the event passed to Finalize", sawID, sawEvent)
+	}
+}
+
+// Fill before the response is written is not repeated by Finalize.
+func TestFillRunsHooksOnce(t *testing.T) {
+	r := New()
+	runs := 0
+	r.RegisterHook(hookFn("usage", func(*Context, *PostFlightEvent) (any, error) {
+		runs++
+		return runs, nil
+	}))
+	collects := 0
+	r.RegisterCollector(collectorFn(func(*Context) { collects++ }))
+	lc := NewContext("r", "test", time.Now())
+
+	r.Fill(lc, &PostFlightEvent{})
+	if v, _ := lc.Collected("usage"); v != 1 || collects != 0 {
+		t.Fatalf("after Fill: usage = %v, %d collects; want 1 and no collect", v, collects)
+	}
+	r.Fill(lc, &PostFlightEvent{})
+	r.Finalize(context.Background(), lc, &PostFlightEvent{})
+	if v, _ := lc.Collected("usage"); v != 1 || runs != 1 || collects != 1 {
+		t.Fatalf("after Finalize: usage = %v, hook ran %d times, %d collects; want 1, 1, 1", v, runs, collects)
+	}
+
+	// The next request fills afresh.
+	other := NewContext("r2", "test", time.Now())
+	r.Finalize(context.Background(), other, &PostFlightEvent{})
+	if v, _ := other.Collected("usage"); v != 2 {
+		t.Fatalf("second request: usage = %v, want 2", v)
+	}
+}
+
+// Collectors run in registration order on the caller's goroutine; one that panics does not stop the ones after it.
+func TestFinalizeRunsCollectorsInOrderOnTheCallingGoroutine(t *testing.T) {
+	r := New()
+	caller := goroutineID()
+	var order []string
+	for _, name := range []string{"a", "b", "boom", "c"} {
+		r.RegisterCollector(collectorFn(func(*Context) {
+			if id := goroutineID(); id != caller {
+				t.Errorf("collector %q ran on goroutine %d, want caller %d", name, id, caller)
+			}
+			order = append(order, name)
+			if name == "boom" {
+				panic("intentional in test")
+			}
+		}))
+	}
+	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
+	if diff := cmp.Diff([]string{"a", "b", "boom", "c"}, order); diff != "" {
+		t.Fatalf("collectors run (-want +got):\n%s", diff)
+	}
+}
+
+// The observer gets the whole pass: hooks and collectors, panics included.
+func TestFinalizeObserverTimesTheWholePass(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := New()
+		r.RegisterHook(hookFn("slow", func(*Context, *PostFlightEvent) (any, error) {
+			time.Sleep(2 * time.Millisecond)
+			return nil, nil
+		}))
+		r.RegisterCollector(collectorFn(func(*Context) {
+			time.Sleep(3 * time.Millisecond)
+			panic("intentional in test")
+		}))
+		var got []time.Duration
+		r.SetFinalizeObserver(func(d time.Duration) { got = append(got, d) })
+		lc := NewContext("r", "test", time.Now())
+		r.Finalize(context.Background(), lc, &PostFlightEvent{})
+		// The hooks already ran for this request, so the second pass is the collector alone.
+		r.Finalize(context.Background(), lc, &PostFlightEvent{})
+		if diff := cmp.Diff([]time.Duration{5 * time.Millisecond, 3 * time.Millisecond}, got); diff != "" {
+			t.Errorf("observed durations (-want +got):\n%s", diff)
 		}
-	}
+		r.SetFinalizeObserver(nil)
+		r.Finalize(context.Background(), lc, &PostFlightEvent{})
+		if len(got) != 2 {
+			t.Errorf("a cleared observer was called: %v", got)
+		}
+	})
 }
 
-// Finish is idempotent (echo finishes early, then the runner finishes again)
-// and stashes the summarizer's tokens for the runner. With no translator the
-// summarizer yields nothing, but StreamTokens must still report "extracted".
-func TestStreamSession_FinishIdempotentStashesTokens(t *testing.T) {
-	r := New()
-	f := &recordingFactory{}
-	r.RegisterStreamObserver(f)
-
-	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
-	lc := sess.lc
-	_, _ = io.WriteString(sess, "event: a\ndata: 1\n\n")
-	sess.Finish()
-	sess.Finish() // no-op
-
-	if got := f.obs.results; got != 1 {
-		t.Fatalf("Result called %d times, want 1 (idempotent Finish)", got)
-	}
-	if _, ok := lc.StreamTokens(); !ok {
-		t.Fatal("Finish must mark stream tokens extracted")
-	}
-}
-
-type recordingFactory struct{ obs *recordingObserver }
-
-func (f *recordingFactory) Name() string { return "rec" }
-func (f *recordingFactory) NewObserver(_ *Context) StreamObserver {
-	f.obs = &recordingObserver{}
-	return f.obs
-}
-
-type recordingObserver struct {
-	frames  []string
-	results int
-}
-
-func (o *recordingObserver) Observe(f []byte) { o.frames = append(o.frames, string(f)) }
-func (o *recordingObserver) Result() (any, error) {
-	o.results++
-	return len(o.frames), nil
-}
-
-// --- concurrent register / finalize ---
-
+// Registration during traffic is safe: a request attaches each hook it ran under that hook's own name.
 func TestConcurrentRegisterAndFinalize(t *testing.T) {
-	// race detector catches data races on the slices + collected map
 	r := New()
+	const n = 50
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.RegisterHook(hookFn("h", func(_ *Context, _ *PostFlightEvent) (any, error) { return 1, nil }))
-		}()
-	}
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-		}()
+	for i := range n {
+		wg.Go(func() {
+			r.RegisterHook(hookFn("h"+strconv.Itoa(i), func(*Context, *PostFlightEvent) (any, error) { return i, nil }))
+		})
+		wg.Go(func() {
+			lc := NewContext("r", "test", time.Now())
+			r.Finalize(context.Background(), lc, &PostFlightEvent{})
+			for j := range n {
+				if v, ok := lc.Collected("h" + strconv.Itoa(j)); ok {
+					if v != j {
+						t.Errorf("hook h%d attached %v", j, v)
+					}
+				}
+			}
+		})
 	}
 	wg.Wait()
-	if r.HookCount() != 50 {
-		t.Fatalf("expected 50 registered, got %d", r.HookCount())
+	if r.HookCount() != n {
+		t.Fatalf("HookCount = %d, want %d", r.HookCount(), n)
 	}
-}
-
-// --- helpers ---
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// CRLF-separated SSE (spec-legal) must reframe identically to LF, with
-// frames normalized to LF before observers see them.
-func TestStreamSession_WriteReframesCRLF(t *testing.T) {
-	r := New()
-	f := &recordingFactory{}
-	r.RegisterStreamObserver(f)
-
-	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
-	_, _ = io.WriteString(sess, "event: a\r\ndata: 1\r\n\r\nevent: b\r\ndata: 2\r\n\r\n")
-	sess.Finish()
-
-	want := []string{"event: a\ndata: 1", "event: b\ndata: 2"}
-	if len(f.obs.frames) != len(want) {
-		t.Fatalf("frames: got %q want %q", f.obs.frames, want)
-	}
-	for i, w := range want {
-		if f.obs.frames[i] != w {
-			t.Fatalf("frame %d: got %q want %q", i, f.obs.frames[i], w)
+	lc := NewContext("r", "test", time.Now())
+	r.Finalize(context.Background(), lc, &PostFlightEvent{})
+	for j := range n {
+		if v, _ := lc.Collected("h" + strconv.Itoa(j)); v != j {
+			t.Fatalf("after all registrations, h%d = %v", j, v)
 		}
 	}
 }
 
-// CR-only and mixed line endings reframe the same, written one byte at a time.
-func TestStreamSession_WriteReframesCRAndMixed(t *testing.T) {
-	r := New()
-	f := &recordingFactory{}
-	r.RegisterStreamObserver(f)
-
-	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
-	for _, c := range []byte("event: a\rdata: 1\r\revent: b\r\ndata: 2\n\r\ndata: 3\r\r\n") {
-		_, _ = sess.Write([]byte{c})
+func TestContextCarriers(t *testing.T) {
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	lc := NewContext("req-1", "proxy", start)
+	if lc.RequestID != "req-1" || lc.Source != "proxy" || !lc.Timing.Start.Equal(start) || lc.Metadata == nil {
+		t.Fatalf("NewContext = %+v", lc)
 	}
-	sess.Finish()
-
-	want := []string{"event: a\ndata: 1", "event: b\ndata: 2", "data: 3"}
-	if !reflect.DeepEqual(f.obs.frames, want) {
-		t.Fatalf("frames: got %q want %q", f.obs.frames, want)
+	if got := FromContext(ContextWith(context.Background(), lc)); got != lc {
+		t.Errorf("FromContext = %p, want the context stored", got)
 	}
-}
-
-// Input that never yields a separator must not grow the partial buffer past
-// maxPartialFrameBytes — the bound is the invariant the whole redesign rests
-// on. Overflow feeds the oversized chunk best-effort and resets.
-func TestStreamSession_WritePartialBufferBounded(t *testing.T) {
-	r := New()
-	f := &recordingFactory{}
-	r.RegisterStreamObserver(f)
-
-	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
-	chunk := bytes.Repeat([]byte("x"), 256*1024) // no separator anywhere
-	for i := 0; i < 8; i++ {                     // 2 MiB total
-		if _, err := sess.Write(chunk); err != nil {
-			t.Fatalf("Write: %v", err)
-		}
-		if len(sess.buf) > maxPartialFrameBytes {
-			t.Fatalf("partial buffer grew to %d, cap is %d", len(sess.buf), maxPartialFrameBytes)
-		}
+	if got := FromContext(context.Background()); got != nil {
+		t.Errorf("FromContext of a bare context = %p, want nil", got)
 	}
-	if len(f.obs.frames) == 0 {
-		t.Fatal("overflow chunk was never fed best-effort")
+
+	// Every accessor is safe on a nil Context and reports nothing.
+	var none *Context
+	none.attach("x", 1)
+	none.SetStreamSession(&StreamSession{})
+	none.SetResponseSummary(lc.responseSummary)
+	none.setStreamTokens(map[string]int64{"input": 1})
+	if _, ok := none.Collected("x"); ok {
+		t.Error("nil Context reports a collected value")
+	}
+	if _, ok := none.StreamTokens(); ok {
+		t.Error("nil Context reports stream tokens")
+	}
+	if _, ok := none.StreamSummary(); ok {
+		t.Error("nil Context reports a stream summary")
+	}
+	if _, ok := none.ResponseSummary(); ok {
+		t.Error("nil Context reports a response summary")
+	}
+	if none.StreamSession() != nil {
+		t.Error("nil Context reports a stream session")
+	}
+
+	if _, ok := lc.ResponseSummary(); ok {
+		t.Error("a response summary before one was set")
+	}
+	lc.SetResponseSummary(lc.responseSummary)
+	if _, ok := lc.ResponseSummary(); !ok {
+		t.Error("no response summary after SetResponseSummary")
+	}
+	sess := &StreamSession{}
+	lc.SetStreamSession(sess)
+	if lc.StreamSession() != sess {
+		t.Error("StreamSession did not return the session set")
+	}
+	lc.attach("nil-value", nil)
+	if _, ok := lc.Collected("nil-value"); ok {
+		t.Error("a nil value was attached")
 	}
 }

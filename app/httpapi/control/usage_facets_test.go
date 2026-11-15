@@ -10,25 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/catalog/catalogtest"
-	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
-	"github.com/wyolet/relay/pkg/ids"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/usage"
 )
 
 func newFacetsHarness(t *testing.T, reader *fakeUsageReader, cat *appcatalog.Catalog) http.Handler {
 	t.Helper()
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("usage-facets-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerUsageFacets(api, Deps{Authz: testRBAC(), UsageReader: reader, Catalog: cat}, nil)
 	return r
 }
@@ -103,13 +92,7 @@ func TestUsageFacetsScopesToReadableRows(t *testing.T) {
 
 // Rows written before an id had a slug beside it still get a name, from the catalog as it is now.
 func TestUsageFacetsFallsBackToCatalogLabels(t *testing.T) {
-	yes := true
-	k := &key.Key{Meta: meta.Metadata{ID: ids.New(), Name: "ci-key", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	k.Spec.Enabled = &yes
-	k.Spec.KeyHash = "hash-ci"
-	tm := &team.Team{Meta: meta.Metadata{ID: ids.New(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	tm.Spec.Enabled = &yes
-	cat := catalogtest.Catalog{Keys: []*key.Key{k}, Teams: []*team.Team{tm}}.Load(t)
+	cat, _, tm := labelCatalog(t)
 
 	reader := &fakeUsageReader{events: []usagelog.Event{
 		{RequestID: "r-1", Timestamp: time.Now(), Status: 200, RelayKeyHash: "hash-ci", TeamID: tm.Meta.ID},

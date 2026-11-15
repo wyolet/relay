@@ -38,6 +38,7 @@ type geminiToCanonicalStream struct {
 	currentFCName     string
 	currentFCID       string // functionCall.id when Gemini sent one
 	currentThoughtSig string // thoughtSignature for the current item, if any
+	sigOnEmptyPart    bool   // the current message's signature came on a part of its own with empty text
 	// sawFunctionCall records whether any function_call part appeared across
 	// the whole stream, so the terminal completion reports finish_reason
 	// tool_calls even though Gemini's per-frame finishReason is usually STOP.
@@ -61,26 +62,33 @@ func (s *geminiToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	return out, nil
 }
 
+// geminiStreamFrame is one streamed frame: a generateContent chunk, or an
+// {"error":{…}} frame, which would otherwise decode as an empty chunk.
+type geminiStreamFrame struct {
+	geminiResponse
+	Error *struct {
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
+}
+
 func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
-	var gr geminiResponse
-	if err := json.Unmarshal(data, &gr); err != nil {
-		// Try error shape.
-		var errResp struct {
-			Error struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-				Status  string `json:"status"`
-			} `json:"error"`
-		}
-		if jerr := json.Unmarshal(data, &errResp); jerr == nil && errResp.Error.Message != "" {
-			errData, _ := json.Marshal(v1.ErrorEvent{
-				Code:    errResp.Error.Status,
-				Message: errResp.Error.Message,
-			})
-			return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventError, Data: errData}}), nil
-		}
+	var frame geminiStreamFrame
+	if err := json.Unmarshal(data, &frame); err != nil {
 		return nil, fmt.Errorf("gemini stream: %w", err)
 	}
+	if frame.Error != nil {
+		msg := frame.Error.Message
+		if msg == "" {
+			msg = string(data)
+		}
+		errData, _ := json.Marshal(v1.ErrorEvent{
+			Code:    frame.Error.Status,
+			Message: msg,
+		})
+		return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventError, Data: errData}}), nil
+	}
+	gr := &frame.geminiResponse
 
 	var out []byte
 
@@ -167,28 +175,16 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 			// Function call arrives complete in one frame.
 			out = append(out, s.closeCurrentItem()...)
 
-		} else if p.Text != "" && p.Thought {
-			// Reasoning part.
-			if s.currentItemType != v1.ItemTypeReasoning {
-				out = append(out, s.closeCurrentItem()...)
-				idx := s.nextIndex
-				s.nextIndex++
-				itemID := fmt.Sprintf("rs_%d", idx)
-				s.currentItemID = itemID
-				s.currentItemType = v1.ItemTypeReasoning
-				s.currentIndex = idx
-				s.currentThoughtSig = p.ThoughtSignature
-				s.thinkBuf.Reset()
-
-				startData, _ := json.Marshal(v1.ItemStartedEvent{
-					ItemID:   itemID,
-					ItemType: v1.ItemTypeReasoning,
-					Index:    idx,
-				})
-				out = append(out, marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}})...)
+		} else if p.Thought && (p.Text != "" || p.ThoughtSignature != "") {
+			// Reasoning part; an empty-text one carries only a signature.
+			if s.currentItemType != v1.ItemTypeReasoning || s.sigOnEmptyPart {
+				out = append(out, s.openItem(v1.ItemTypeReasoning, "rs")...)
 			}
 			if p.ThoughtSignature != "" {
 				s.currentThoughtSig = p.ThoughtSignature
+			}
+			if p.Text == "" {
+				continue
 			}
 			s.thinkBuf.WriteString(p.Text)
 			deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
@@ -199,24 +195,23 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 			})
 			out = append(out, marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemDelta, Data: deltaData}})...)
 
-		} else if p.Text != "" {
-			// Text part.
-			if s.currentItemType != v1.ItemTypeMessage {
-				out = append(out, s.closeCurrentItem()...)
-				idx := s.nextIndex
-				s.nextIndex++
-				itemID := fmt.Sprintf("msg_%d", idx)
-				s.currentItemID = itemID
-				s.currentItemType = v1.ItemTypeMessage
-				s.currentIndex = idx
-				s.textBuf.Reset()
+		} else if !p.Thought && p.Text == "" && p.ThoughtSignature != "" && p.InlineData == nil && p.FileData == nil {
+			// A signature-only part signs the open unsigned message or reasoning, or stands alone as a reasoning item.
+			// Streamed text is reassembled into one part, which the message's signature rides, as a canonical→Gemini stream sends it.
+			open := s.currentItemType == v1.ItemTypeMessage || s.currentItemType == v1.ItemTypeReasoning
+			if !open || s.currentThoughtSig != "" {
+				out = append(out, s.openItem(v1.ItemTypeReasoning, "rs")...)
+			}
+			s.currentThoughtSig = p.ThoughtSignature
+			s.sigOnEmptyPart = s.currentItemType == v1.ItemTypeReasoning
 
-				startData, _ := json.Marshal(v1.ItemStartedEvent{
-					ItemID:   itemID,
-					ItemType: v1.ItemTypeMessage,
-					Index:    idx,
-				})
-				out = append(out, marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}})...)
+		} else if !p.Thought && p.Text != "" {
+			// Text part. A signed part ends its message, so the signature stays on it.
+			if s.currentItemType != v1.ItemTypeMessage || s.currentThoughtSig != "" {
+				out = append(out, s.openItem(v1.ItemTypeMessage, "msg")...)
+			}
+			if p.ThoughtSignature != "" {
+				s.currentThoughtSig = p.ThoughtSignature
 			}
 			s.textBuf.WriteString(p.Text)
 			deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
@@ -238,6 +233,35 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 	return out, nil
 }
 
+// signatureJSON is the provider_data for the current item's signature, nil when it has none.
+func (s *geminiToCanonicalStream) signatureJSON() json.RawMessage {
+	switch {
+	case s.currentThoughtSig == "":
+		return nil
+	case s.sigOnEmptyPart:
+		return emptyPartSignatureJSON(s.currentThoughtSig)
+	}
+	return thoughtSignatureJSON(s.currentThoughtSig)
+}
+
+// openItem closes the current item and starts a reasoning or message item.
+func (s *geminiToCanonicalStream) openItem(itemType v1.ItemType, idPrefix string) []byte {
+	out := s.closeCurrentItem()
+	idx := s.nextIndex
+	s.nextIndex++
+	s.currentItemID = fmt.Sprintf("%s_%d", idPrefix, idx)
+	s.currentItemType = itemType
+	s.currentIndex = idx
+	s.thinkBuf.Reset()
+	s.textBuf.Reset()
+	startData, _ := json.Marshal(v1.ItemStartedEvent{
+		ItemID:   s.currentItemID,
+		ItemType: itemType,
+		Index:    idx,
+	})
+	return append(out, marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}})...)
+}
+
 func (s *geminiToCanonicalStream) closeCurrentItem() []byte {
 	if s.currentItemID == "" {
 		return nil
@@ -246,10 +270,11 @@ func (s *geminiToCanonicalStream) closeCurrentItem() []byte {
 	switch s.currentItemType {
 	case v1.ItemTypeMessage:
 		completedItem = &v1.Message{
-			ID:      s.currentItemID,
-			Role:    v1.RoleAssistant,
-			Status:  v1.StatusCompleted,
-			Content: []v1.Part{&v1.OutputTextPart{Text: s.textBuf.String()}},
+			ID:           s.currentItemID,
+			Role:         v1.RoleAssistant,
+			Status:       v1.StatusCompleted,
+			Content:      []v1.Part{&v1.OutputTextPart{Text: s.textBuf.String()}},
+			ProviderData: s.signatureJSON(),
 		}
 	case v1.ItemTypeFunctionCall:
 		callID := s.currentFCID
@@ -271,17 +296,18 @@ func (s *geminiToCanonicalStream) closeCurrentItem() []byte {
 		r := &v1.Reasoning{
 			ID:      s.currentItemID,
 			Content: s.thinkBuf.String(),
-			Summary: []v1.SummaryText{{Text: s.thinkBuf.String()}},
 			Status:  v1.StatusCompleted,
 		}
-		if s.currentThoughtSig != "" {
-			r.ProviderData = thoughtSignatureJSON(s.currentThoughtSig)
+		if r.Content != "" {
+			r.Summary = []v1.SummaryText{{Text: r.Content}}
 		}
+		r.ProviderData = s.signatureJSON()
 		completedItem = r
 	default:
 		return nil
 	}
 	s.currentThoughtSig = ""
+	s.sigOnEmptyPart = false
 
 	completedData, _ := json.Marshal(v1.ItemCompletedEvent{
 		ItemID: s.currentItemID,

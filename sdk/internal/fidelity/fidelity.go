@@ -57,6 +57,7 @@ var fields = []field{
 	{"Tools.Definitions.ProviderData", "fidelity-provider-data"},
 	{"Tools.Choice.Mode", ""},
 	{"Tools.Choice.FunctionName", ""},
+	{"Tools.Choice.Allowed", ""},
 	{"Tools.Parallel", ""},
 	{"CacheConfig.Instructions", ""},
 	{"CacheConfig.Tools", ""},
@@ -71,8 +72,8 @@ var fields = []field{
 
 // Request returns a fresh fully-populated canonical request. Effort is
 // "medium", Summary "detailed", Verbosity "low", Format.Type "json_schema",
-// Format.Strict false, tool Strict true, Choice forces fidelity_tool,
-// Parallel false, both cache flags on with TTL "2h", OutputMode stream.
+// Format.Strict false, tool Strict true, Choice forces fidelity_tool (so
+// its Allowed list is moot), Parallel false, both cache flags on with TTL "2h", OutputMode stream.
 func Request() *v1.Request {
 	f := func(v float64) *float64 { return &v }
 	i := func(v int) *int { return &v }
@@ -115,7 +116,7 @@ func Request() *v1.Request {
 				Strict:       b(true),
 				ProviderData: json.RawMessage(`{"type":"function","note":"fidelity-provider-data"}`),
 			}},
-			Choice:   &v1.ToolChoice{Mode: "function", FunctionName: "fidelity_tool"},
+			Choice:   &v1.ToolChoice{Mode: "function", FunctionName: "fidelity_tool", Allowed: []string{"fidelity_tool"}},
 			Parallel: b(false),
 		},
 		CacheConfig: &v1.CacheConfig{Instructions: true, Tools: true, History: true, Key: "fidelity-cache-key", TTL: "2h"},

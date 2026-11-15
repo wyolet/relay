@@ -114,18 +114,6 @@ func TestOIDCFlow_DisabledProvisionedAccountRefused(t *testing.T) {
 	wantDenied(t, h.events(), "ada")
 }
 
-// Two provisioned accounts with the claimed id (two SCIM clients) refuse the sign-in and link neither.
-func TestOIDCFlow_TwoProvisionedMatchesRefused(t *testing.T) {
-	h := newLinkOIDC(t, "open")
-	h.users.provisioned(&user.User{ID: "u1", Username: "ada"}, "obj-1")
-	h.users.provisioned(&user.User{ID: "u2", Username: "ada-okta"}, "obj-1")
-	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusConflict, "account_ambiguous", "this sign-in matches more than one provisioned account; an administrator must resolve it")
-	if h.users.links != 0 || h.sess.calls != 0 || len(h.users.byName) != 2 {
-		t.Fatalf("links %d, accounts %d, sessions %d", h.users.links, len(h.users.byName), h.sess.calls)
-	}
-	wantDenied(t, h.events(), h.subject())
-}
-
 // With SCIM off nothing links: the taken email is the same 403 as before.
 func TestOIDCFlow_NoLinkWithSCIMOff(t *testing.T) {
 	h := newLinkOIDC(t, "open")

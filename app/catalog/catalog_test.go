@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"github.com/wyolet/relay/pkg/adapters"
+	"slices"
 	"strings"
 	"testing"
 
@@ -56,6 +57,25 @@ func (l rcList) List(context.Context) ([]*pricing.Pricing, error) { return l, ni
 type bndList []*binding.Binding
 
 func (l bndList) List(context.Context) ([]*binding.Binding, error) { return l, nil }
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// pricingFor is a one-rate pricing at hostID covering modelIDs.
+func pricingFor(name, hostID string, modelIDs ...string) *pricing.Pricing {
+	return &pricing.Pricing{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
+		Spec: pricing.Spec{
+			Currency:       "USD",
+			TargetModelIDs: modelIDs,
+			Rates:          []pricing.Rate{{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 1}},
+		},
+	}
+}
 
 // fixture builds a coherent set: 1 provider (vendor), 1 host (serving
 // endpoint), 2 models served by that host, 2 keys for that host, 1
@@ -146,14 +166,16 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList, b
 		},
 	}
 
+	userID := meta.NewID()
 	rk := &key.Key{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "cust-1",
-			Owner: meta.Owner{Kind: meta.OwnerUser},
+			Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID},
 		},
 		Spec: key.Spec{
-			KeyHash: strings.Repeat("a", 64),
-			Prefix:  "rk_cust1",
+			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
+			KeyHash:   strings.Repeat("a", 64),
+			Prefix:    "rk_cust1",
 		},
 	}
 
@@ -177,9 +199,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList, b
 func TestReload_HappyPath(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	s := c.Current()
 
 	if _, ok := s.PolicyByName("cheap-tier"); !ok {
@@ -215,9 +235,7 @@ func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
 	rks[0].Spec.Enabled = &fls
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	s := c.Current()
 
 	if _, ok := s.PolicyByName("cheap-tier"); ok {
@@ -236,9 +254,7 @@ func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
 func TestReload_HostKeyOutlivesItsHostsPolicies(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, polList{pols[0]}, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	if got := len(c.Current().AllHostKeys()); got != 2 {
 		t.Fatalf("host keys = %d, want both kept", got)
 	}
@@ -246,59 +262,28 @@ func TestReload_HostKeyOutlivesItsHostsPolicies(t *testing.T) {
 
 func TestReload_PricingResolves(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	hostID := hosts[0].Meta.ID
-	modelID := models[0].Meta.ID
-	pr := &pricing.Pricing{
-		Meta: meta.Metadata{
-			ID:    meta.NewID(),
-			Name:  "openai-standard",
-			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
-		},
-		Spec: pricing.Spec{
-			Currency:       "USD",
-			TargetModelIDs: []string{modelID},
-			Rates: []pricing.Rate{
-				{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 2.50},
-			},
-		},
-	}
+	hostID, modelID := hosts[0].Meta.ID, models[0].Meta.ID
+	pr := pricingFor("openai-standard", hostID, modelID)
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
+	must(t, c.Reload(context.Background()))
+	if got, ok := c.Current().PriceByModelHost(modelID, hostID); !ok || got.Meta.ID != pr.Meta.ID {
+		t.Errorf("PriceByModelHost = %v, %v; want pricing %q", got, ok, pr.Meta.Name)
 	}
-	got, ok := c.Current().PriceByModelHost(modelID, hostID)
-	if !ok {
-		t.Fatal("PriceByModelHost: not found")
-	}
-	if got.Meta.ID != pr.Meta.ID {
-		t.Errorf("got pricing %q, want %q", got.Meta.ID, pr.Meta.ID)
+	if got, ok := c.Current().PriceByModelHost(models[1].Meta.ID, hostID); ok {
+		t.Errorf("a model the pricing does not target is priced by %q", got.Meta.Name)
 	}
 }
 
 func TestReload_DuplicatePricingFails(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	hostID := hosts[0].Meta.ID
-	modelID := models[0].Meta.ID
-	mkPricing := func(name string) *pricing.Pricing {
-		return &pricing.Pricing{
-			Meta: meta.Metadata{
-				ID:    meta.NewID(),
-				Name:  name,
-				Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
-			},
-			Spec: pricing.Spec{
-				Currency:       "USD",
-				TargetModelIDs: []string{modelID},
-				Rates: []pricing.Rate{
-					{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 3.00},
-				},
-			},
-		}
+	hostID, modelID := hosts[0].Meta.ID, models[0].Meta.ID
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pricingFor("p1", hostID, modelID), pricingFor("p2", hostID, modelID)}, bnds)
+	want := `duplicate pricing: pricing "p1" and "p2" both cover model "` + modelID + `" for the same host`
+	if err := c.Reload(context.Background()); err == nil || !strings.HasSuffix(err.Error(), want) {
+		t.Fatalf("Reload = %v, want an error ending %q", err, want)
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{mkPricing("p1"), mkPricing("p2")}, bnds)
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "duplicate pricing") {
-		t.Fatalf("expected duplicate pricing error, got %v", err)
+	if c.Current() != nil && len(c.Current().AllModels()) != 0 {
+		t.Error("a failed first reload published a snapshot")
 	}
 }
 
@@ -310,10 +295,47 @@ func TestReload_HostKeyUnknownHostDrops(t *testing.T) {
 	bad := keys[0].Meta.ID
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload should be tolerant, got %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	if _, ok := c.Current().HostKey(bad); ok {
 		t.Errorf("hostkey with a dangling hostId should not be in snapshot")
+	}
+}
+
+// An upsert of a row that fails its own validation is refused and publishes nothing.
+func TestApplyUpsert_InvalidRowIsRejected(t *testing.T) {
+	c := catalogFromFixture(t)
+	for kind, upsert := range map[string]func() error{
+		"provider":   func() error { return c.ApplyProviderUpsert(&provider.Provider{}) },
+		"host":       func() error { return c.ApplyHostUpsert(&host.Host{}) },
+		"model":      func() error { return c.ApplyModelUpsert(&model.Model{}) },
+		"host key":   func() error { return c.ApplyHostKeyUpsert(&hostkey.HostKey{}) },
+		"rate limit": func() error { return c.ApplyRateLimitUpsert(&ratelimit.RateLimit{}) },
+		"policy":     func() error { return c.ApplyPolicyUpsert(&policy.Policy{}) },
+		"pricing":    func() error { return c.ApplyPricingUpsert(&pricing.Pricing{}) },
+		"key": func() error {
+			return c.ApplyKeyUpsert(&key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "no-principal"}, Spec: key.Spec{KeyHash: hex64("f")}})
+		},
+	} {
+		before := c.Current()
+		if err := upsert(); err == nil {
+			t.Errorf("%s: an invalid row was accepted", kind)
+		}
+		if c.Current() != before {
+			t.Errorf("%s: a rejected upsert published a snapshot", kind)
+		}
+	}
+}
+
+func TestSnapshot_AllRateLimitsSortedByName(t *testing.T) {
+	rl := func(name string) *ratelimit.RateLimit {
+		return &ratelimit.RateLimit{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}},
+			Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 1, Window: 60, Strategy: ratelimit.StrategyTokenBucket}}},
+		}
+	}
+	s := Build(nil, nil, nil, nil, nil, nil, []*ratelimit.RateLimit{rl("zed"), rl("alpha"), rl("mid")}, nil, nil)
+	got := namesOf(s.AllRateLimits(), func(r *ratelimit.RateLimit) string { return r.Meta.Name })
+	if want := []string{"alpha", "mid", "zed"}; !slices.Equal(got, want) {
+		t.Errorf("AllRateLimits = %v, want %v", got, want)
 	}
 }

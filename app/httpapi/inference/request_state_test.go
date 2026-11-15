@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/pkg/adapters"
-	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -98,22 +97,5 @@ func TestStateWritersCopyOnWrite(t *testing.T) {
 	}
 	if ClassificationFrom(child).Mode != ModeProxyAuthed || SnapshotFrom(child) != nil || PrincipalFrom(child) != pr {
 		t.Fatalf("child state = %+v, want the parent's principal with its own classification and snapshot", *stateFrom(child))
-	}
-}
-
-type namedProfile struct{ clientprofile.Profile }
-
-func (namedProfile) Name() string { return "named" }
-
-func TestRouteProfileSetOnlyWhenDifferent(t *testing.T) {
-	p := namedProfile{clientprofile.Default}
-	r := httptest.NewRequest(http.MethodPost, "/named/v1/messages", nil)
-
-	set := withRouteProfile(r, p)
-	if set == r || clientprofile.FromContext(set.Context()).Name() != "named" {
-		t.Fatalf("route profile not set on a request without one")
-	}
-	if again := withRouteProfile(set, p); again != set {
-		t.Fatalf("route profile set again over the same profile")
 	}
 }

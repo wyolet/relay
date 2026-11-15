@@ -69,24 +69,39 @@ func (GeminiTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 					}
 					resp.Output = append(resp.Output, fc)
 					outputIndex++
-				} else if p.Text != "" && p.Thought {
+				} else if p.Thought && (p.Text != "" || p.ThoughtSignature != "") {
 					r := &v1.Reasoning{
 						ID:      fmt.Sprintf("rs_%d", outputIndex),
 						Content: p.Text,
-						Summary: []v1.SummaryText{{Text: p.Text}},
 						Status:  v1.StatusCompleted,
+					}
+					if p.Text != "" {
+						r.Summary = []v1.SummaryText{{Text: p.Text}}
 					}
 					if p.ThoughtSignature != "" {
 						r.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
 					}
 					resp.Output = append(resp.Output, r)
 					outputIndex++
-				} else if p.Text != "" {
+				} else if !p.Thought && p.Text == "" && p.ThoughtSignature != "" && p.InlineData == nil && p.FileData == nil {
+					if signLastItem(resp.Output, p.ThoughtSignature) {
+						continue
+					}
+					resp.Output = append(resp.Output, &v1.Reasoning{
+						ID:           fmt.Sprintf("rs_%d", outputIndex),
+						Status:       v1.StatusCompleted,
+						ProviderData: emptyPartSignatureJSON(p.ThoughtSignature),
+					})
+					outputIndex++
+				} else if !p.Thought && p.Text != "" {
 					msg := &v1.Message{
 						ID:      fmt.Sprintf("msg_%d", outputIndex),
 						Status:  v1.StatusCompleted,
 						Role:    v1.RoleAssistant,
 						Content: []v1.Part{&v1.OutputTextPart{Text: p.Text}},
+					}
+					if p.ThoughtSignature != "" {
+						msg.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
 					}
 					resp.Output = append(resp.Output, msg)
 					outputIndex++
@@ -114,6 +129,7 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 	for _, item := range resp.Output {
 		switch v := item.(type) {
 		case *v1.Message:
+			start := len(parts)
 			for _, p := range v.Content {
 				switch tp := p.(type) {
 				case *v1.OutputTextPart:
@@ -122,6 +138,7 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 					parts = append(parts, geminiPart{Text: tp.Text})
 				}
 			}
+			parts = signItemParts(parts, start, v.ProviderData)
 		case *v1.FunctionCall:
 			var argsObj json.RawMessage
 			if v.Arguments != "" {
@@ -130,16 +147,11 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 				argsObj = json.RawMessage(`{}`)
 			}
 			parts = append(parts, geminiPart{
-				FunctionCall: &geminiFC{ID: geminiWireCallID(v.CallID, v.Name), Name: v.Name, Args: argsObj},
+				FunctionCall:     &geminiFC{ID: geminiWireCallID(v.CallID, v.Name), Name: v.Name, Args: argsObj},
+				ThoughtSignature: thoughtSignatureFrom(v.ProviderData),
 			})
 		case *v1.Reasoning:
-			text := v.Content
-			if text == "" && len(v.Summary) > 0 {
-				text = v.Summary[0].Text
-			}
-			if text != "" {
-				parts = append(parts, geminiPart{Text: text, Thought: true})
-			}
+			parts = append(parts, reasoningParts(v)...)
 		}
 	}
 

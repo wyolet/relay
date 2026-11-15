@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/wyolet/relay/secret/aead"
@@ -21,9 +22,7 @@ var (
 func mustNew(t testing.TB, key []byte) *KEK {
 	t.Helper()
 	k, err := New(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return k
 }
 
@@ -54,18 +53,18 @@ func TestIDGolden(t *testing.T) {
 }
 
 func TestNewCopiesAndChecksKey(t *testing.T) {
-	if _, err := New(make([]byte, 31)); err == nil {
-		t.Fatal("short key accepted")
+	for _, n := range []int{0, 16, 31, 33} {
+		if k, err := New(make([]byte, n)); err == nil || err.Error() != fmt.Sprintf("local: key must be 32 bytes, got %d", n) || k != nil {
+			t.Fatalf("New(%d bytes) = %v, %v", n, k, err)
+		}
 	}
 	key := bytes.Repeat([]byte{7}, 32)
 	k := mustNew(t, key)
 	wrapped, err := k.Wrap(context.Background(), []byte("dek"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	key[0] ^= 0xff
-	if _, err := k.Unwrap(context.Background(), wrapped, nil); err != nil {
-		t.Fatalf("Unwrap after caller mutated key: %v", err)
+	if got, err := k.Unwrap(context.Background(), wrapped, nil); err != nil || string(got) != "dek" {
+		t.Fatalf("Unwrap after caller mutated key: %q, %v", got, err)
 	}
 }
 
@@ -75,9 +74,7 @@ func TestWrapUnwrap(t *testing.T) {
 	dek := bytes.Repeat([]byte{0xd0}, 32)
 	aad := append([]byte("0123456789abcdef"), "user:7"...)
 	wrapped, err := k.Wrap(ctx, dek, aad)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if id, err := aead.KeyID(wrapped); err != nil || id != k.ID() {
 		t.Fatalf("wrapped header id = %x, %v", id, err)
 	}
@@ -87,9 +84,7 @@ func TestWrapUnwrap(t *testing.T) {
 	}
 	// The wrap label is bound: a plain Seal with the same aad does not unwrap.
 	plain, err := aead.Seal(bytes.Repeat([]byte{1}, 32), k.ID(), dek, aad)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if _, err := k.Unwrap(ctx, plain, aad); !errors.Is(err, aead.ErrAuthFailed) {
 		t.Fatalf("unlabelled seal unwrapped: %v", err)
 	}
@@ -101,47 +96,62 @@ func TestUnwrapAADBinding(t *testing.T) {
 	id1 := []byte("0123456789abcdef")
 	id2 := []byte("0123456789abcdeX")
 	wrapped, err := k.Wrap(ctx, []byte("dek"), append(append([]byte(nil), id1...), "user:7"...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	for name, aad := range map[string][]byte{
 		"other id":    append(append([]byte(nil), id2...), "user:7"...),
 		"other scope": append(append([]byte(nil), id1...), "user:8"...),
 		"empty scope": id1,
 		"nil":         nil,
 	} {
-		if _, err := k.Unwrap(ctx, wrapped, aad); !errors.Is(err, aead.ErrAuthFailed) {
-			t.Fatalf("%s: err = %v, want ErrAuthFailed", name, err)
+		if got, err := k.Unwrap(ctx, wrapped, aad); err != aead.ErrAuthFailed || got != nil {
+			t.Fatalf("%s: Unwrap = %x, %v; want ErrAuthFailed", name, got, err)
 		}
 	}
 }
 
-func TestUnwrapWrongKEK(t *testing.T) {
+func TestUnwrapRejects(t *testing.T) {
 	ctx := context.Background()
 	a := mustNew(t, bytes.Repeat([]byte{1}, 32))
 	b := mustNew(t, bytes.Repeat([]byte{2}, 32))
 	wrapped, err := a.Wrap(ctx, []byte("dek"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.Unwrap(ctx, wrapped, nil); !errors.Is(err, ErrWrongKEK) {
-		t.Fatalf("err = %v, want ErrWrongKEK", err)
-	}
-	if _, err := a.Unwrap(ctx, []byte("not sealed"), nil); !errors.Is(err, aead.ErrNotSealed) {
-		t.Fatalf("err = %v, want ErrNotSealed", err)
+	must(t, err)
+	// b's id written over a's: the right KEK is named, but its key never sealed this.
+	relabelled := bytes.Clone(wrapped)
+	bID := b.ID()
+	copy(relabelled[5:21], bID[:])
+	flipped := bytes.Clone(wrapped)
+	flipped[len(flipped)-1] ^= 1
+	otherVersion := bytes.Clone(wrapped)
+	otherVersion[4] = 2
+
+	for _, tc := range []struct {
+		name string
+		k    *KEK
+		in   []byte
+		want error
+	}{
+		{"another KEK's value", b, wrapped, ErrWrongKEK},
+		{"relabelled to this KEK", b, relabelled, aead.ErrAuthFailed},
+		{"relabelled away from its KEK", a, relabelled, ErrWrongKEK},
+		{"tag bit flipped", a, flipped, aead.ErrAuthFailed},
+		{"truncated", a, wrapped[:len(wrapped)-1], aead.ErrAuthFailed},
+		{"header only", a, wrapped[:21], aead.ErrNotSealed},
+		{"unknown version", a, otherVersion, aead.ErrUnsupportedVersion},
+		{"not sealed", a, []byte("not sealed"), aead.ErrNotSealed},
+		{"empty", a, nil, aead.ErrNotSealed},
+	} {
+		if got, err := tc.k.Unwrap(ctx, tc.in, nil); err != tc.want || got != nil {
+			t.Errorf("%s: Unwrap = %x, %v; want %v", tc.name, got, err, tc.want)
+		}
 	}
 }
 
 func TestOpenLegacy(t *testing.T) {
 	key := bytes.Repeat([]byte{3}, 32)
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	g, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	nonce := bytes.Repeat([]byte{9}, g.NonceSize())
 	ct := g.Seal(nil, nonce, []byte("sk-legacy"), nil)
 	got, err := mustNew(t, key).OpenLegacy(ct, nonce)
@@ -168,4 +178,11 @@ func FuzzUnwrap(f *testing.F) {
 			t.Fatalf("Unwrap accepted forged input: %x", in)
 		}
 	})
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

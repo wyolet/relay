@@ -215,6 +215,13 @@ func (s *Service) Set(value string) (applicense.Info, error) {
 	return s.Info(), nil
 }
 
+// Verify checks value against the release public key and the clock without
+// making it live.
+func (s *Service) Verify(value string) error {
+	_, err := parseAt(value, s.now)
+	return err
+}
+
 // Has reports whether feature is unlocked by the live license. Expiry is
 // re-evaluated on every call: a license verified at boot must stop unlocking
 // features once its grace window closes, without a restart or a reload.
@@ -226,10 +233,12 @@ func (s *Service) Has(feature string) bool {
 	return l.Has(feature)
 }
 
-// Info summarizes the live license.
+// Info summarizes the live license, judging expiry and grace by the clock as
+// Has does: past the grace window it is the community summary.
 func (s *Service) Info() applicense.Info {
 	l := s.cur.Load()
-	if l == nil {
+	now := s.now().UTC()
+	if l == nil || now.After(l.ExpiresAt.Add(GraceWindow)) {
 		return applicense.Info{}
 	}
 	return applicense.Info{
@@ -237,6 +246,6 @@ func (s *Service) Info() applicense.Info {
 		Customer:  l.Customer,
 		ExpiresAt: l.ExpiresAt,
 		Features:  l.Features,
-		Grace:     l.Grace,
+		Grace:     now.After(l.ExpiresAt),
 	}
 }

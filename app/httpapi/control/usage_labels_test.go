@@ -8,10 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/project"
@@ -22,15 +19,20 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// Group values whose events carry no slug (rows older than the slug) are named from the catalog as it is now; a stamped slug wins over the catalog.
-func TestUsageGroupLabelsFallBackToCatalog(t *testing.T) {
+// labelCatalog holds key ci-key, whose hash is hash-ci, and team platform.
+func labelCatalog(t *testing.T) (*appcatalog.Catalog, *key.Key, *team.Team) {
+	t.Helper()
 	yes := true
 	k := &key.Key{Meta: meta.Metadata{ID: ids.New(), Name: "ci-key", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	k.Spec.Enabled = &yes
-	k.Spec.KeyHash = "hash-ci"
+	k.Spec.Enabled, k.Spec.KeyHash = &yes, "hash-ci"
 	tm := &team.Team{Meta: meta.Metadata{ID: ids.New(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	tm.Spec.Enabled = &yes
-	cat := catalogtest.Catalog{Keys: []*key.Key{k}, Teams: []*team.Team{tm}}.Load(t)
+	return catalogtest.Catalog{Keys: []*key.Key{k}, Teams: []*team.Team{tm}}.Load(t), k, tm
+}
+
+// Group values whose events carry no slug (rows older than the slug) are named from the catalog as it is now; a stamped slug wins over the catalog.
+func TestUsageGroupLabelsFallBackToCatalog(t *testing.T) {
+	cat, k, tm := labelCatalog(t)
 
 	now := time.Now()
 	reader := &fakeUsageReader{events: []usagelog.Event{
@@ -38,9 +40,7 @@ func TestUsageGroupLabelsFallBackToCatalog(t *testing.T) {
 		{RequestID: "r-2", Timestamp: now, Status: 200, RelayKeyHash: "hash-gone", RelayKey: "stamped", TeamID: "t-gone"},
 		{RequestID: "r-3", Timestamp: now, Status: 200, RelayKeyHash: k.Spec.KeyHash, RelayKey: "ci-key-renamed"},
 	}}
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("usage-labels-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerUsage(api, Deps{Authz: testRBAC(), UsageReader: reader, Catalog: cat}, nil)
 
 	for _, tc := range []struct {

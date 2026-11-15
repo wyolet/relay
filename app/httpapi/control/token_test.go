@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
@@ -29,7 +30,9 @@ import (
 	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/meta"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 // tokenUsers is the in-memory user store the token handlers read versions
@@ -194,56 +197,58 @@ func TestMintToken_Claims(t *testing.T) {
 	if ev.Resource.Name != out.Body.ExpiresAt.Format(time.RFC3339) {
 		t.Errorf("audit row carries expiry %q, want the token's exp", ev.Resource.Name)
 	}
-	if len(ev.Resource.Scope) != 2 || !strings.HasPrefix(ev.Resource.Scope[0], "project:") ||
-		!strings.HasPrefix(ev.Resource.Scope[1], "team:") {
-		t.Errorf("audit scope = %v, want project then team", ev.Resource.Scope)
+	if want := []string{"project:" + f.project.Meta.ID, "team:" + f.team.Meta.ID}; !slices.Equal(ev.Resource.Scope, want) {
+		t.Errorf("audit scope = %v, want %v", ev.Resource.Scope, want)
+	}
+	if out.Body.TeamID != f.team.Meta.ID {
+		t.Errorf("teamId = %q, want the project's team %q", out.Body.TeamID, f.team.Meta.ID)
 	}
 }
 
+// A refused mint signs nothing and says why; a project the caller may not mint for answers exactly as one that does not exist, so the answer enumerates no slugs.
 func TestMintToken_Rejections(t *testing.T) {
 	f := newTokenFixture(t)
-	userActor := &actor.Actor{UserID: f.userID, Username: "alice"}
+	f.users["u-disabled"] = &user.User{ID: "u-disabled", Username: "mallory", Disabled: true}
+	alice := &actor.Actor{UserID: f.userID, Username: "alice"}
+	off := func(d *tokenDeps) { d.cfg = func() *settings.AuthTokens { return &settings.AuthTokens{} } }
 
 	for _, tc := range []struct {
-		name       string
-		actor      *actor.Actor
-		body       *mintTokenInput
-		deps       func(tokenDeps) tokenDeps
-		wantStatus int
+		name         string
+		actor        *actor.Actor
+		project, ttl string
+		deps         func(*tokenDeps)
+		status       int
+		code, msg    string
 	}{
-		{
-			name: "ttl beyond the maximum", actor: userActor,
-			body: mintBody(f.project.Meta.Name, "48h"), wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "unparseable ttl", actor: userActor,
-			body: mintBody(f.project.Meta.Name, "soon"), wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "unknown project", actor: userActor,
-			body: mintBody("no-such-project", ""), wantStatus: http.StatusNotFound,
-		},
-		{
-			name: "admin token has no user to name", actor: &actor.Actor{AdminToken: true},
-			body: mintBody(f.project.Meta.Name, ""), wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "tokens disabled", actor: userActor, body: mintBody(f.project.Meta.Name, ""),
-			deps: func(d tokenDeps) tokenDeps {
-				d.cfg = func() *settings.AuthTokens { return &settings.AuthTokens{} }
-				return d
-			},
-			wantStatus: http.StatusServiceUnavailable,
-		},
+		{"ttl beyond the maximum", alice, "ml-search", "48h", nil, 400, "", "ttl exceeds the configured maximum of 24h0m0s"},
+		{"ttl just past the maximum", alice, "ml-search", "24h0m1s", nil, 400, "", "ttl exceeds the configured maximum of 24h0m0s"},
+		{"unparseable ttl", alice, "ml-search", "soon", nil, 400, "", "ttl must be a positive Go duration"},
+		{"zero ttl", alice, "ml-search", "0s", nil, 400, "", "ttl must be a positive Go duration"},
+		{"negative ttl", alice, "ml-search", "-5m", nil, 400, "", "ttl must be a positive Go duration"},
+		{"unknown project", alice, "no-such-project", "", nil, 404, "", "project not found"},
+		{"a project the caller may not mint for", alice, "ml-search", "", func(d *tokenDeps) { d.authz = denyAll{} }, 404, "", "project not found"},
+		{"the admin token has no user to name", &actor.Actor{AdminToken: true}, "ml-search", "", nil, 400, "", "minting a token requires a user session"},
+		{"tokens disabled", alice, "ml-search", "", off, 503, "", "tokens_disabled: no token signing key is configured"},
+		{"a user with no account row", &actor.Actor{UserID: "u-gone"}, "ml-search", "", nil, 404, "", "user not found"},
+		{"a disabled account", &actor.Actor{UserID: "u-disabled"}, "ml-search", "", nil, 401, "account_disabled", "account is disabled; contact your administrator"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			deps := f.deps
 			if tc.deps != nil {
-				deps = tc.deps(deps)
+				tc.deps(&deps)
 			}
-			_, err := mintToken(actor.WithActor(context.Background(), tc.actor), deps, tc.body)
-			if status := statusOf(t, err); status != tc.wantStatus {
-				t.Fatalf("status = %d (%v), want %d", status, err, tc.wantStatus)
+			events := audited(t, tc.actor, func(ctx context.Context) {
+				out, err := mintToken(ctx, deps, mintBody(tc.project, tc.ttl))
+				code := ""
+				if ae, ok := err.(*httpapi.APIError); ok {
+					code = ae.Err.Code
+				}
+				if out != nil || statusOf(t, err) != tc.status || code != tc.code || err.Error() != tc.msg {
+					t.Errorf("mint = %+v, %d %q %v; want %d %q %q", out, statusOf(t, err), code, err, tc.status, tc.code, tc.msg)
+				}
+			})
+			if len(events) != 0 {
+				t.Errorf("a refused mint recorded %+v", events)
 			}
 		})
 	}
@@ -355,19 +360,6 @@ func TestMintToken_ClampsMisconfiguredDefaultTTLToMax(t *testing.T) {
 	}
 }
 
-func TestMintToken_ResponseCarriesProjectTeamID(t *testing.T) {
-	f := newTokenFixture(t)
-	a := &actor.Actor{UserID: f.userID, Username: "alice"}
-
-	out, err := mintToken(actor.WithActor(context.Background(), a), f.deps, mintBody(f.project.Meta.Name, ""))
-	if err != nil {
-		t.Fatalf("mintToken: %v", err)
-	}
-	if out.Body.TeamID != f.team.Meta.ID {
-		t.Errorf("teamId = %q, want %q", out.Body.TeamID, f.team.Meta.ID)
-	}
-}
-
 func TestRevokeToken_ByJTI_HintsPathRequiresAdminAndNoAuditRow(t *testing.T) {
 	f := newTokenFixture(t)
 	a := &actor.Actor{UserID: f.userID, Username: "alice"}
@@ -476,5 +468,93 @@ func TestTokenOperationsDeclareTheirErrorStatuses(t *testing.T) {
 				t.Errorf("POST %s does not declare %d", tc.path, code)
 			}
 		}
+	}
+}
+
+// denyAll refuses everything an authenticated caller asks for.
+type denyAll struct{}
+
+func (denyAll) Authorize(context.Context, string, authz.Resource) error {
+	return authz.ErrForbidden
+}
+
+// Minting signs a long-lived credential off a session; the window is a floor
+// under abuse, not a quota.
+func TestMintIsRateLimitedPerUser(t *testing.T) {
+	f := newTokenFixture(t)
+	store := kv.NewMem()
+	t.Cleanup(func() { _ = store.Close() })
+	f.deps.limiter = pkgratelimit.New(store, slog.Default(), nil)
+	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: f.userID, Username: "alice"})
+
+	for i := 0; i < mintLimitBudget; i++ {
+		if _, err := mintToken(ctx, f.deps, mintBody(f.project.Meta.Name, "")); err != nil {
+			t.Fatalf("mint %d: %v", i, err)
+		}
+	}
+	_, err := mintToken(ctx, f.deps, mintBody(f.project.Meta.Name, ""))
+	if got := statusOf(t, err); got != 429 {
+		t.Fatalf("status past the budget = %d, want 429", got)
+	}
+
+	// The window is per user: another account is unaffected.
+	other := "u-other"
+	f.users[other] = f.users[f.userID]
+	otherCtx := actor.WithActor(context.Background(), &actor.Actor{UserID: other, Username: "bob"})
+	if _, err := mintToken(otherCtx, f.deps, mintBody(f.project.Meta.Name, "")); err != nil {
+		t.Fatalf("another user must have their own window: %v", err)
+	}
+
+	entries, err := store.Range(context.Background(), mintLimitKeyPrefix(f.userID))
+	if err != nil {
+		t.Fatalf("range: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Errorf("no kv key under %q", mintLimitKeyPrefix(f.userID))
+	}
+}
+
+// The hash tag keeps one user's window on one Redis Cluster slot.
+func TestMintLimitKeyFormat(t *testing.T) {
+	if got, want := mintLimitScope("u-1"), "user:u-1"; got != want {
+		t.Errorf("scope = %q, want %q", got, want)
+	}
+	if got, want := mintLimitKeyPrefix("u-1"), "limit:{user:u-1}:fw:"+mintLimitRule+":requests:"; got != want {
+		t.Errorf("key prefix = %q, want %q", got, want)
+	}
+}
+
+func asAdminToken() context.Context {
+	return actor.WithActor(context.Background(), &actor.Actor{AdminToken: true, Username: "admin-token"})
+}
+
+// Rotation is an admin's, runs the wired rotation once, and says so when there is no store to keep a new key in or the rotation fails.
+func TestRotateTokenKey(t *testing.T) {
+	admin := asAdminToken()
+	for _, tc := range []struct {
+		name   string
+		authz  authz.Authorizer
+		wired  bool
+		err    error
+		status int
+		msg    string
+		runs   int
+	}{
+		{"rotates", authz.AlwaysAllowAuthenticated{}, true, nil, 0, "", 1},
+		{"a denied caller rotates nothing", denyAll{}, true, nil, 403, "forbidden", 0},
+		{"no secret store", authz.AlwaysAllowAuthenticated{}, false, nil, 503, "tokens_disabled: no signing-key store is configured", 0},
+		{"the rotation fails", authz.AlwaysAllowAuthenticated{}, true, errors.New("no master key"), 500, "signing-key rotation failed: no master key", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := 0
+			d := Deps{Authz: tc.authz}
+			if tc.wired {
+				d.RotateTokenKey = func(context.Context) error { runs++; return tc.err }
+			}
+			_, err := rotateTokenKey(admin, d)
+			if statusOf(t, err) != tc.status || (err != nil && err.Error() != tc.msg) || runs != tc.runs {
+				t.Fatalf("rotate = %d %v after %d runs, want %d %q after %d", statusOf(t, err), err, runs, tc.status, tc.msg, tc.runs)
+			}
+		})
 	}
 }

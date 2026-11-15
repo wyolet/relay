@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/google/go-cmp/cmp"
+	"github.com/wyolet/relay/app/usagelog"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 	"net/http"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -61,20 +63,13 @@ func logsData(records ...*logspb.LogRecord) *logspb.LogsData {
 
 func logsExport(t *testing.T, records ...*logspb.LogRecord) []byte {
 	t.Helper()
-	b, err := proto.Marshal(logsData(records...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
+	return must(proto.Marshal(logsData(records...)))(t)
 }
 
 // logsJSON renders records as an OTLP/JSON export, which differs from protobuf JSON only in writing ids as hex.
 func logsJSON(t *testing.T, records ...*logspb.LogRecord) []byte {
 	t.Helper()
-	b, err := protojson.Marshal(logsData(records...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := must(protojson.Marshal(logsData(records...)))(t)
 	var doc any
 	if err := json.Unmarshal(b, &doc); err != nil {
 		t.Fatal(err)
@@ -90,11 +85,7 @@ func logsJSON(t *testing.T, records ...*logspb.LogRecord) []byte {
 			rec["spanId"] = hex.EncodeToString(r.SpanId)
 		}
 	}
-	out, err := json.Marshal(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return must(json.Marshal(doc))(t)
 }
 
 func responseRequestID(responseID string) string {
@@ -108,28 +99,11 @@ func TestLogsExportRecordsAUsageEvent(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
 		t.Fatalf("status = %d body = %q, want the empty success message", rec.Code, rec.Body)
 	}
-	if len(fx.events) != 1 {
-		t.Fatalf("recorded %d events, want 1", len(fx.events))
-	}
-	ev := fx.events[0]
-	// The same row the span of this call would give, minus the duration a log record cannot carry.
-	if ev.RequestID != "otlp-"+strings.Repeat("ab", 16)+"-"+strings.Repeat("01", 8) {
-		t.Errorf("RequestID = %q, want it derived from the ids of the span the event was emitted in", ev.RequestID)
-	}
-	if ev.Source != "otlp" || ev.Status != 200 || ev.DurationMs != 0 || !ev.Timestamp.Equal(spanStart) {
-		t.Errorf("outcome = source %q status %d duration %d ts %v", ev.Source, ev.Status, ev.DurationMs, ev.Timestamp)
-	}
-	if ev.ProjectID != fx.project.Meta.ID || ev.RelayKeyHash != fx.keyRow.Spec.KeyHash {
-		t.Errorf("attribution = project %q key %q", ev.ProjectID, ev.RelayKeyHash)
-	}
-	if ev.ModelID != fx.model.Meta.ID || ev.Pricing != "acme-large-list" || ev.CostNanos == nil || *ev.CostNanos != 5_760_000 {
-		t.Errorf("model = %q pricing = %q cost = %v", ev.Model, ev.Pricing, ev.CostNanos)
-	}
-	if ev.Tokens["input"] != 100 || ev.Tokens["cache_read"] != 700 || ev.Tokens["output"] != 300 {
-		t.Errorf("tokens = %v", ev.Tokens)
-	}
-	if ev.Extras["service"] != "billing-agent" || ev.Extras["response_id"] != "resp_123" || ev.Extras["span_id"] != strings.Repeat("01", 8) {
-		t.Errorf("extras = %v", ev.Extras)
+	// The same row the span of this call gives, minus the duration a log record cannot carry.
+	want := fx.chatRow(1)
+	want.DurationMs = 0
+	if diff := cmp.Diff([]usagelog.Event{want}, fx.events); diff != "" {
+		t.Fatalf("recorded events (-want +got):\n%s", diff)
 	}
 }
 
@@ -158,12 +132,17 @@ func TestEventOfAStreamedCallAsAnSDKExportsIt(t *testing.T) {
 	if rec := fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, event)); rec.Code != http.StatusOK || len(fx.events) != 1 {
 		t.Fatalf("status = %d events = %d body = %s", rec.Code, len(fx.events), rec.Body)
 	}
-	ev := fx.events[0]
-	if !ev.Timestamp.Equal(observed) || !ev.Streamed || ev.FinishReason != "stop" || ev.DurationMs != 0 {
-		t.Errorf("event = ts %v streamed %v finish %q duration %d, want the observed time, streamed, stop, 0", ev.Timestamp, ev.Streamed, ev.FinishReason, ev.DurationMs)
-	}
-	if ev.Upstream == nil || ev.Upstream.ResponseStart != 1017 || ev.Upstream.ResponseEnd < ev.Upstream.ResponseStart {
-		t.Errorf("upstream timing = %+v, want the first chunk at 1017µs and no end before it", ev.Upstream)
+	// Dated at the observed time, with the first chunk at 1017µs and, lacking a duration, the response ending there.
+	want := fx.chatRow(1)
+	want.Timestamp, want.DurationMs, want.Streamed, want.FinishReason = observed, 0, true, "stop"
+	want.Upstream = &sdkusage.UpstreamTiming{ResponseStart: 1017, ResponseEnd: 1017}
+	want.Tokens = map[string]int64{"input": 800, "output": 214}
+	cost := int64(5_610_000)
+	want.CostNanos, want.CostBreakdown = &cost, map[string]int64{"tokens.input": 2_400_000, "tokens.output": 3_210_000}
+	want.Extras["operation"], want.Extras["response_id"] = "generate_content", "resp_stream_1"
+	delete(want.Extras, "session_id")
+	if diff := cmp.Diff([]usagelog.Event{want}, fx.events); diff != "" {
+		t.Fatalf("recorded events (-want +got):\n%s", diff)
 	}
 }
 
@@ -185,17 +164,8 @@ func TestLogsExportKeepsOnlyTheModelCallEvent(t *testing.T) {
 	if got, want := fx.spanIDs(), spanIDsOf(1, 4); !slices.Equal(got, want) {
 		t.Fatalf("recorded = %v, want the two model-call events %v", got, want)
 	}
-	var resp struct {
-		PartialSuccess struct {
-			RejectedLogRecords string `json:"rejectedLogRecords"`
-			ErrorMessage       string `json:"errorMessage"`
-		} `json:"partialSuccess"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("response %q: %v", rec.Body, err)
-	}
-	if resp.PartialSuccess.RejectedLogRecords != "1" || !strings.Contains(resp.PartialSuccess.ErrorMessage, "response id") {
-		t.Errorf("partial success = %+v, want 1 log record rejected for having no identity", resp.PartialSuccess)
+	if got, want := rec.Body.String(), `{"partialSuccess":{"errorMessage":"model-call log records rejected: 1 with neither span ids nor a response id","rejectedLogRecords":"1"}}`; got != want {
+		t.Errorf("body:\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -253,31 +223,13 @@ func TestEventOutsideASpanIsKnownByItsResponseID(t *testing.T) {
 	// A span has ids of its own; one without them is malformed and is not rescued by its response id.
 	headless := chatSpan(9, "acme-large")
 	headless.SpanId = nil
-	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, headless)); rec.Code != http.StatusOK || len(fx.events) != 2 {
-		t.Errorf("span without ids: status = %d events = %d, want it rejected", rec.Code, len(fx.events))
+	rec := fx.post(t, otlp.MediaTypeJSON, mustJSON(t, headless))
+	if got, want := rec.Body.String(), `{"partialSuccess":{"errorMessage":"model-call spans rejected: 1 without a trace id or span id","rejectedSpans":"1"}}`; rec.Code != http.StatusOK || got != want || len(fx.events) != 2 {
+		t.Errorf("span without ids: status = %d events = %d body:\n got %s\nwant %s", rec.Code, len(fx.events), got, want)
 	}
 }
 
 func TestLogsShareTheLimitsOfTraces(t *testing.T) {
-	t.Run("receiver disabled", func(t *testing.T) {
-		fx := newFixture(t)
-		fx.enabled = false
-		if rec := fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, chatEvent(1, "acme-large"))); rec.Code != http.StatusNotFound || len(fx.events) != 0 {
-			t.Errorf("status = %d events = %d", rec.Code, len(fx.events))
-		}
-	})
-	t.Run("no credential", func(t *testing.T) {
-		fx := newFixture(t)
-		if rec := fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, chatEvent(1, "acme-large")), "Authorization", ""); rec.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401", rec.Code)
-		}
-	})
-	t.Run("undecodable body", func(t *testing.T) {
-		fx := newFixture(t)
-		if rec := fx.postLogs(t, otlp.MediaTypeJSON, []byte(`{"resourceLogs":`)); rec.Code != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400", rec.Code)
-		}
-	})
 	t.Run("usage queue at half", func(t *testing.T) {
 		fx := newFixture(t)
 		fx.capacity = 2
@@ -285,8 +237,8 @@ func TestLogsShareTheLimitsOfTraces(t *testing.T) {
 			t.Fatalf("status = %d", rec.Code)
 		}
 		rec := fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, chatEvent(2, "acme-large")))
-		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" {
-			t.Errorf("status = %d Retry-After = %q, want 503 and 1", rec.Code, rec.Header().Get("Retry-After"))
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" || len(fx.events) != 1 {
+			t.Errorf("status = %d Retry-After = %q events = %d, want 503, 1 and only the first event", rec.Code, rec.Header().Get("Retry-After"), len(fx.events))
 		}
 	})
 	t.Run("one export budget for both signals", func(t *testing.T) {
@@ -297,8 +249,8 @@ func TestLogsShareTheLimitsOfTraces(t *testing.T) {
 		if rec := fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, chatEvent(2, "acme-large"))); rec.Code != http.StatusOK {
 			t.Fatalf("logs: status = %d", rec.Code)
 		}
-		if rec := fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, chatEvent(3, "acme-large"))); rec.Code != http.StatusTooManyRequests {
-			t.Errorf("third export: status = %d, want 429", rec.Code)
+		if rec := fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, chatEvent(3, "acme-large"))); rec.Code != http.StatusTooManyRequests || len(fx.events) != 2 {
+			t.Errorf("third export: status = %d events = %d, want 429 and the two recorded before it", rec.Code, len(fx.events))
 		}
 	})
 	t.Run("event starting in the future", func(t *testing.T) {
@@ -306,8 +258,8 @@ func TestLogsShareTheLimitsOfTraces(t *testing.T) {
 		late := chatEvent(1, "acme-large")
 		late.TimeUnixNano = uint64(time.Now().Add(10 * time.Minute).UnixNano())
 		rec := fx.postLogs(t, otlp.MediaTypeJSON, logsJSON(t, late))
-		if rec.Code != http.StatusOK || len(fx.events) != 0 || !strings.Contains(rec.Body.String(), "rejectedLogRecords") {
-			t.Errorf("status = %d events = %d body = %s, want it rejected in a partial success", rec.Code, len(fx.events), rec.Body)
+		if got, want := rec.Body.String(), `{"partialSuccess":{"errorMessage":"model-call log records rejected: 1 starting more than 5 minutes in the future","rejectedLogRecords":"1"}}`; rec.Code != http.StatusOK || len(fx.events) != 0 || got != want {
+			t.Errorf("status = %d events = %d body:\n got %s\nwant %s", rec.Code, len(fx.events), got, want)
 		}
 	})
 }

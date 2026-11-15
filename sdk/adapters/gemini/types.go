@@ -50,16 +50,40 @@ type geminiPart struct {
 
 	// functionResponse from user
 	FunctionResponse *geminiFR `json:"functionResponse,omitempty"`
+
+	// Proto field names, accepted on requests; never set on output (see fillFromSnakeCase).
+	ThoughtSignatureSnake string      `json:"thought_signature,omitempty"`
+	InlineDataSnake       *inlineData `json:"inline_data,omitempty"`
+	FileDataSnake         *fileData   `json:"file_data,omitempty"`
+	FunctionCallSnake     *geminiFC   `json:"function_call,omitempty"`
+	FunctionResponseSnake *geminiFR   `json:"function_response,omitempty"`
+}
+
+// MarshalJSON keeps the empty text of a signature-only part: Gemini rejects a part with no data field.
+func (p geminiPart) MarshalJSON() ([]byte, error) {
+	type plain geminiPart
+	if p.ThoughtSignature == "" || p.Text != "" || p.InlineData != nil || p.FileData != nil || p.FunctionCall != nil || p.FunctionResponse != nil {
+		return json.Marshal(plain(p))
+	}
+	return json.Marshal(struct {
+		Text string `json:"text"`
+		plain
+	}{"", plain(p)})
 }
 
 type inlineData struct {
 	MIMEType string `json:"mimeType"`
 	Data     string `json:"data"` // base64-encoded
+
+	MIMETypeSnake string `json:"mime_type,omitempty"`
 }
 
 type fileData struct {
 	MIMEType string `json:"mimeType,omitempty"`
 	FileURI  string `json:"fileUri"`
+
+	MIMETypeSnake string `json:"mime_type,omitempty"`
+	FileURISnake  string `json:"file_uri,omitempty"`
 }
 
 type geminiFC struct {
@@ -87,30 +111,56 @@ type generationConfig struct {
 	ResponseMIMEType string          `json:"responseMimeType,omitempty"`
 	ResponseSchema   json.RawMessage `json:"responseSchema,omitempty"`
 	ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
+	// ResponseJSONSchema is the only schema field written: ResponseSchema takes an OpenAPI subset that rejects JSON Schema keywords such as additionalProperties.
+	ResponseJSONSchema json.RawMessage `json:"responseJsonSchema,omitempty"`
+
+	// Proto field names, accepted on requests; never set on output (see fillFromSnakeCase).
+	TopPSnake               *float64        `json:"top_p,omitempty"`
+	TopKSnake               *int            `json:"top_k,omitempty"`
+	MaxOutputTokensSnake    *int            `json:"max_output_tokens,omitempty"`
+	StopSequencesSnake      []string        `json:"stop_sequences,omitempty"`
+	FrequencyPenaltySnake   *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenaltySnake    *float64        `json:"presence_penalty,omitempty"`
+	ResponseMIMETypeSnake   string          `json:"response_mime_type,omitempty"`
+	ResponseSchemaSnake     json.RawMessage `json:"response_schema,omitempty"`
+	ResponseJSONSchemaSnake json.RawMessage `json:"response_json_schema,omitempty"`
+	ThinkingConfigSnake     *thinkingConfig `json:"thinking_config,omitempty"`
 }
 
 type thinkingConfig struct {
 	ThinkingBudget  int  `json:"thinkingBudget,omitempty"`
 	IncludeThoughts bool `json:"includeThoughts,omitempty"`
+
+	ThinkingBudgetSnake int `json:"thinking_budget,omitempty"`
 }
 
 type geminiTool struct {
 	FunctionDeclarations []functionDeclaration `json:"functionDeclarations,omitempty"`
+
+	FunctionDeclarationsSnake []functionDeclaration `json:"function_declarations,omitempty"`
 }
 
 type functionDeclaration struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	// ParametersJSONSchema is the only parameters field written, as for generationConfig.ResponseJSONSchema.
+	ParametersJSONSchema json.RawMessage `json:"parametersJsonSchema,omitempty"`
+
+	ParametersJSONSchemaSnake json.RawMessage `json:"parameters_json_schema,omitempty"`
 }
 
 type toolConfig struct {
 	FunctionCallingConfig *functionCallingConfig `json:"functionCallingConfig,omitempty"`
+
+	FunctionCallingConfigSnake *functionCallingConfig `json:"function_calling_config,omitempty"`
 }
 
 type functionCallingConfig struct {
 	Mode                 string   `json:"mode,omitempty"`
 	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
+
+	AllowedFunctionNamesSnake []string `json:"allowed_function_names,omitempty"`
 }
 
 // geminiResponse is the body returned by generateContent.

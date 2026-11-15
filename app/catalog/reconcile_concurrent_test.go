@@ -9,20 +9,17 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sync"
 	"testing"
 
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
-	"github.com/wyolet/relay/pkg/catalogkind/model"
-	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -84,9 +81,7 @@ func newRaceWorld(t *testing.T) *raceWorld {
 		pbList{f.low, f.highA, f.noPol, f.onDeadP})
 	users := []string{meta.NewID(), meta.NewID(), meta.NewID()}
 	c.UseTokenVersions(raceVersionList{users[0]: 1, users[1]: 2, users[2]: 3})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("initial reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	return &raceWorld{
 		cat: c, models: models, keys: keys, pols: allPols, rks: rks,
 		team: f.team, live: f.live, dead: f.disabled, role: f.role, grp: grp, sa: sa,
@@ -96,117 +91,62 @@ func newRaceWorld(t *testing.T) *raceWorld {
 	}
 }
 
-// events is the writer alphabet: every entry publishes a fresh copy of one
-// row, so nothing a live snapshot points at is mutated after publication.
-func (w *raceWorld) events() []func() {
+// events is the writer alphabet: every entry publishes a fresh copy of one row, so nothing a live snapshot points at is mutated after publication. Every row is valid, so every write must be accepted.
+func (w *raceWorld) events() []func() error {
 	c := w.cat
 	on := true
-	var out []func()
-	add := func(fn func()) { out = append(out, fn) }
-
-	for i := range w.models {
-		m := w.models[i]
-		add(func() {
-			cp := *m
-			cp.Spec.Enabled = &on
-			_ = c.ApplyModelUpsert(&cp)
-		})
-		add(func() { _ = c.ApplyModelDelete(m.Meta.ID) })
+	var out []func() error
+	add := func(fns ...func() error) { out = append(out, fns...) }
+	for _, m := range w.models {
+		add(func() error { cp := *m; cp.Spec.Enabled = &on; return c.ApplyModelUpsert(&cp) },
+			func() error { return c.ApplyModelDelete(m.Meta.ID) })
 	}
-	for i := range w.keys {
-		k := w.keys[i]
-		add(func() {
-			cp := *k
-			cp.Spec.Enabled = &on
-			_ = c.ApplyHostKeyUpsert(&cp)
-		})
-		add(func() { _ = c.ApplyHostKeyDelete(k.Meta.ID) })
+	for _, k := range w.keys {
+		add(func() error { cp := *k; cp.Spec.Enabled = &on; return c.ApplyHostKeyUpsert(&cp) },
+			func() error { return c.ApplyHostKeyDelete(k.Meta.ID) })
 	}
-	for i := range w.rks {
-		rk := w.rks[i]
-		add(func() {
-			cp := *rk
-			cp.Spec.Enabled = &on
-			_ = c.ApplyKeyUpsert(&cp)
-		})
-		add(func() { _ = c.ApplyKeyDelete(rk.Meta.ID) })
+	for _, rk := range w.rks {
+		add(func() error { cp := *rk; cp.Spec.Enabled = &on; return c.ApplyKeyUpsert(&cp) },
+			func() error { return c.ApplyKeyDelete(rk.Meta.ID) })
 	}
-	for i := range w.pols {
-		p := w.pols[i]
-		add(func() {
-			cp := *p
-			cp.Spec.Enabled = &on
-			_ = c.ApplyPolicyUpsert(&cp)
-		})
+	for _, p := range w.pols {
+		add(func() error { cp := *p; cp.Spec.Enabled = &on; return c.ApplyPolicyUpsert(&cp) })
 	}
-
-	// Tenancy churn: disable/enable a project, re-upsert the team, and
-	// delete/revive the service account whose keys hang off it.
-	add(func() {
-		cp := *w.live
-		cp.Spec.Enabled = &on
-		_ = c.ApplyProjectUpsert(&cp)
-	})
-	add(func() {
-		cp := *w.dead
-		cp.Spec.Enabled = &on
-		_ = c.ApplyProjectUpsert(&cp)
-	})
-	add(func() { _ = c.ApplyProjectDelete(w.dead.Meta.ID) })
-	add(func() {
-		cp := *w.team
-		cp.Spec.Enabled = &on
-		_ = c.ApplyTeamUpsert(&cp)
-	})
-	add(func() {
-		cp := *w.sa
-		cp.Spec.Enabled = &on
-		_ = c.ApplyServiceAccountUpsert(&cp)
-	})
-	add(func() { _ = c.ApplyServiceAccountDelete(w.sa.Meta.ID) })
-
-	// Subject churn: group membership and binding subject lists are what
-	// the subject index is rebuilt from.
+	// Tenancy churn: re-upsert the projects and the team, delete the disabled project, and delete and revive the service account whose keys hang off it.
+	add(func() error { cp := *w.live; cp.Spec.Enabled = &on; return c.ApplyProjectUpsert(&cp) },
+		func() error { cp := *w.dead; cp.Spec.Enabled = &on; return c.ApplyProjectUpsert(&cp) },
+		func() error { return c.ApplyProjectDelete(w.dead.Meta.ID) },
+		func() error { cp := *w.team; cp.Spec.Enabled = &on; return c.ApplyTeamUpsert(&cp) },
+		func() error { cp := *w.sa; cp.Spec.Enabled = &on; return c.ApplyServiceAccountUpsert(&cp) },
+		func() error { return c.ApplyServiceAccountDelete(w.sa.Meta.ID) })
+	// Subject churn: group membership and binding subject lists are what the subject index is rebuilt from.
 	for n := 0; n <= len(w.userIDs); n++ {
 		members := append([]string(nil), w.userIDs[:n]...)
-		add(func() {
+		add(func() error {
 			cp := *w.grp
-			cp.Spec.MemberIDs = members
-			cp.Spec.Enabled = &on
-			_ = c.ApplyGroupUpsert(&cp)
+			cp.Spec.MemberIDs, cp.Spec.Enabled = members, &on
+			return c.ApplyGroupUpsert(&cp)
 		})
 	}
-	add(func() { _ = c.ApplyGroupDelete(w.grp.Meta.ID) })
-	for i := range w.rbs {
-		b := w.rbs[i]
-		add(func() {
+	add(func() error { return c.ApplyGroupDelete(w.grp.Meta.ID) })
+	for _, b := range w.rbs {
+		add(func() error {
 			cp := *b
-			cp.Spec.Subjects = []rolebinding.Subject{
-				{Kind: rolebinding.SubjectGroup, Name: w.grp.Meta.Name},
-			}
-			_ = c.ApplyRoleBindingUpsert(&cp)
-		})
-		add(func() { _ = c.ApplyRoleBindingDelete(b.Meta.ID) })
+			cp.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: w.grp.Meta.Name}}
+			return c.ApplyRoleBindingUpsert(&cp)
+		}, func() error { return c.ApplyRoleBindingDelete(b.Meta.ID) })
 	}
-	for i := range w.pbs {
-		b := w.pbs[i]
-		add(func() {
+	for _, b := range w.pbs {
+		add(func() error {
 			cp := *b
 			cp.Spec.AccountIDs = []string{meta.NewID()}
-			_ = c.ApplyPolicyBindingUpsert(&cp)
-		})
-		add(func() { _ = c.ApplyPolicyBindingDelete(b.Meta.ID) })
+			return c.ApplyPolicyBindingUpsert(&cp)
+		}, func() error { return c.ApplyPolicyBindingDelete(b.Meta.ID) })
 	}
-	add(func() {
-		cp := *w.role
-		cp.Spec.Enabled = &on
-		_ = c.ApplyRoleUpsert(&cp)
-	})
-
-	// Whole-snapshot republishes racing the incremental ones.
-	add(func() { _ = c.Reload(context.Background()) })
-	add(func() { _ = c.ReloadTokenVersions(context.Background()) })
-
+	add(func() error { cp := *w.role; cp.Spec.Enabled = &on; return c.ApplyRoleUpsert(&cp) },
+		// Whole-snapshot republishes racing the incremental ones.
+		func() error { return c.Reload(context.Background()) },
+		func() error { return c.ReloadTokenVersions(context.Background()) })
 	return out
 }
 
@@ -292,7 +232,9 @@ func TestConcurrentWritersAgainstSnapshotReaders(t *testing.T) {
 			defer writing.Done()
 			r := rand.New(rand.NewSource(seed))
 			for j := 0; j < eventsPerWrite; j++ {
-				evs[r.Intn(len(evs))]()
+				if err := evs[r.Intn(len(evs))](); err != nil {
+					t.Errorf("writer %d event %d rejected: %v", seed, j, err)
+				}
 			}
 		}(int64(i) + 1)
 	}
@@ -305,141 +247,27 @@ func TestConcurrentWritersAgainstSnapshotReaders(t *testing.T) {
 	// A full Reload from the same stores must converge on a snapshot with
 	// the same ref-graph health as the incremental path landed on — a
 	// reconcile that lost or leaked an edge under contention diverges here.
-	if err := w.cat.Reload(context.Background()); err != nil {
-		t.Fatalf("final reload: %v", err)
-	}
+	must(t, w.cat.Reload(context.Background()))
 	assertRefsSymmetric(t, w.cat.Current(), "after a final Reload")
 }
 
-// assertRefsSymmetric checks the ref graph in both directions using the
-// production presence test (the refs_test.go helper predates the tenancy
-// kinds and reads them as absent): every present row's outbound parent
-// lists it back, and every recorded dependent is itself present.
-func assertRefsSymmetric(t *testing.T, s *Snapshot, when string) {
-	t.Helper()
-	forward := func(child refKey, parents []refKey) {
-		for _, p := range parents {
-			if !rowPresent(s, p) {
-				t.Errorf("%s: %s/%s references a missing %s/%s",
-					when, child.Kind, child.ID, p.Kind, p.ID)
-				continue
-			}
-			if !containsRef(s.Dependents(p.Kind, p.ID), child) {
-				t.Errorf("%s: refsBy%s[%s] is missing dependent %s/%s",
-					when, p.Kind, p.ID, child.Kind, child.ID)
-			}
-		}
-	}
-	for _, m := range s.modelsByID {
-		forward(refKey{Kind: refModel, ID: m.Meta.ID}, outboundModelRefs(m))
-	}
-	for _, k := range s.hostKeysByID {
-		forward(refKey{Kind: refHostKey, ID: k.Meta.ID}, outboundHostKeyRefs(k))
-	}
-	for _, p := range s.policiesByID {
-		forward(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
-	}
-	for _, k := range s.keysByID {
-		forward(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
-	}
-	for _, sa := range s.serviceAccountsByID {
-		forward(refKey{Kind: refServiceAccount, ID: sa.Meta.ID}, outboundServiceAccountRefs(sa))
-	}
-	for _, b := range s.roleBindingsByID {
-		forward(refKey{Kind: refRoleBinding, ID: b.Meta.ID}, outboundRoleBindingRefs(b))
-	}
-	for _, b := range s.policyBindingsByID {
-		forward(refKey{Kind: refPolicyBinding, ID: b.Meta.ID}, outboundPolicyBindingRefs(b))
-	}
-	for _, p := range s.projectsByID {
-		forward(refKey{Kind: refProject, ID: p.Meta.ID}, outboundProjectRefs(p))
-	}
-
-	// The dual: nothing recorded as a dependent may have been dropped.
-	for name, m := range map[string]map[string]refSet{
-		"Provider": s.refsByProvider, "Host": s.refsByHost, "Model": s.refsByModel,
-		"HostKey": s.refsByHostKey, "RateLimit": s.refsByRateLimit, "Policy": s.refsByPolicy,
-		"Team": s.refsByTeam, "Project": s.refsByProject,
-		"ServiceAccount": s.refsByServiceAccount, "Role": s.refsByRole,
-	} {
-		for parentID, set := range m {
-			for child := range set {
-				if !rowPresent(s, child) {
-					t.Errorf("%s: refsBy%s[%s] holds a dropped dependent %s/%s",
-						when, name, parentID, child.Kind, child.ID)
-				}
-			}
-		}
-	}
-}
-
-func containsRef(set []refKey, want refKey) bool {
-	for _, k := range set {
-		if k == want {
-			return true
-		}
-	}
-	return false
-}
-
-// TestPublishedSnapshotIsNeverMutatedByALaterApply pins the other half
-// of COW: a snapshot a reader already holds must be byte-stable no matter
-// what lands afterwards. Without -race an in-place index write is invisible
-// here unless it happens to change a length, so the fingerprint compares
-// contents, not counts.
+// A snapshot a reader already holds stays as published whatever lands afterwards: every index, down to slice and set contents, renders the same after each of a run of incremental writes. A full reload builds from the stores and would cut the later snapshots loose from the held one, so the run leaves the two reload events out.
 func TestPublishedSnapshotIsNeverMutatedByALaterApply(t *testing.T) {
 	w := newRaceWorld(t)
 	held := w.cat.Current()
-	before := fingerprint(held)
-
+	before := fmt.Sprintf("%v", *held)
 	evs := w.events()
+	evs = evs[:len(evs)-2]
 	r := rand.New(rand.NewSource(7))
-	for i := 0; i < 400; i++ {
-		evs[r.Intn(len(evs))]()
-	}
-	if got := fingerprint(held); got != before {
-		t.Fatalf("the snapshot a reader was holding changed under it:\n before %s\n after  %s", before, got)
-	}
-}
-
-// fingerprint renders the identity-bearing contents of a snapshot's indices
-// in a stable order.
-func fingerprint(s *Snapshot) string {
-	var ids []string
-	collect := func(prefix string, in []string) {
-		sorted := append([]string(nil), in...)
-		sortStrings(sorted)
-		for _, v := range sorted {
-			ids = append(ids, prefix+"/"+v)
+	for i := range 400 {
+		if err := evs[r.Intn(len(evs))](); err != nil {
+			t.Fatalf("event %d rejected: %v", i, err)
+		}
+		if got := fmt.Sprintf("%v", *held); got != before {
+			t.Fatalf("event %d changed the snapshot a reader was holding", i)
 		}
 	}
-	collect("model", idsOf(s.modelsByID, func(m *model.Model) string { return m.Meta.ID }))
-	collect("policy", idsOf(s.policiesByID, func(p *policy.Policy) string { return p.Meta.ID }))
-	collect("key", idsOf(s.keysByID, func(k *key.Key) string { return k.Meta.ID }))
-	collect("project", idsOf(s.projectsByID, func(p *project.Project) string { return p.Meta.ID }))
-	collect("group", idsOf(s.groupsByID, func(g *group.Group) string { return g.Meta.ID }))
-	collect("sa", idsOf(s.serviceAccountsByID, func(a *serviceaccount.ServiceAccount) string { return a.Meta.ID }))
-	collect("rb", idsOf(s.roleBindingsByID, func(b *rolebinding.RoleBinding) string { return b.Meta.ID }))
-	collect("pb", idsOf(s.policyBindingsByID, func(b *policybinding.PolicyBinding) string { return b.Meta.ID }))
-	out := ""
-	for _, v := range ids {
-		out += v + " "
-	}
-	return out
-}
-
-func idsOf[T any](m map[string]T, id func(T) string) []string {
-	out := make([]string, 0, len(m))
-	for _, v := range m {
-		out = append(out, id(v))
-	}
-	return out
-}
-
-func sortStrings(in []string) {
-	for i := 1; i < len(in); i++ {
-		for j := i; j > 0 && in[j] < in[j-1]; j-- {
-			in[j], in[j-1] = in[j-1], in[j]
-		}
+	if w.cat.Current().Generation() <= held.Generation() {
+		t.Fatal("400 writes published no newer snapshot")
 	}
 }

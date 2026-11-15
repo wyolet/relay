@@ -84,9 +84,7 @@ func TestModelRefIssues(t *testing.T) {
 
 	// Binding m2 at host-a makes it reachable.
 	apply(h, r.w.bind(r.m2, r.hostA))
-	if hasIssue(h.issues(KindPolicy, none.Meta.ID), IssueModelRefUnreachable) {
-		t.Errorf("none after binding m2 at host-a: %+v", h.issues(KindPolicy, none.Meta.ID))
-	}
+	h.wantIssue(KindPolicy, none.Meta.ID, IssueModelRefUnreachable, false)
 }
 
 func TestPoolOutsideModels(t *testing.T) {
@@ -151,9 +149,7 @@ func TestModelUnservable(t *testing.T) {
 	offHost := clone(r.hostB)
 	offHost.Spec.Enabled = boolp(false)
 	apply(h, offHost)
-	if !hasIssue(h.issues(KindModel, r.m2.Meta.ID), IssueModelUnservable) {
-		t.Errorf("m2 with its only host disabled: %+v", h.issues(KindModel, r.m2.Meta.ID))
-	}
+	h.wantIssue(KindModel, r.m2.Meta.ID, IssueModelUnservable, true)
 }
 
 // A key naming no account whose principal has no account of its own names the principal, not an empty account id.
@@ -166,7 +162,10 @@ func TestKeyIssue_NoOwnAccount(t *testing.T) {
 	w.keys = append(w.keys, k)
 	h := w.start(t)
 	i := issueAt(h.issues(KindKey, k.Meta.ID), IssueRefMissing, "spec.accountId")
-	if i == nil || strings.Contains(i.Message, "account  ") || !strings.Contains(i.Message, "service account "+sa.Meta.Name) || i.Target != (engine.Ref{}) {
-		t.Errorf("issue = %+v, want one naming %s and no target", i, sa.Meta.Name)
+	if want := "the key names no account and service account " + sa.Meta.Name + " has no account of its own; the key cannot serve"; i == nil || i.Message != want || i.Target != (engine.Ref{}) || i.Severity != engine.SeverityError {
+		t.Errorf("issue = %+v, want an error with no target saying %q", i, want)
+	}
+	if h.holder.Load().Keys.Lookup(k.Spec.KeyHash, time.Now()) != nil {
+		t.Error("a key with no account to run in authenticates")
 	}
 }

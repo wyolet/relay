@@ -12,6 +12,7 @@ The `relay` binary is both the server and its operator commands. With no argumen
 | [`relay export`](#relay-export) | Render stored rows as a manifest bundle | Control API |
 | [`relay auth can-i`](#relay-auth-can-i) | Ask whether a subject may perform an action | Control API |
 | [`relay token mint`](#relay-token-mint) | Log in with a password and mint an inference token | Control API |
+| [`relay catalog prune`](#relay-catalog-prune) | Show, or delete, the detached catalog rows nothing holds | Control API |
 | [`relay keygen`](#relay-keygen) | Generate a relay key locally | Nothing |
 | [`relay migrate`](#relay-migrate) | Apply, roll back or repair the database schema | Postgres |
 | [`relay seed`](#relay-seed) | Validate a manifest directory, or write it straight to Postgres | Postgres |
@@ -21,12 +22,12 @@ The `relay` binary is both the server and its operator commands. With no argumen
 
 The server (`relay` with no command) first reads `.env` from the working directory, if present, and sets each variable that is not already set in the environment. The commands below do not read `.env`, so they never pick up a target or credentials from the directory they run in. To load a file for any invocation, name it in `RELAY_ENV_FILE`; the command then fails if the file can't be read.
 
-**Control API commands** (`apply`, `export`, `auth can-i`, `token mint`) call the control API over HTTP:
+**Control API commands** (`apply`, `export`, `auth can-i`, `token mint`, `catalog prune`) call the control API over HTTP:
 
 | Variable | Flag | Default | Used by |
 | --- | --- | --- | --- |
-| `RELAY_URL` | `--url` | `http://localhost:8081` | All four. The control listener's base URL, without `/api`. |
-| `RELAY_ADMIN_TOKEN` | `--token` | _(none)_ | `apply`, `export`, `auth can-i`. Sent as `Authorization: Bearer`. |
+| `RELAY_URL` | `--url` | `http://localhost:8081` | All five. The control listener's base URL, without `/api`. |
+| `RELAY_ADMIN_TOKEN` | `--token` | _(none)_ | `apply`, `export`, `auth can-i`, `catalog prune`. Sent as `Authorization: Bearer`. |
 | `RELAY_USER` | `--user` | _(none)_ | `token mint` |
 | `RELAY_PASSWORD` | _(no flag)_ | _(prompt)_ | `token mint`. Without it, the command prompts on a terminal and fails when there is none. |
 
@@ -38,7 +39,7 @@ The server (`relay` with no command) first reads `.env` from the working directo
 | `RELAY_MASTER_KEY`, `RELAY_MASTER_KEY_EXTRA` | `seed --apply` (to store host key values) and `secret`. See [Stored secrets](/concepts/secret-keys). |
 | `RELAY_MIGRATE_LOCK_TIMEOUT_S` | `migrate` and `seed --apply`: how long a migration waits for a table lock (default `10`). |
 
-`apply`, `export`, `auth can-i`, `token mint`, `keygen` and `secret` print errors to stderr as `<command>: <message>`. `migrate` and `seed` log as the server does, in JSON on stdout.
+`apply`, `export`, `auth can-i`, `token mint`, `catalog prune`, `keygen` and `secret` print errors to stderr as `<command>: <message>`. `migrate` and `seed` log as the server does, in JSON on stdout.
 
 ### Running commands in a container
 
@@ -140,6 +141,23 @@ Logs in with `POST /api/auth/login`, mints an [inference token](/concepts/auth#i
 There is no password flag: command lines are visible in the process table and kept in shell history. The password comes from `$RELAY_PASSWORD`, or from a prompt on an interactive terminal.
 
 Exits `0` on success, `2` when the login or the mint is refused or the server can't be reached, and `1` on a usage error or a missing password.
+
+## relay catalog prune
+
+```bash
+relay catalog prune                  # print the decisions, delete nothing
+relay catalog prune --apply --idle 30d
+```
+
+Calls `POST /api/catalog/prune` and prints every detached catalog row with its decision (`prune` or `keep`) and the reason a kept row stays, then the counts. Without `--apply` nothing is deleted. See [Pruning detached rows](/concepts/catalog#pruning-detached-rows) for the rule.
+
+| Flag | Description |
+| --- | --- |
+| `--apply` | Delete the rows decided `prune`. |
+| `--idle <span>` | How long a model or host binding must have served no request, as a Go duration (`720h`) or a day count (`30d`). Default: the server's `RELAY_CATALOG_PRUNE_IDLE`. |
+| `--url`, `--token` | See [Configuration](#configuration). |
+
+With `--apply`, a `RELAY_ADMIN_TOKEN` set by the `RELAY_ENV_FILE` file is refused without an explicit `--url`, as for `relay apply`. Exits `0` on success, `2` when the server refused the request (`503` while another pod is seeding the catalog) or could not be reached, and `1` on a usage error.
 
 ## relay keygen
 

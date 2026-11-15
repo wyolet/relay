@@ -76,8 +76,17 @@ func TestProbeOrgFailures(t *testing.T) {
 	status, withHeader = http.StatusUnauthorized, true
 	_, err := s.ProbeOrg(ctx, up.URL, "sk", false)
 	var se *ProbeStatusError
-	if !errors.As(err, &se) || se.Status != http.StatusUnauthorized {
+	if !errors.As(err, &se) || se.Status != http.StatusUnauthorized || err.Error() != "adapter: the upstream answered the organization probe with 401" {
 		t.Fatalf("401: err = %v, want ProbeStatusError 401", err)
+	}
+
+	// Only 2xx counts: a redirect-class answer naming an org is still a failed probe.
+	status = http.StatusNotModified
+	if _, err := s.ProbeOrg(ctx, up.URL, "sk", false); !errors.As(err, &se) || se.Status != http.StatusNotModified {
+		t.Fatalf("304: err = %v, want ProbeStatusError 304", err)
+	}
+	if _, err := s.ProbeOrg(ctx, "http://127.0.0.1:1", "sk", false); err == nil || errors.As(err, &se) {
+		t.Fatalf("nothing listening: err = %v, want a transport error", err)
 	}
 }
 
