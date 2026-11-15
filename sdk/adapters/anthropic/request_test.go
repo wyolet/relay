@@ -132,6 +132,31 @@ var requestCases = []struct {
 		}),
 	},
 	{
+		// tool_choice has no allowed list: only the allowed tools are sent.
+		name: "allowed tools under a required choice",
+		dir:  serializeOnly,
+		wire: body(`"tools":[{"name":"f","input_schema":{}},{"name":"h","input_schema":{}}],"tool_choice":{"type":"any"},` + hiOnly),
+		req: request(func(r *v1.Request, _ *v1.ModelOpts) {
+			r.Tools = &v1.ToolsConfig{
+				Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}, &v1.FunctionTool{Name: "g"}, &v1.FunctionTool{Name: "h"}},
+				Choice:      &v1.ToolChoice{Mode: "required", Allowed: []string{"h", "f"}},
+			}
+			r.Input = []v1.Item{userText("hi")}
+		}),
+	},
+	{
+		name: "allowed tools under an auto choice",
+		dir:  serializeOnly,
+		wire: body(`"tools":[{"name":"g","input_schema":{}}],"tool_choice":{"type":"auto"},` + hiOnly),
+		req: request(func(r *v1.Request, _ *v1.ModelOpts) {
+			r.Tools = &v1.ToolsConfig{
+				Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}, &v1.FunctionTool{Name: "g"}},
+				Choice:      &v1.ToolChoice{Mode: "auto", Allowed: []string{"g"}},
+			}
+			r.Input = []v1.Item{userText("hi")}
+		}),
+	},
+	{
 		name: "parallel off without a choice rides an auto choice",
 		dir:  serializeOnly,
 		wire: body(`"tools":[{"name":"g","input_schema":{}}],"tool_choice":{"type":"auto","disable_parallel_tool_use":true},` + hiOnly),

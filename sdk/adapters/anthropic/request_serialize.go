@@ -44,10 +44,14 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 
 	// Tools are task-level (req.Tools), shared across models — not per-model.
 	if tc := req.Tools; tc != nil {
+		allowed := allowedToolNames(tc.Choice)
 		for _, tool := range tc.Definitions {
 			ft, ok := tool.(*v1.FunctionTool)
 			if !ok {
 				return nil, fmt.Errorf("anthropic serialize_request: unsupported tool type %T", tool)
+			}
+			if allowed != nil && !allowed[ft.Name] {
+				continue
 			}
 			schema := ft.Parameters
 			if schema == nil {
@@ -209,6 +213,18 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	trimMessageBreakpoints(out.Messages, fixedBreakpoints)
 
 	return json.Marshal(out)
+}
+
+// allowedToolNames returns the set a choice restricts the model to, or nil when every tool is callable. tool_choice has no allowed list here, so the request carries only these tools; a conversation that changes the list between turns therefore changes `tools`, which invalidates earlier thinking blocks on models that check their prefix.
+func allowedToolNames(tc *v1.ToolChoice) map[string]bool {
+	if tc == nil || len(tc.Allowed) == 0 || (tc.Mode != "auto" && tc.Mode != "required") {
+		return nil
+	}
+	names := make(map[string]bool, len(tc.Allowed))
+	for _, n := range tc.Allowed {
+		names[n] = true
+	}
+	return names
 }
 
 // canonicalToolChoiceToAnthropic converts canonical ToolChoice → Anthropic tool_choice map.
