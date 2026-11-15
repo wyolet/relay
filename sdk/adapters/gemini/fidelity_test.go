@@ -31,6 +31,7 @@ func TestSerializeRequest_CanonicalFieldFidelity(t *testing.T) {
 			"ModelConfig.Output.Verbosity":          "no verbosity control",
 			"Tools.Definitions.Strict":              "function declarations take no strict flag",
 			"Tools.Definitions.ProviderData":        "another vendor's tool definition",
+			"Tools.Choice.Allowed":                  "moot: the fixture's choice forces one tool",
 			"Tools.Parallel":                        "no parallel function-call switch",
 			"CacheConfig.Instructions":              "implicit caching, no breakpoints",
 			"CacheConfig.Tools":                     "implicit caching, no breakpoints",

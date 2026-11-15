@@ -159,16 +159,40 @@ func unmarshalTool(data []byte) (Tool, error) {
 	}
 }
 
-// ToolChoice is polymorphic: a string shorthand ("auto", "required", "none")
-// or a {type:"function", name:"..."} object.
+// ToolChoice is polymorphic: a string shorthand ("auto", "required", "none"),
+// a {type:"function", name:"..."} object, or, when Allowed is set, an
+// {type:"allowed_tools", mode:"auto"|"required", tools:[{type:"function", name:"..."}]} object.
 type ToolChoice struct {
 	Mode         string // "auto" | "required" | "none" | "function"
 	FunctionName string // only when Mode == "function"
+	// Allowed names the function tools the model may call, out of Definitions. It applies with Mode "auto" or "required" and is ignored with the others; empty allows every defined tool.
+	Allowed []string
+}
+
+// allowedToolsChoice is the wire form of a ToolChoice with Allowed set.
+type allowedToolsChoice struct {
+	Type  string        `json:"type"`
+	Mode  string        `json:"mode"`
+	Tools []allowedTool `json:"tools"`
+}
+
+type allowedTool struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
 }
 
 func (tc ToolChoice) MarshalJSON() ([]byte, error) {
 	switch tc.Mode {
-	case "auto", "required", "none":
+	case "auto", "required":
+		if len(tc.Allowed) == 0 {
+			return json.Marshal(tc.Mode)
+		}
+		w := allowedToolsChoice{Type: "allowed_tools", Mode: tc.Mode, Tools: make([]allowedTool, len(tc.Allowed))}
+		for i, name := range tc.Allowed {
+			w.Tools[i] = allowedTool{Type: "function", Name: name}
+		}
+		return json.Marshal(w)
+	case "none":
 		return json.Marshal(tc.Mode)
 	case "function":
 		return json.Marshal(struct {
@@ -186,17 +210,44 @@ func (tc *ToolChoice) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(data, &s); err != nil {
 			return fmt.Errorf("tool_choice string: %w", err)
 		}
-		tc.Mode = s
+		tc.Mode, tc.Allowed = s, nil
 		return nil
 	}
 	var obj struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Type  string        `json:"type"`
+		Name  string        `json:"name"`
+		Mode  string        `json:"mode"`
+		Tools []allowedTool `json:"tools"`
 	}
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return fmt.Errorf("tool_choice object: %w", err)
 	}
+	if obj.Type == "allowed_tools" {
+		return tc.setAllowed(obj.Mode, obj.Tools)
+	}
 	tc.Mode = obj.Type
 	tc.FunctionName = obj.Name
+	tc.Allowed = nil
+	return nil
+}
+
+// setAllowed fills tc from an allowed_tools choice. Only function tools are
+// expressible; an empty list is refused because "allow nothing" would read
+// back as "allow everything".
+func (tc *ToolChoice) setAllowed(mode string, tools []allowedTool) error {
+	if mode != "auto" && mode != "required" {
+		return fmt.Errorf("tool_choice allowed_tools: mode %q, want auto or required", mode)
+	}
+	if len(tools) == 0 {
+		return fmt.Errorf("tool_choice allowed_tools: tools is empty")
+	}
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		if t.Type != "function" || t.Name == "" {
+			return fmt.Errorf("tool_choice allowed_tools: tools[%d]: want a named function tool, got type %q", i, t.Type)
+		}
+		names[i] = t.Name
+	}
+	tc.Mode, tc.FunctionName, tc.Allowed = mode, "", names
 	return nil
 }
