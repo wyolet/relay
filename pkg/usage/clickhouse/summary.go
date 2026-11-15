@@ -23,7 +23,7 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 	}
 
 	grouped := usage.Grouped(groupBy)
-	selGroup, groupClause := "", ungroupedHaving
+	selGroup, groupClause, orderClause := "", ungroupedHaving, "ORDER BY requests DESC"
 	var preArgs []any
 	if grouped {
 		grpExpr := groupBy // column name matches the GroupBy value in this schema
@@ -34,6 +34,7 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 			preArgs = []any{key}
 		}
 		selGroup, groupClause = grpExpr+" AS grp,", "GROUP BY grp"
+		orderClause += ", grp"
 	}
 	labelExpr, _, labeled := latestLabelSQL(groupBy)
 	if labeled {
@@ -62,8 +63,8 @@ SELECT
     max(ts)                             AS last_seen%s
 FROM %s%s
 %s
-ORDER BY requests DESC`,
-		selGroup, selDistinct, chTable, where, groupClause)
+%s`,
+		selGroup, selDistinct, chTable, where, groupClause, orderClause)
 
 	rows, err := s.conn.Query(ctx, sql, args...)
 	if err != nil {

@@ -123,7 +123,7 @@ func TestModelFilter(t *testing.T) {
 	small := &model.Model{Meta: ownedRow("small", meta.OwnerProvider, "prov1"), Spec: model.Spec{Enabled: &off, Family: "gpt", ContextWindowTotal: 8000,
 		DeprecationDate: "2026-01-15", Capabilities: model.Capabilities{Vision: true, Chat: true}, Modalities: model.Modalities{Input: []string{"text"}}}}
 	claude := &model.Model{Meta: ownedRow("claude", meta.OwnerProvider, "prov2"), Spec: model.Spec{Family: "claude", ProductLine: "opus", ContextWindowTotal: 200000,
-		MaxOutputTokens: 64000, Tags: []string{"vision", "tools"}, ReleaseDate: "2026-02-01T00:00:00Z"}}
+		MaxOutputTokens: 64000, Tags: []string{"vision", "tools"}, ReleaseDate: "2026-02-01T00:00:00Z", Deprecation: &model.Deprecation{Status: model.DeprecationActive}}}
 	haiku := &model.Model{Meta: ownedRow("haiku", meta.OwnerProvider, "prov2"), Spec: model.Spec{Family: "claude", ProductLine: "haiku", ReleaseDate: "soon"}}
 	haiku.Meta.CreatedAt = time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	checkFilter(t, modelFilter, []*model.Model{big, small, claude, haiku},

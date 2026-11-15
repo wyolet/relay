@@ -2,7 +2,6 @@ package ratelimit
 
 import (
 	"errors"
-	"math"
 	"time"
 )
 
@@ -104,20 +103,13 @@ func CheckPlain(r Rule, cur, prev int64, now time.Time) (time.Duration, bool) {
 			return 0, true
 		}
 		winMs := r.Window.Milliseconds()
-		return time.Duration(winMs-(nowMs-(nowMs/winMs)*winMs)) * time.Millisecond, false
+		return time.Duration(slidingRetryMs(r.Amount, cur, prev, 0, nowMs-(nowMs/winMs)*winMs, winMs)) * time.Millisecond, false
 	case PlainSlidingWindow:
 		if PlainCount(r, cur+1, prev, now) <= float64(r.Amount) {
 			return 0, true
 		}
 		winMs := r.Window.Milliseconds()
-		elapsedMs := nowMs - (nowMs/winMs)*winMs
-		retryMs := float64(winMs) - float64(elapsedMs)
-		if prev > 0 {
-			if wait := retryMs - float64(r.Amount-cur-1)*float64(winMs)/float64(prev); wait > 0 && wait < retryMs {
-				retryMs = wait
-			}
-		}
-		return time.Duration(math.Ceil(retryMs)) * time.Millisecond, false
+		return time.Duration(slidingRetryMs(r.Amount, cur, prev, 1, nowMs-(nowMs/winMs)*winMs, winMs)) * time.Millisecond, false
 	}
 	return 0, false
 }

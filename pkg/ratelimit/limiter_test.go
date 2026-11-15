@@ -114,17 +114,17 @@ func TestReserveCommitPerStrategy(t *testing.T) {
 			{at: 60 * s, retry: 30 * s, used: 1},
 		}},
 		{"sliding window weighs the previous bucket by what is left of it", rule("requests", StrategySlidingWindow, 10, time.Minute), []step{
-			{at: 500 * ms, grant: 10, retry: 59*s + 500*ms, used: 10},
-			{at: 59*s + 999*ms, retry: ms, used: 10},
+			{at: 500 * ms, grant: 10, retry: 65*s + 500*ms, used: 10}, // 1 + 10*(1-f) <= 10 at f = 0.1 of the next window
+			{at: 59*s + 999*ms, retry: 6*s + ms, used: 10},
 			{at: 90 * s, used: 5},
 			{at: 90 * s, grant: 5, used: 10},
 			{at: 150 * s, used: 3}, // half of the 5 counted in the minute before, rounded up
-			{at: 180 * s, grant: 10, retry: 60 * s, used: 10},
+			{at: 180 * s, grant: 10, retry: 66 * s, used: 10},
 		}},
 		{"sliding window refunds a cancelled reserve", rule("requests", StrategySlidingWindow, 2, time.Minute), []step{
-			{at: 10 * s, hold: 2, retry: 50 * s, used: 2},
+			{at: 10 * s, hold: 2, retry: 80 * s, used: 2},
 			{at: 10 * s, settle: 1, cancel: 1, used: 1},
-			{at: 10 * s, grant: 1, retry: 50 * s, used: 2},
+			{at: 10 * s, grant: 1, retry: 80 * s, used: 2},
 		}},
 		{"fixed window resets at the boundary", rule("requests", StrategyFixedWindow, 5, time.Minute), []step{
 			{at: 30 * s, grant: 5, retry: 30 * s, used: 5},
@@ -249,7 +249,7 @@ func TestReserveRefusalWritesNothing(t *testing.T) {
 
 	// The tightest rule refuses the third request; the two granted ones are counted once on every rule.
 	open := []*Reservation{mustReserve(t, l, "scope", counted), mustReserve(t, l, "scope", counted)}
-	if diff := cmp.Diff(&ExceededError{Rule: counted[0], RetryAfter: 30 * time.Second}, mustExceed(t, l, "scope", counted)); diff != "" {
+	if diff := cmp.Diff(&ExceededError{Rule: counted[0], RetryAfter: time.Minute}, mustExceed(t, l, "scope", counted)); diff != "" {
 		t.Fatalf("refusal (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff([]int64{2, 2, 2, 2, 2, 2}, peekOne(t, l, "scope", counted)); diff != "" {
@@ -282,10 +282,10 @@ func TestCommitChargesTokenMetersSeparately(t *testing.T) {
 	if diff := cmp.Diff([]int64{60, 40, 20, 30, 0}, peekOne(t, l, "scope", rules)); diff != "" {
 		t.Fatalf("token counts after a cancelled commit (-want +got):\n%s", diff)
 	}
-	// 100 used of 100 still admits; one more token refuses until the window ends.
+	// 100 used of 100 still admits; one more token refuses until the 101 weigh 100 in the next window.
 	mustCommit(t, l, mustReserve(t, l, "scope", rules[:1]), Observations{Tokens: map[string]int64{"output": 40}})
 	mustCommit(t, l, mustReserve(t, l, "scope", rules[:1]), Observations{Tokens: map[string]int64{"input": 1}})
-	if diff := cmp.Diff(&ExceededError{Rule: rules[0], RetryAfter: 30 * time.Second}, mustExceed(t, l, "scope", rules)); diff != "" {
+	if diff := cmp.Diff(&ExceededError{Rule: rules[0], RetryAfter: 30595 * time.Millisecond}, mustExceed(t, l, "scope", rules)); diff != "" {
 		t.Fatalf("refusal (-want +got):\n%s", diff)
 	}
 }

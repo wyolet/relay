@@ -498,7 +498,7 @@ ON CONFLICT (kind, resource_id) DO UPDATE SET
     patch = EXCLUDED.patch,
     updated_at = NOW();
 
--- name: DeleteOverlay :exec
+-- name: DeleteOverlay :execrows
 DELETE FROM overlays WHERE kind = $1 AND resource_id = $2;
 
 -- name: ListUserIDsIn :many

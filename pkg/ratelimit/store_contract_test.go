@@ -311,6 +311,43 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		}
 	})
 
+	// A bucket full on its own still weighs in as the previous bucket after the window ends, so the retry reaches into the next window.
+	t.Run(name+"/SlidingWindow_RetryAfterFullBucket", func(t *testing.T) {
+		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+		l := factory(t, &now)
+		rules := []Rule{reqRule("Route:sw-full:rl-req", "requests", 4, time.Minute)}
+		for range 4 {
+			mustCommit(t, l, mustReserve(t, l, "sw-full", rules), Observations{})
+		}
+		// One more fits once 1 + 4*(1-f) <= 4 in the next window, at f = 0.25: 45s from now.
+		if got := mustExceed(t, l, "sw-full", rules).RetryAfter; got != 45*time.Second {
+			t.Errorf("RetryAfter = %v, want 45s", got)
+		}
+		now = now.Add(45*time.Second - time.Millisecond)
+		_ = mustExceed(t, l, "sw-full", rules)
+		now = now.Add(time.Millisecond)
+		mustReserve(t, l, "sw-full", rules)
+	})
+
+	t.Run(name+"/TokenMeter_RetryAfterIsEarliestAdmission", func(t *testing.T) {
+		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+		l := factory(t, &now)
+		rules := []Rule{tokRule("Route:tok-full:rl-tok", "tokens", 100, time.Minute)}
+		mustCommit(t, l, mustReserve(t, l, "tok-full", rules), Observations{Tokens: map[string]int64{"input": 200}})
+		// 200 tokens weigh 200*(1-f) in the next window, at most 100 from f = 0.5: 60s from now.
+		if got := mustExceed(t, l, "tok-full", rules).RetryAfter; got != time.Minute {
+			t.Errorf("RetryAfter = %v, want 1m", got)
+		}
+		now = now.Add(30 * time.Second)
+		if got := mustExceed(t, l, "tok-full", rules).RetryAfter; got != 30*time.Second {
+			t.Errorf("RetryAfter at the window start = %v, want 30s", got)
+		}
+		now = now.Add(30*time.Second - time.Millisecond)
+		_ = mustExceed(t, l, "tok-full", rules)
+		now = now.Add(time.Millisecond)
+		mustReserve(t, l, "tok-full", rules)
+	})
+
 	// A refund after the fixed window rolled over leaves the new window's count alone, and a counter already gone is not recreated.
 	t.Run(name+"/FixedWindow_RefundAfterRollover", func(t *testing.T) {
 		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)

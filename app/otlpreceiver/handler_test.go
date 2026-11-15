@@ -1081,8 +1081,9 @@ func TestExportRateLimit(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("third export in the window: status = %d, want 429", rec.Code)
 	}
-	if secs, err := strconv.Atoi(rec.Header().Get("Retry-After")); err != nil || secs < 1 || secs > 60 {
-		t.Errorf("Retry-After = %q, want whole seconds within the window", rec.Header().Get("Retry-After"))
+	// A full bucket still weighs in during the next window, so the retry can pass the window's end but not a second one.
+	if secs, err := strconv.Atoi(rec.Header().Get("Retry-After")); err != nil || secs < 1 || secs > 120 {
+		t.Errorf("Retry-After = %q, want whole seconds within two windows", rec.Header().Get("Retry-After"))
 	}
 	if code, msg := statusOf(t, rec); code != int(otlp.StatusResourceExhausted) || msg != "export rate limit exceeded" {
 		t.Errorf("status = %d %q, want RESOURCE_EXHAUSTED export rate limit exceeded", code, msg)
