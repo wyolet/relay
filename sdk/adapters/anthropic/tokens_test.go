@@ -33,7 +33,9 @@ func TestExtractTokens(t *testing.T) {
 			`{"id":"msg_1","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":25,"cache_read_input_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":20},"server_tool_use":{"input_tokens":3,"output_tokens":2}}}`,
 			usage.Tokens{"input": 100, "output": 50, "cache_creation": 25, "cache_creation_1h": 20, "cache_read": 10, "server_tool_use_input": 3, "server_tool_use_output": 2},
 		},
-		{"zero counters are left out", ` {"usage":{"input_tokens":7,"output_tokens":0}}`, usage.Tokens{"input": 7}},
+		{"zero counters are left out", ` {"usage":{"input_tokens":7,"output_tokens":0,"server_tool_use":{"input_tokens":0,"output_tokens":0}}}`, usage.Tokens{"input": 7}},
+		{"cache write alone", `{"usage":{"cache_creation_input_tokens":7}}`, usage.Tokens{"cache_creation": 7}},
+		{"cache read alone", `{"usage":{"cache_read_input_tokens":7}}`, usage.Tokens{"cache_read": 7}},
 		{
 			"message_start object",
 			`{"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1,"cache_creation_input_tokens":5,"cache_read_input_tokens":9,"cache_creation":{"ephemeral_1h_input_tokens":4}}}}`,
@@ -45,6 +47,11 @@ func TestExtractTokens(t *testing.T) {
 			"data split over two lines",
 			"event: message_start\ndata: {\"type\":\"message_start\",\ndata: \"message\":{\"usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":7}}}\n\nevent: message_delta\ndata: {\"usage\":{\"output_tokens\":5}}\n\n",
 			usage.Tokens{"input": 3, "cache_creation": 7, "output": 5},
+		},
+		{
+			"frames without an object are skipped and the larger count stays",
+			"data:\n\ndata: [DONE]\n\nevent: message_delta\ndata: {\"usage\":{\"output_tokens\":5}}\n\nevent: message_delta\ndata: {\"usage\":{\"output_tokens\":2}}\n\n",
+			usage.Tokens{"output": 5},
 		},
 		{"stream without usage", "event: ping\ndata: {\"type\":\"ping\"}\n\ndata: [DONE]\n\n", nil},
 		{"object without usage", `{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`, nil},

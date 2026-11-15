@@ -15,6 +15,7 @@ var summaryDecodeSeeds = []string{
 	`{"content":[{"type":"text","text":5}],"usage":{"input_tokens":1e3}}`,
 	`{"usage":{"input_tokens":5},"usage":null,"stop_reason":"refusal"}`,
 	"{\"stop_reason\":\"end\\u005fturn\",\"usage\":{\"service_tier\":\"\xff\"}}",
+	`{"usage":{"cache_creation_input_tokens":9,"cache_creation":{"ephemeral_1h_input_tokens":4,"ephemeral_5m_input_tokens":5}}}`,
 	`[]`, `null`, `{}`, `{"content":[`,
 }
 
