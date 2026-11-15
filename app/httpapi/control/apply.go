@@ -68,7 +68,8 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		Path:        "/apply",
 		Summary:     "Apply a manifest bundle",
 		Description: "Diffs the submitted documents against the stored rows and writes the difference. " +
-			"Every row is authorized before anything is written; a denied row fails the whole apply.",
+			"Every row is authorized before anything is written; a denied row fails the whole apply. " +
+			"An update of a policy, rate limit or budget is refused as its control API update would be: 403 policy_in_use, naming the document and the accounts, when it reaches an account whose policy the caller may not set.",
 		Tags:        []string{"system"},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 403, 500},
@@ -113,6 +114,9 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 				return nil, &applyFailure{status: status, Message: msg}
 			}
 			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		if err := refuseAppliedEdits(ctx, d, plan); err != nil {
+			return nil, err
 		}
 
 		out := &applyOutput{}

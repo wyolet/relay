@@ -61,7 +61,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		func(b *budget.Budget) error { b.Default(); return b.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.Budget, bumeta),
-		guardBudgetMove(d),
+		guardBudgetUpdate(d),
 		nil,
 		nil,
 		d.refuseInUse,

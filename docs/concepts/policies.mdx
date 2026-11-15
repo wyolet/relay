@@ -143,6 +143,20 @@ A binding may use a policy owned by its own scope, an enclosing scope (a project
 
 Saving a binding that names an account another binding already holds answers `409` with the code `duplicate_binding` and names the other binding when you may see it. Remove the account from one binding first, or move it in one step with `PUT /api/accounts/{ref}/policy`, which gives it a binding of its own (see [Control API](/reference/control-api#accounts-and-pools)). If two bindings do reach one account, the rung refuses every request with `duplicate_binding` until one is removed.
 
+## Editing a policy in use
+
+Every account bound to a policy follows the one row, so an edit reaches all of them. An update of a policy goes through only when you may set the policy of each account it is applied to: every enabled binding using it must pass the checks `PUT /api/accounts/{ref}/policy` runs on the binding that holds an account (update permission on the binding, its governance and its reference rules). An update of a rate limit or budget is checked the same way against every policy linking it. Otherwise the update answers `403` with the code `policy_in_use`, names the accounts in the message and lists them in `blockedBy`:
+
+```json
+{"error": {"type": "invalid_request_error", "code": "policy_in_use",
+  "message": "you can't change this policy: it is applied to team \"Research\", whose policy you may not set; duplicate it and edit the copy"},
+ "blockedBy": {"accounts": [{"id": "…", "name": "team-research", "displayName": "Research", "kind": "team"}], "hidden": 0}}
+```
+
+Accounts you may not see are counted in `hidden`, not named. An admin is never refused, so tier presets and system policies still change for every account bound to them. A policy bound nowhere, or only by disabled bindings, is not checked. `POST /api/apply` refuses the same updates and names the document. Deletes keep their own rules; see [Deleting what a policy links](#deleting-what-a-policy-links).
+
+To change the limits of only the accounts you manage, copy the policy with `POST /api/policies/{ref}/duplicate`, bind the copy to those accounts and edit it. A read of one policy carries `editable` and, while other accounts block an update, `editBlockedBy`, in the same shape as `blockedBy`.
+
 ## Tier presets
 
 The catalog ships host-owned policies that describe a provider's account tiers, such as `openai-build` or `anthropic-scale`, with the provider's published rate limits scoped to the models they apply to. Bind one to a [provider account](/concepts/key-pooling#accounts) and its limits count across every host key of that account.

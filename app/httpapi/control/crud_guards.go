@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -112,20 +113,29 @@ func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 	}
 }
 
-// policyBindingChecks are the checks the policy-bindings routes run, shared with PUT /accounts/{ref}/policy.
+// policyBindingChecks are the checks the policy-bindings routes run, shared with PUT /accounts/{ref}/policy and the policy edit guard.
 func policyBindingChecks(d Deps) kindChecks[policybinding.PolicyBinding] {
+	return policyBindingChecksWith(d, refs(d))
+}
+
+// policyBindingChecksWith is policyBindingChecks reading the rows its guard checks through c.
+func policyBindingChecksWith(d Deps, c refcheck.Checker) kindChecks[policybinding.PolicyBinding] {
 	return kindChecks[policybinding.PolicyBinding]{
 		plural: "policy-bindings", singular: "policy-binding", authz: d.Authz, gov: d.Catalog,
 		validate: func(b *policybinding.PolicyBinding) error { return b.Validate() },
-		guard:    guardPolicyBinding(d),
+		guard:    guardPolicyBindingWith(c),
 	}
 }
 
 func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
+	return guardPolicyBindingWith(refs(d))
+}
+
+func guardPolicyBindingWith(c refcheck.Checker) mutationGuard[policybinding.PolicyBinding] {
 	return func(ctx context.Context, action string, _, incoming *policybinding.PolicyBinding) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refErr(refs(d).PolicyBinding(ctx, incoming))
+		return refErr(c.PolicyBinding(ctx, incoming))
 	}
 }

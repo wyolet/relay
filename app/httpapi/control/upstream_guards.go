@@ -137,11 +137,18 @@ func guardPool(d Deps) mutationGuard[pool.Pool] {
 	}
 }
 
-// guardBudgetMove refuses an owner move away from the policies counting
-// against the budget.
-func guardBudgetMove(d Deps) mutationGuard[budget.Budget] {
+// guardBudgetUpdate refuses an update that reaches an account whose policy the
+// caller may not set, or an owner move away from the policies counting against
+// the budget.
+func guardBudgetUpdate(d Deps) mutationGuard[budget.Budget] {
 	return func(ctx context.Context, action string, existing, incoming *budget.Budget) error {
-		if action != "update" || existing.Meta.Owner == incoming.Meta.Owner {
+		if action != "update" {
+			return nil
+		}
+		if err := refuseLinkedEdit(ctx, d, "budget", existing.Meta.ID); err != nil {
+			return err
+		}
+		if existing.Meta.Owner == incoming.Meta.Owner {
 			return nil
 		}
 		c := refs(d)
