@@ -35,6 +35,11 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
+	t.Run("ok organization-owned", func(t *testing.T) {
+		if err := fix("org-rpm", meta.OwnerOrganization).Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
 	t.Run("ok provider-owned", func(t *testing.T) {
 		if err := fix("upstream-tier-1", meta.OwnerProvider).Validate(); err != nil {
 			t.Fatalf("unexpected: %v", err)
@@ -127,6 +132,11 @@ func TestValidate(t *testing.T) {
 			name: "team owner missing id",
 			rl:   fix("x", meta.OwnerTeam),
 			want: "owner.id is required (team id)",
+		},
+		{
+			name: "organization owner with an id",
+			rl:   func() *RateLimit { r := fix("x", meta.OwnerOrganization); r.Meta.Owner.ID = "o-1"; return r }(),
+			want: "an organization owner carries no id",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

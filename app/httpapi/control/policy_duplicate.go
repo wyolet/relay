@@ -76,6 +76,9 @@ func (d Deps) duplicatePolicy(ctx context.Context, ref string, in duplicatePolic
 	if m.Owner.Kind == "" {
 		m.Owner.Kind = meta.OwnerUser
 	}
+	if err := refuseOrganizationOwner(ctx, d.Authz, "policy", m.Owner); err != nil {
+		return nil, err
+	}
 	if err := stampOwnerID(ctx, &m.Owner); err != nil {
 		return nil, huma.Error400BadRequest(err.Error())
 	}

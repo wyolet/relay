@@ -60,6 +60,7 @@ var tenantKinds = map[string]bool{
 // prunable reports whether a row's provenance allows apply to delete it.
 // System, provider, and host rows belong to the catalog and the relay
 // itself; a manifest that omits them is not asking for their removal.
+// Organization rows are operator-made, like tenant rows.
 // Built-in Roles are relay's own rows and stay out regardless of kind.
 func prunable(kind, name string, o meta.Owner) bool {
 	if kind == "Role" && role.IsBuiltin(name) {
@@ -69,7 +70,7 @@ func prunable(kind, name string, o meta.Owner) bool {
 		return true
 	}
 	switch o.Kind {
-	case meta.OwnerUser, meta.OwnerTeam, meta.OwnerProject:
+	case meta.OwnerUser, meta.OwnerTeam, meta.OwnerProject, meta.OwnerOrganization:
 		return true
 	default:
 		return false

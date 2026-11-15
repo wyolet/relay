@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/wyolet/relay/app/actor"
@@ -21,7 +22,7 @@ type evaluation struct {
 	principal principal.Principal
 	owner     coreauthz.Owner
 	metaOwner meta.Owner
-	rules     [6]rbac.ProductRule
+	rules     [7]rbac.ProductRule
 	chain     []rbac.Scope
 	bindings  []rbac.Binding
 	roleRules []rbac.Rule
@@ -29,7 +30,8 @@ type evaluation struct {
 
 var evaluations = sync.Pool{New: func() any {
 	ev := &evaluation{}
-	ev.rules = [6]rbac.ProductRule{
+	ev.rules = [7]rbac.ProductRule{
+		organizationRowRule{ev},
 		personalRowRule{},
 		catalogReadRule{},
 		sharedPolicyReadRule{},
@@ -113,6 +115,29 @@ func (ev *evaluation) Role(_ context.Context, id string) (rbac.Role, bool, error
 	}
 	ev.roleRules = rules
 	return rbac.Role{ID: r.Meta.ID, Rules: rules}, true, nil
+}
+
+// globalGrant reports whether a binding of p's at the global scope covers (kind, verb).
+func (ev *evaluation) globalGrant(p *principal.Principal, kind, verb string) bool {
+	snap := ev.snapshot()
+	if snap == nil {
+		return false
+	}
+	subjects := p.Subjects
+	if !slices.Contains(subjects, rbac.SubjectAuthenticated) {
+		subjects = append(slices.Clip(subjects), rbac.SubjectAuthenticated)
+	}
+	for _, s := range subjects {
+		for _, b := range snap.RoleBindingsForSubject(s) {
+			if b.Spec.Scope != (meta.Owner{Kind: meta.OwnerSystem}) {
+				continue
+			}
+			if r, ok := snap.Role(b.Spec.RoleID); ok && r.Allows(kind, verb) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ChainFor implements rbac.ScopeResolver over Snapshot.ScopeChainFor.

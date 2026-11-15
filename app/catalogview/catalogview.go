@@ -144,8 +144,8 @@ type DeprecationView struct {
 	Replacement string `json:"replacement,omitempty" doc:"Id of the replacement model."`
 }
 type OwnerRef struct {
-	Kind string `json:"kind"           doc:"Owner kind: system, host, user, team or project."` // "user" | "host" | "system" | …
-	ID   string `json:"id,omitempty"   doc:"Owner id; for a host's tier preset, the host id."` // for host-tier policies, the host id
+	Kind string `json:"kind"           doc:"Owner kind: system, organization, host, user, team or project."` // "user" | "host" | "system" | …
+	ID   string `json:"id,omitempty"   doc:"Owner id; for a host's tier preset, the host id."`               // for host-tier policies, the host id
 	Name string `json:"name,omitempty" doc:"Owner slug, when it has one."`
 }
 type BindingView struct {

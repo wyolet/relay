@@ -52,10 +52,11 @@ func governanceSection(kind string) string { return "governance:" + kind }
 // Owner-kind values Governs reasons about. Mirrors app/meta.OwnerKind; kept
 // as local strings so the settings package stays free of the domain types.
 const (
-	ownerSystem  = "system"
-	ownerUser    = "user"
-	ownerTeam    = "team"
-	ownerProject = "project"
+	ownerSystem       = "system"
+	ownerOrganization = "organization"
+	ownerUser         = "user"
+	ownerTeam         = "team"
+	ownerProject      = "project"
 )
 
 // tenancyKinds are the kinds whose rows are system-owned by construction
@@ -88,6 +89,7 @@ func (e *MutationError) Error() string { return e.Reason }
 //   - system  → edited or deleted only by an admin (the admin role or the
 //     admin token). A delete is still refused while anything references the
 //     row; that check lives with the references, not here.
+//   - organization → edited or deleted only by an admin, whatever the kind.
 //   - user / team / project → always allowed (the row belongs to a tenant,
 //     not to the catalog). RBAC will later add an owner match here.
 //   - else (provider/host-owned, i.e. catalog-managed) → consult the kind's
@@ -107,6 +109,12 @@ func Governs(r Reader, op Op, kind, ownerKind string, admin bool) error {
 		}
 		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind,
 			Reason: fmt.Sprintf("%s is system-owned: only an admin may %s it", kind, op)}
+	case ownerOrganization:
+		if admin {
+			return nil
+		}
+		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind,
+			Reason: fmt.Sprintf("%s is owned by the organization: only an admin may %s it", kind, op)}
 	case ownerUser, ownerTeam, ownerProject:
 		return nil
 	}

@@ -181,13 +181,13 @@ func (c Checker) linkable(ctx context.Context, from, kind string, m meta.Metadat
 		kindWord(kind), homeText(refOwner))
 }
 
-// reaches reports whether a row owned by refOwner may draw on a row owned by owner: a project on its own, its team's and the system's rows, a team on its own and the system's, a user on any row but another user's, anyone else on any row (the caller's visibility and personalToProject narrow those). A user's row may be bound in that user's accounts only, which another user's row serves in no plan (containsScope, the plan's own rule).
+// reaches reports whether a row owned by refOwner may draw on a row owned by owner: a project on its own, its team's and the deployment-wide rows, a team on its own and the deployment-wide ones, a user on any row but another user's, anyone else on any row (the caller's visibility and personalToProject narrow those). A user's row may be bound in that user's accounts only, which another user's row serves in no plan (containsScope, the plan's own rule).
 func (c Checker) reaches(ctx context.Context, owner, refOwner meta.Owner) bool {
 	switch {
 	case owner.Kind == meta.OwnerTeam && refOwner.Kind == meta.OwnerProject:
 		return c.projectInTeam(ctx, refOwner.ID, owner.ID)
 	case refOwner.Kind == meta.OwnerTeam:
-		return owner.Kind == meta.OwnerSystem || owner == refOwner
+		return owner.DeploymentWide() || owner == refOwner
 	case refOwner.Kind == meta.OwnerUser && owner.Kind == meta.OwnerUser:
 		return c.containsScope(ctx, owner, refOwner)
 	}

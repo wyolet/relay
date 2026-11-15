@@ -70,7 +70,7 @@ A signed-in user who creates a team or a project gets a role binding of the scop
 
 #### Listing what a scope may use
 
-`usable_by` narrows the lists of pools, policies, rate limits, budgets, accounts and host keys to the rows a row owned by one scope may link, by the same rule a save of that row applies. The value is `system`, `user:<id>`, `team:<id>` or `project:<id>`; it composes with the other filters, and a malformed value answers `400`. The caller must be allowed to create or update the linking row (a policy, a pool or a policy binding) in that scope, else `403`; a team or project that does not exist answers `400`, one the caller may not see `404`.
+`usable_by` narrows the lists of pools, policies, rate limits, budgets, accounts and host keys to the rows a row owned by one scope may link, by the same rule a save of that row applies. The value is `system`, `organization`, `user:<id>`, `team:<id>` or `project:<id>`; `organization` applies only where the linking row is a policy or a pool, else `400`. It composes with the other filters, and a malformed value answers `400`. The caller must be allowed to create or update the linking row (a policy, a pool or a policy binding) in that scope, else `403`; a team or project that does not exist answers `400`, one the caller may not see `404`.
 
 | List | What `usable_by=<scope>` keeps |
 | --- | --- |

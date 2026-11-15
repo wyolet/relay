@@ -147,9 +147,12 @@ func NewID() string { return ids.New() }
 // Owner describes who created / manages a row. Kind=provider requires ID;
 // the other kinds leave ID empty.
 type Owner struct {
-	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,provider,host,user,team,project" doc:"Owning scope: system (the deployment), provider or host (catalog rows), user, team or project."`
-	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"   doc:"Id of the owning provider, host, user, team or project; empty for system. Defaults to the caller for user-owned rows."`
+	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,organization,provider,host,user,team,project" doc:"Owning scope: system (the catalog and the relay's own rows), organization (rows the deployment's admins made, visible to admins only), provider or host (catalog rows), user, team or project."`
+	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"   doc:"Id of the owning provider, host, user, team or project; empty for system and organization. Defaults to the caller for user-owned rows."`
 }
+
+// DeploymentWide reports whether the owner is the deployment as a whole, system or organization, rather than a tenant or a catalog tier.
+func (o Owner) DeploymentWide() bool { return o.Kind == OwnerSystem || o.Kind == OwnerOrganization }
 
 // Tenant reports whether the owner is a user, team or project rather than
 // the deployment itself or its catalog.
@@ -161,10 +164,10 @@ func (o Owner) Tenant() bool {
 	return false
 }
 
-// Holds reports whether a row owned by o may serve scope inner: the system's rows serve every scope, a scope's its own, a team's its projects. teamOf answers a project's team; ok is false when the project is unknown.
+// Holds reports whether a row owned by o may serve scope inner: the system's and the organization's rows serve every scope, a scope's its own, a team's its projects. teamOf answers a project's team; ok is false when the project is unknown.
 func (o Owner) Holds(inner Owner, teamOf func(projectID string) (teamID string, ok bool)) bool {
 	switch {
-	case o.Kind == OwnerSystem, o == inner:
+	case o.DeploymentWide(), o == inner:
 		return true
 	case o.Kind == OwnerTeam && inner.Kind == OwnerProject:
 		t, ok := teamOf(inner.ID)
@@ -185,10 +188,12 @@ type Icon struct {
 type OwnerKind string
 
 const (
-	OwnerSystem   OwnerKind = "system"
-	OwnerProvider OwnerKind = "provider"
-	OwnerHost     OwnerKind = "host"
-	OwnerUser     OwnerKind = "user"
-	OwnerTeam     OwnerKind = "team"
-	OwnerProject  OwnerKind = "project"
+	OwnerSystem OwnerKind = "system"
+	// OwnerOrganization owns rows the deployment's admins made for the whole deployment. Unlike system rows they are never catalog data and only admins see them. ID stays empty until a deployment holds more than one organization.
+	OwnerOrganization OwnerKind = "organization"
+	OwnerProvider     OwnerKind = "provider"
+	OwnerHost         OwnerKind = "host"
+	OwnerUser         OwnerKind = "user"
+	OwnerTeam         OwnerKind = "team"
+	OwnerProject      OwnerKind = "project"
 )

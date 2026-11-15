@@ -161,7 +161,7 @@ func sharedOwnerReaches(owner, refOwner meta.Owner) bool {
 	if refOwner.Kind != meta.OwnerProject {
 		return true
 	}
-	return owner.Kind == meta.OwnerSystem || (owner.Kind == meta.OwnerProject && owner.ID == refOwner.ID)
+	return owner.DeploymentWide() || (owner.Kind == meta.OwnerProject && owner.ID == refOwner.ID)
 }
 
 // catalogOwned reports a row the catalog tiers own. Its rate limits and

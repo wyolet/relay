@@ -23,6 +23,7 @@ import (
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/filter"
 	"github.com/wyolet/relay/pkg/ids"
@@ -93,6 +94,17 @@ func refuseNonSystemScopeOwner(singular string, o meta.Owner) error {
 		return huma.Error400BadRequest(singular + " owner.kind must be system; omit metadata.owner")
 	}
 	return nil
+}
+
+// refuseOrganizationOwner answers 400 for an organization owner on a kind the organization owns no rows of, and 403 for a caller who is no admin: organization rows are the deployment admins' own.
+func refuseOrganizationOwner(ctx context.Context, a authz.Authorizer, singular string, o meta.Owner) error {
+	if o.Kind != meta.OwnerOrganization {
+		return nil
+	}
+	if !authz.OrganizationKind(singular) {
+		return huma.Error400BadRequest(singular + " cannot be owned by the organization; only policies, rate limits, budgets and pools can")
+	}
+	return refErr(refcheck.RequireAdmin(ctx, a, "an organization-owned "+singular))
 }
 
 // registerKind installs the five CRUD operations for kind T on api and returns how they find a row. The metaOf, validate, defaultOwnerKind, and resolveSlug closures supply the kind-specific glue.
@@ -347,6 +359,9 @@ func registerKind[T any](
 			if err := refuseNonSystemScopeOwner(singular, m.Owner); err != nil {
 				return nil, err
 			}
+			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
+				return nil, err
+			}
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
 			}
@@ -433,6 +448,9 @@ func registerKind[T any](
 				return nil, huma.Error400BadRequest(err.Error())
 			}
 			if err := refuseNonSystemScopeOwner(singular, m.Owner); err != nil {
+				return nil, err
+			}
+			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
 				return nil, err
 			}
 		}

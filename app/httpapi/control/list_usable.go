@@ -65,9 +65,9 @@ func (u *usableFilter[T]) params(plural string) []*huma.Param {
 	by := &huma.Param{
 		Name: usableByParam,
 		In:   "query",
-		Description: fmt.Sprintf("Only the %s %s owned by this scope may link, by the rule a save of that row applies: system, user:<id>, team:<id> or project:<id>.",
+		Description: fmt.Sprintf("Only the %s %s owned by this scope may link, by the rule a save of that row applies: system, organization (admins only), user:<id>, team:<id> or project:<id>.",
 			plural, def.linker),
-		Schema: &huma.Schema{Type: "string", Pattern: `^(system|(user|team|project):[^:]+)$`},
+		Schema: &huma.Schema{Type: "string", Pattern: `^(system|organization|(user|team|project):[^:]+)$`},
 	}
 	if len(u.purposes) == 1 {
 		return []*huma.Param{by}
@@ -78,7 +78,7 @@ func (u *usableFilter[T]) params(plural string) []*huma.Param {
 		names[i] = p.name
 		each = append(each, fmt.Sprintf("%s: what %s owned by the usable_by scope may list", p.name, p.linker))
 	}
-	by.Description = fmt.Sprintf("Only the %s a row owned by this scope may link, by the rule a save of that row applies; usable_for says which row: system, user:<id>, team:<id> or project:<id>.", plural)
+	by.Description = fmt.Sprintf("Only the %s a row owned by this scope may link, by the rule a save of that row applies; usable_for says which row: system, organization (admins only), user:<id>, team:<id> or project:<id>.", plural)
 	return []*huma.Param{by, {
 		Name:        usableForParam,
 		In:          "query",
@@ -94,10 +94,13 @@ type usableQuery[T any] struct {
 	checker refcheck.Checker
 }
 
-// keep returns the items a row owned by q.by may link for q's purpose, or the scope's own refusal (refcheck.Checker.UsableScope) when it does not exist, or 403 when the caller may not write the linking row there. The checker's reads are memoized for this one answer, so checking every row reads each stored row once.
+// keep returns the items a row owned by q.by may link for q's purpose, or the scope's own refusal (refcheck.Checker.UsableScope) when it does not exist or the linking kind cannot live there, or 403 when the caller may not write the linking row there. The checker's reads are memoized for this one answer, so checking every row reads each stored row once.
 func (q *usableQuery[T]) keep(ctx context.Context, items []*T) ([]*T, error) {
 	c := q.checker
 	c.Rows = c.Rows.Memoized()
+	if err := refuseOrganizationOwner(ctx, c.Authz, q.purpose.kind, q.by); err != nil {
+		return nil, err
+	}
 	if err := c.UsableScope(ctx, q.by); err != nil {
 		return nil, refErr(err)
 	}
@@ -157,10 +160,10 @@ func (u *usableFilter[T]) take(q url.Values) (*usableQuery[T], url.Values, error
 	return out, rest, nil
 }
 
-// parseScope reads "system", "user:<id>", "team:<id>" or "project:<id>".
+// parseScope reads "system", "organization", "user:<id>", "team:<id>" or "project:<id>".
 func parseScope(s string) (meta.Owner, error) {
-	if s == string(meta.OwnerSystem) {
-		return meta.Owner{Kind: meta.OwnerSystem}, nil
+	if k := meta.OwnerKind(s); k == meta.OwnerSystem || k == meta.OwnerOrganization {
+		return meta.Owner{Kind: k}, nil
 	}
 	kind, id, _ := strings.Cut(s, ":")
 	switch k := meta.OwnerKind(kind); k {
@@ -170,5 +173,5 @@ func parseScope(s string) (meta.Owner, error) {
 		}
 		return meta.Owner{Kind: k, ID: id}, nil
 	}
-	return meta.Owner{}, fmt.Errorf("%q is not system, user:<id>, team:<id> or project:<id>", s)
+	return meta.Owner{}, fmt.Errorf("%q is not system, organization, user:<id>, team:<id> or project:<id>", s)
 }

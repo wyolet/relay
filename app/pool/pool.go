@@ -44,7 +44,7 @@ func (p *Pool) Default() {
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - an owner of kind system, team, project or user; team and project owners carry an id.
+//   - an owner of kind system, organization, team, project or user; team and project owners carry an id, an organization owner none.
 //   - no key and no account listed twice.
 //
 // Cross-row checks (the host exists; every key and account exists and is at that host) live in app/refcheck.
@@ -54,12 +54,16 @@ func (p *Pool) Validate() error {
 	}
 	switch p.Meta.Owner.Kind {
 	case meta.OwnerSystem, meta.OwnerUser:
+	case meta.OwnerOrganization:
+		if p.Meta.Owner.ID != "" {
+			return fmt.Errorf("pool %q: an organization owner carries no id", p.Meta.Name)
+		}
 	case meta.OwnerTeam, meta.OwnerProject:
 		if p.Meta.Owner.ID == "" {
 			return fmt.Errorf("pool %q: owner.kind %q requires an id", p.Meta.Name, p.Meta.Owner.Kind)
 		}
 	default:
-		return fmt.Errorf("pool %q: owner.kind must be system, team, project or user, got %q", p.Meta.Name, p.Meta.Owner.Kind)
+		return fmt.Errorf("pool %q: owner.kind must be system, organization, team, project or user, got %q", p.Meta.Name, p.Meta.Owner.Kind)
 	}
 	if err := noDuplicates(p.Meta.Name, "accountIds", p.Spec.AccountIDs); err != nil {
 		return err

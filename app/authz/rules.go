@@ -13,11 +13,12 @@ import (
 // Relay's shortcuts ahead of the role bindings, listed here in the order the evaluation runs them. Each also answers ScopeOf with the rows it admits. The admin actor is the engine's Admin flag, checked before all of them.
 
 const (
-	ownerUser     = string(meta.OwnerUser)
-	ownerSystem   = string(meta.OwnerSystem)
-	ownerHost     = string(meta.OwnerHost)
-	ownerProvider = string(meta.OwnerProvider)
-	ownerTeam     = string(meta.OwnerTeam)
+	ownerUser         = string(meta.OwnerUser)
+	ownerSystem       = string(meta.OwnerSystem)
+	ownerOrganization = string(meta.OwnerOrganization)
+	ownerHost         = string(meta.OwnerHost)
+	ownerProvider     = string(meta.OwnerProvider)
+	ownerTeam         = string(meta.OwnerTeam)
 )
 
 func readVerb(verb string) bool { return verb == "get" || verb == "list" }
@@ -27,6 +28,26 @@ func decision(allow bool) rbac.Decision {
 		return rbac.Allow
 	}
 	return rbac.Continue
+}
+
+// organizationRowRule: an organization row is the deployment admins' alone. The admin actor is decided before any rule, so this refuses every caller it sees; without it a global binding would reach the row, whose scope chain is the global one.
+type organizationRowRule struct{ ev *evaluation }
+
+func (organizationRowRule) Name() string { return "organization-row" }
+
+func (organizationRowRule) Decide(_ context.Context, _ *principal.Principal, _, _ string, res coreauthz.Resource) (rbac.Decision, error) {
+	if res.Owner != nil && res.Owner.Kind == ownerOrganization {
+		return rbac.Deny, nil
+	}
+	return rbac.Continue, nil
+}
+
+// Filter admits nothing. A filter cannot take back what a global binding admits, so for a caller holding one on a kind organization rows exist in, ScopeOf cannot answer.
+func (r organizationRowRule) Filter(_ context.Context, p *principal.Principal, kind, verb string) (rbac.Filter, error) {
+	if organizationKinds[kind] && r.ev.globalGrant(p, kind, verb) {
+		return rbac.Filter{}, rbac.ErrUnfilterable
+	}
+	return rbac.Filter{}, nil
 }
 
 // personalRowRule: a personal row's owner holds every verb on it, except on shared catalog kinds, which no user may own.

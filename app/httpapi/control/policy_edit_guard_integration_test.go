@@ -349,3 +349,19 @@ func TestPolicyDuplicate(t *testing.T) {
 		t.Fatalf("%d allowed policies.create events, want 2 (one per copy)", creates)
 	}
 }
+
+// A copy into the organization is an admin's to make: dave's role at the system scope does not reach it.
+func TestPolicyDuplicateIntoOrganization(t *testing.T) {
+	w := newTierWorld(t)
+	org := `{"displayName":"Org tier","owner":{"kind":"organization"}}`
+
+	wantStatus(t, w.send("dave", http.MethodPost, "/policies/tier/duplicate", org), http.StatusForbidden)
+	rec := w.send("root", http.MethodPost, "/policies/tier/duplicate", org)
+	wantStatus(t, rec, http.StatusCreated)
+	var cp policy.Policy
+	must(t, "decode copy", json.Unmarshal(rec.Body.Bytes(), &cp))
+	if cp.Meta.Owner != (meta.Owner{Kind: meta.OwnerOrganization}) || cp.Meta.Name != "org-tier" {
+		t.Fatalf("copy metadata = %+v", cp.Meta)
+	}
+	wantStatus(t, w.send("dave", http.MethodGet, "/policies/"+cp.Meta.ID, ""), http.StatusNotFound)
+}
