@@ -19,6 +19,24 @@ import (
 type Policy struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
+
+	// Derived: filled per caller on control API reads of one policy; never stored or loaded from YAML.
+	Editable      *bool         `json:"editable,omitempty"      yaml:"-" readOnly:"true" doc:"Whether the caller may update this policy: they hold the update permission, and may set the policy of every account it is applied to. Returned on reads of one policy; absent on lists. Ignored on write."`
+	EditBlockedBy *EditBlockers `json:"editBlockedBy,omitempty" yaml:"-" readOnly:"true" doc:"The accounts this policy is applied to whose policy the caller may not set; an update by the caller answers 403 policy_in_use while any remain. Absent when there are none, or when the caller may not update the policy at all. Ignored on write."`
+}
+
+// EditBlockers are accounts a policy is applied to whose policy the caller may not set.
+type EditBlockers struct {
+	Accounts []AccountRef `json:"accounts" doc:"The blocking accounts the caller may see."`
+	Hidden   int          `json:"hidden"   doc:"Blocking accounts the caller may not see: counted, not named."`
+}
+
+// AccountRef names an account.
+type AccountRef struct {
+	ID          string `json:"id"                    doc:"Account id."`
+	Name        string `json:"name"                  doc:"Account slug."`
+	DisplayName string `json:"displayName,omitempty" doc:"Account display name."`
+	Kind        string `json:"kind"                  enum:"team,project,personal,member,service,provider" doc:"What the account is: a team's or a project's own account, a user's personal account, a member account, a service account's account, or a provider account."`
 }
 
 // Spec carries the model grant, the links, and the enabled flag.

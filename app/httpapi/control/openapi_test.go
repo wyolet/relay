@@ -65,6 +65,9 @@ func TestControlOpenAPI(t *testing.T) {
 			"BudgetSpec":          {"amountUsd", "period", "mode"},
 			"Event":               {"lane_account_id", "via_account_id"},
 			"conflictBody":        {"blockers"},
+			"Policy":              {"editable", "editBlockedBy"},
+			"PolicyEditBlockers":  {"accounts", "hidden"},
+			"policyInUseBody":     {"error", "blockedBy"},
 		} {
 			props := schemaProps(t, doc, schema)
 			for _, f := range fields {
@@ -119,6 +122,10 @@ func TestControlOpenAPI(t *testing.T) {
 			{"/accounts/{ref}/shares", "post", "201", "Account"},
 			{"/accounts/{ref}/shares", "get", "200", "AccountShares"},
 			{"/accounts/{ref}/policy", "put", "200", "AccountPolicy"},
+			{"/policies/{ref}/duplicate", "post", "201", "Policy"},
+			{"/policies/by-id/{id}", "put", "403", "policyInUseBody"},
+			{"/rate-limits/by-id/{id}", "put", "403", "policyInUseBody"},
+			{"/budgets/by-id/{id}", "put", "403", "policyInUseBody"},
 		} {
 			if ref := responseRef(operation(t, doc, tc.path, tc.method), tc.code); ref != "#/components/schemas/"+tc.schema {
 				t.Errorf("%s %s %s answers %q, want %s", tc.method, tc.path, tc.code, ref, tc.schema)

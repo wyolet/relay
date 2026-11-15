@@ -249,6 +249,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerLimits(api, d, protect)
 	registerReachable(api, d, protect)
 	registerAccountPolicy(api, d, protect)
+	registerPolicyDuplicate(api, d, protect)
 	registerPlanIssues(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
@@ -275,6 +276,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 		s.Description = "Measurement period, in whole seconds."
 	})
 	documentDomainSchemas(api)
+	describePolicyInUse(api)
 	entityEnvelope(api)
 	describeErrors(api)
 	api.OpenAPI().Tags = controlTags

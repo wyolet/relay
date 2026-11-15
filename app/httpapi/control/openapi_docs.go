@@ -33,7 +33,7 @@ var controlTags = []*huma.Tag{
 	{Name: "keys", Description: "Relay keys: bearer credentials callers send to the inference API. A key acts as its principal (a service account or a user) and runs in one of the principal's accounts, its default lane: the policies bound to that account and to the project and team accounts above it govern it."},
 	{Name: "logs", Description: "Per-request log records with captured bodies."},
 	{Name: "models", Description: "Models in the catalog, with their snapshots, capabilities and aliases."},
-	{Name: "policies", Description: "Policies: reusable rule sets. A policy names the models it allows and links pools, rate limits and budgets, each counted once for the bound account (shared) or once per account under it; a policy binding applies it to accounts. Every account a request climbs (team, project, the lane, and each candidate key's provider account) may have one policy, and each only narrows."},
+	{Name: "policies", Description: "Policies: reusable rule sets. A policy names the models it allows and links pools, rate limits and budgets, each counted once for the bound account (shared) or once per account under it; a policy binding applies it to accounts. Every account a request climbs (team, project, the lane, and each candidate key's provider account) may have one policy, and each only narrows. An update reaches every account the policy is applied to, so it needs the right to set each one's policy; POST /policies/{ref}/duplicate copies a policy to edit instead."},
 	{Name: "policy-bindings", Description: "Policy bindings: apply one policy to accounts inside the binding owner's scope (system, team, project or user). An account is held by at most one binding."},
 	{Name: "pools", Description: "Pools: ordered sets of host keys at one host, with a selection algorithm. Policies draw keys from pools, tried in order; nothing in a pool is reserved for one policy."},
 	{Name: "pricings", Description: "Pricing sheets: a host's rates for a set of models."},
@@ -98,6 +98,22 @@ func describeErrors(api huma.API) {
 				}
 			}
 		}
+	}
+}
+
+// describePolicyInUse documents the edit guard on the updates it runs on: their description says when it refuses, and their 403 carries the blocking accounts.
+func describePolicyInUse(api huma.API) {
+	for path, what := range map[string]string{
+		"/policies/by-id/{id}":    "The update is refused with 403 policy_in_use while the policy is applied, through an enabled policy binding, to an account whose policy the caller may not set (the check PUT /accounts/{ref}/policy runs on the binding holding it); blockedBy lists those accounts. An admin is never refused. A policy bound nowhere is not checked. POST /policies/{ref}/duplicate makes a copy to edit instead.",
+		"/rate-limits/by-id/{id}": "The update is refused with 403 policy_in_use while a policy linking the rate limit is applied to an account whose policy the caller may not set, as an update of that policy would be; blockedBy lists those accounts.",
+		"/budgets/by-id/{id}":     "The update is refused with 403 policy_in_use while a policy linking the budget is applied to an account whose policy the caller may not set, as an update of that policy would be; blockedBy lists those accounts.",
+	} {
+		item := api.OpenAPI().Paths[path]
+		if item == nil || item.Put == nil {
+			continue
+		}
+		item.Put.Description += " " + what
+		item.Put.Responses["403"] = jsonResponse(api, "Authenticated, but a role, a governance setting or a scope rule does not allow it; with the code policy_in_use, the edit reaches accounts whose policy the caller may not set.", policyInUseBody{})
 	}
 }
 

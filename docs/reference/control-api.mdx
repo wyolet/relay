@@ -182,6 +182,7 @@ Find a team's, project's or service account's account with `GET /api/accounts?ki
 | --- | --- |
 | `400` | A linked row does not exist or lives in a scope the policy may not use; an account does not exist or lies outside the binding owner's scope; the binding uses a policy, or a pool, its owner may not use; a host-owned policy links pools; a policy model names a host. |
 | `404` | A linked row exists but you may not see it. |
+| `403` `policy_in_use` | An update of a policy, or of a rate limit or budget a policy links, while the policy is applied through an enabled binding to an account whose policy you may not set; `blockedBy` is `{accounts: [{id, name, displayName, kind}], hidden}`. Never for an admin. |
 | `409` `duplicate_binding` | An account is already held by another binding. |
 | `422` | The body does not match the schema, including a field of an earlier version (`subjects`, `projectId` on a binding; `includeDeprecated`, `credentialIds`, `budgetIds`, `payloadLoggingEnabled` on a policy). |
 
@@ -190,6 +191,12 @@ The rules behind each answer are on [Policies](/concepts/policies#policy-binding
 ```
 policy "General Policy" uses your personal pool "anthropic"; a policy binding of project "Web" can use pools of the project, its team or the system. Create the pool in the project or its team, or move this one there.
 ```
+
+```
+POST /api/policies/{ref}/duplicate   copy a policy: {"displayName"?, "owner"?}; answers 201 with the copy
+```
+
+The copy keeps the spec and links the same pools, rate limits and budgets. It gets a new id, a slug derived from `displayName` (left out, the source's display name followed by ` copy`), the owner you name or else your own user (the system for the admin token), and no bindings or labels. It needs read access to the source and is checked and authorized as `POST /api/policies` of the same row. `GET /api/policies/{ref}` adds `editable` and, while accounts block an update, `editBlockedBy` in the shape of `blockedBy`; the list leaves both out. See [Editing a policy in use](/concepts/policies#editing-a-policy-in-use).
 
 ### Accounts and pools
 

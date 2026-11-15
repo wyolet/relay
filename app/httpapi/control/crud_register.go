@@ -241,7 +241,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		func(r *ratelimit.RateLimit) error { return r.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
-		guardRateLimitMove(d),
+		guardRateLimitUpdate(d),
 		nil,
 		nil,
 		d.refuseInUse,
@@ -253,14 +253,15 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		usableFor(c, "policy", refcheck.Checker.UsableRateLimit),
 	))
 
+	pc := policyChecks(d)
 	rows.add(registerKind[policy.Policy](
-		api, "policies", "policy", d.Stores.Policy, d.Authz, polmeta,
-		func(p *policy.Policy) error { return p.Validate() },
+		api, pc.plural, pc.singular, d.Stores.Policy, d.Authz, polmeta,
+		pc.validate,
 		meta.OwnerUser,
 		listScanResolver(d.Stores.Policy, polmeta),
-		guardPolicyModels(d),
-		nil,
-		nil,
+		pc.guard,
+		enrichPolicyEditable(d),
+		skipPolicyListEnrich,
 		d.refuseInUse,
 		nil,
 		d.Catalog,
