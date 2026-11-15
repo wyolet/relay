@@ -116,11 +116,28 @@ func TestToCanonicalStream(t *testing.T) {
 				"content_block_start", `{"type":"content_block_start","index":3,"content_block":{"type":"text","text":""}}`,
 				"content_block_delta", `{"type":"content_block_delta","index":3,"delta":{"type":"citations_delta","citation":{}}}`,
 				"content_block_stop", `{"type":"content_block_stop","index":3}`,
+				"content_block_delta", `{"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"after its block closed"}}`,
+				"content_block_start", `{"type":"content_block_start","index":4,"content_block":{"type":"web_search_tool_result","tool_use_id":"s1","content":[]}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":4,"delta":{"type":"text_delta","text":"lost"}}`,
+				"content_block_stop", `{"type":"content_block_stop","index":4}`,
 				"future_event", `{}`,
 			),
 			want: []string{
 				v1.EventItemStarted, `{"item_id":"t_0","item_type":"message","index":0}`,
 				v1.EventItemCompleted, `{"item_id":"t_0","index":0,"item":{"type":"message","id":"t_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+			},
+		},
+		{
+			name: "unsigned thinking completes without provider data",
+			wire: frames(
+				"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}`,
+				"content_block_stop", wireBlockStop,
+			),
+			want: []string{
+				v1.EventItemStarted, `{"item_id":"t_0","item_type":"reasoning","index":0}`,
+				v1.EventItemDelta, `{"item_id":"t_0","index":0,"kind":"reasoning","delta":"plan"}`,
+				v1.EventItemCompleted, `{"item_id":"t_0","index":0,"item":{"type":"reasoning","id":"t_0","summary":[{"text":"plan"}],"content":"plan","status":"completed"}}`,
 			},
 		},
 		{
@@ -164,6 +181,17 @@ func TestToCanonicalStream_MessageStartWithoutIDGetsOne(t *testing.T) {
 	if created == "" || created != completed {
 		t.Errorf("ids: created %q, completed %q, want one non-empty id", created, completed)
 	}
+}
+
+// ParseResponse gives a block with no canonical item no output index; the stream must number items the same way.
+func TestToCanonicalStream_UnmodeledBlockTakesNoIndex(t *testing.T) {
+	t.Skip("bug: a content block of an unmodeled type consumes an output index on the stream but not in ParseResponse")
+	got := translateAll(t, AnthropicTranslator{}.NewToCanonicalStream(), frames(
+		"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"web_search_tool_result","tool_use_id":"s1","content":[]}}`,
+		"content_block_stop", wireBlockStop,
+		"content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`,
+	))
+	assertEvents(t, got, v1.EventItemStarted, `{"item_id":"t_0","item_type":"message","index":0}`)
 }
 
 func TestFromCanonicalStream(t *testing.T) {
@@ -211,6 +239,8 @@ func TestFromCanonicalStream(t *testing.T) {
 			canon: frames(
 				v1.EventItemDelta, `{"item_id":"x","index":5,"kind":"text","delta":"lost"}`,
 				v1.EventItemCompleted, `{"item_id":"x","index":5,"item":{"type":"message","role":"assistant","content":[]}}`,
+				v1.EventItemStarted, `{"item_id":"ws_6","item_type":"web_search_call","index":6}`,
+				v1.EventItemDelta, `{"item_id":"ws_6","index":6,"kind":"text","delta":"lost"}`,
 				"future.event", `{}`,
 			),
 		},
@@ -220,13 +250,19 @@ func TestFromCanonicalStream(t *testing.T) {
 				v1.EventItemStarted, `{"item_id":"fc_0","item_type":"function_call","index":0,"name":"now"}`,
 				v1.EventItemDelta, `{"item_id":"fc_0","index":0,"kind":"future","delta":"x"}`,
 				v1.EventItemStarted, `{"item_id":"rs_1","item_type":"reasoning","index":1}`,
+				v1.EventItemCompleted, `{"item_id":"fc_0","index":0,"item":{"type":"function_call","call_id":"fc_0","name":"now","provider_data":{"type":"thinking","signature":"SIG"}}}`,
 				v1.EventItemCompleted, `{"item_id":"rs_1","index":1,"item":{"type":"reasoning","content":"plan","provider_data":{"type":"other","signature":"SIG"}}}`,
+				v1.EventItemStarted, `{"item_id":"rs_2","item_type":"reasoning","index":2}`,
+				v1.EventItemCompleted, `{"item_id":"rs_2","index":2,"item":{"type":"reasoning","content":"plan","provider_data":{"type":"thought","signature":"SIG"}}}`,
 				v1.EventGenerationCompleted, `{"id":"msg_1","status":"completed","finish_reason":"stop"}`,
 			),
 			want: []string{
 				"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"fc_0","name":"now","input":{}}}`,
 				"content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+				"content_block_stop", `{"type":"content_block_stop","index":0}`,
 				"content_block_stop", `{"type":"content_block_stop","index":1}`,
+				"content_block_start", `{"type":"content_block_start","index":2,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+				"content_block_stop", `{"type":"content_block_stop","index":2}`,
 				"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":""},"usage":{"output_tokens":0}}`,
 				"message_stop", wireMessageStop,
 			},
@@ -241,6 +277,15 @@ func TestFromCanonicalStream(t *testing.T) {
 			assertEvents(t, translateAll(t, AnthropicTranslator{}.NewFromCanonicalStream(), tc.canon), tc.want...)
 		})
 	}
+}
+
+func TestFromCanonicalStream_SkippedItemLeavesBlockIndexesDense(t *testing.T) {
+	t.Skip("bug: an item with no Anthropic block still consumes a block index, leaving a gap on the wire")
+	got := translateAll(t, AnthropicTranslator{}.NewFromCanonicalStream(), frames(
+		v1.EventItemStarted, `{"item_id":"ws_0","item_type":"web_search_call","index":0}`,
+		v1.EventItemStarted, `{"item_id":"msg_1","item_type":"message","index":1}`,
+	))
+	assertEvents(t, got, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
 }
 
 // Usage survives canonical → Messages stream → canonical.
