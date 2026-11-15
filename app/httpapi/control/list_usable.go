@@ -51,6 +51,10 @@ func linkerText(kind string) string {
 
 // mayWriteIn reports whether the caller may create or update a row of kind owned by scope, as a save of that row decides. The probe is not audited: it answers a picker, not a write.
 func mayWriteIn(ctx context.Context, az authz.Authorizer, kind string, scope meta.Owner) bool {
+	// An organization row takes an admin in every mode, as refuseOrganizationOwner has it.
+	if scope.Kind == meta.OwnerOrganization && !authz.Admin(ctx, az) {
+		return false
+	}
 	az = unaudited(az)
 	for _, verb := range []string{".create", ".update"} {
 		if az.Authorize(ctx, authz.Plural(kind)+verb, authz.Resource{Kind: kind, Owner: &scope}) == nil {

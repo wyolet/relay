@@ -30,21 +30,21 @@ func decision(allow bool) rbac.Decision {
 	return rbac.Continue
 }
 
-// organizationRowRule: an organization row is the deployment admins' alone. The admin actor is decided before any rule, so this refuses every caller it sees; without it a global binding would reach the row, whose scope chain is the global one.
+// organizationRowRule: an organization row is the deployment admins' alone: the admin actor, decided before any rule, and a caller bound to the built-in admin role at the global scope, who could make themselves one. It refuses everyone else; without it a global binding would reach the row, whose scope chain is the global one.
 type organizationRowRule struct{ ev *evaluation }
 
 func (organizationRowRule) Name() string { return "organization-row" }
 
-func (organizationRowRule) Decide(_ context.Context, _ *principal.Principal, _, _ string, res coreauthz.Resource) (rbac.Decision, error) {
-	if res.Owner != nil && res.Owner.Kind == ownerOrganization {
+func (r organizationRowRule) Decide(_ context.Context, p *principal.Principal, _, _ string, res coreauthz.Resource) (rbac.Decision, error) {
+	if res.Owner != nil && res.Owner.Kind == ownerOrganization && !r.ev.globalAdmin(p) {
 		return rbac.Deny, nil
 	}
 	return rbac.Continue, nil
 }
 
-// Filter admits nothing. A filter cannot take back what a global binding admits, so for a caller holding one on a kind organization rows exist in, ScopeOf cannot answer.
+// Filter admits nothing. A filter cannot take back what a global binding admits, so for a caller holding one on a kind organization rows exist in, ScopeOf cannot answer; a global admin's binding selects every row and the rule refuses none of them.
 func (r organizationRowRule) Filter(_ context.Context, p *principal.Principal, kind, verb string) (rbac.Filter, error) {
-	if organizationKinds[kind] && r.ev.globalGrant(p, kind, verb) {
+	if organizationKinds[kind] && r.ev.globalGrant(p, kind, verb) && !r.ev.globalAdmin(p) {
 		return rbac.Filter{}, rbac.ErrUnfilterable
 	}
 	return rbac.Filter{}, nil

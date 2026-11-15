@@ -22,7 +22,7 @@ type reachableOut struct {
 }
 
 type draftReachInput struct {
-	Owner   string   `query:"owner" required:"true" pattern:"^(system|(team|project|user):[^:]+)$" doc:"The scope the draft policy is owned by: system, team:<id>, project:<id> or user:<id>. The caller must be allowed to create a policy there."`
+	Owner   string   `query:"owner" required:"true" pattern:"^(system|organization|(team|project|user):[^:]+)$" doc:"The scope the draft policy is owned by: system, organization (admins only), team:<id>, project:<id> or user:<id>. The caller must be allowed to create a policy there."`
 	Pool    []string `query:"pool,explode" doc:"Pool ids the draft links, in failover order (repeatable). Omit to read what a policy linking no pools reaches by its scope's ownership. Pools the caller may not read are left out and listed in dropped."`
 	Account string   `query:"account" doc:"Id of the account the policy is or will be bound to, inside the owner scope: the draft is read as that account's policy, under its ladder. Omit to read it in the owner's own account."`
 }

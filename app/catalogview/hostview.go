@@ -88,7 +88,7 @@ func (s *Service) HostPolicies(ctx context.Context, ref string) (HostRef, []Host
 			ID:         p.Meta.ID,
 			Name:       p.Meta.Name,
 			Enabled:    p.IsEnabled(),
-			RateLimits: idx.policyRateLimitRows(p),
+			RateLimits: idx.policyRateLimitRows(p, s.rateLimitVisible(idx)),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })

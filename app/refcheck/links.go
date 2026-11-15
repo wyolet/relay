@@ -161,7 +161,7 @@ func (c Checker) BudgetRefs(ctx context.Context, ids []string, refOwner meta.Own
 
 // linkRef applies the shared rules to one row of kind a row of kind from, owned by refOwner, links: the caller sees it, and it lives in a scope the referrer may draw on.
 func (c Checker) linkRef(ctx context.Context, from, kind string, m meta.Metadata, refOwner meta.Owner) error {
-	if !Visible(ctx, c.Authz, kind, m.ID, m.Owner) {
+	if !c.sees(ctx, kind, m) {
 		return notVisible(kind, m.ID)
 	}
 	if err := c.personalToProject(ctx, from, kind, m, refOwner); err != nil {

@@ -98,9 +98,10 @@ type Metadata struct {
 
 // GovernedOwnerKind is the owner kind mutation governance judges the row by.
 // A row the catalog no longer ships is the operator's, so it is judged as
-// user-owned whatever its stored owner says.
+// user-owned, unless the organization owns it: that tier holds whatever mark
+// the row carries.
 func (m Metadata) GovernedOwnerKind() OwnerKind {
-	if m.CatalogDetachedAt != nil {
+	if m.CatalogDetachedAt != nil && m.Owner.Kind != OwnerOrganization {
 		return OwnerUser
 	}
 	return m.Owner.Kind

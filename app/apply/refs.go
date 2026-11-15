@@ -74,6 +74,15 @@ func refsFor[T any](b *builder, check func(refcheck.Checker, context.Context, *T
 	return func(ctx context.Context, row *T) error { return check(c, ctx, row) }
 }
 
+// storedByID indexes the stored rows of a kind by id, before this run's documents.
+func storedByID[T any](stored []*T, metaOf func(*T) *meta.Metadata) map[string]*T {
+	byID := make(map[string]*T, len(stored))
+	for _, row := range stored {
+		byID[metaOf(row).ID] = row
+	}
+	return byID
+}
+
 func lookup[T any](b *builder, stored []*T, metaOf func(*T) *meta.Metadata) func(context.Context, string) *T {
 	byID := make(map[string]*T, len(stored))
 	for _, row := range stored {

@@ -140,21 +140,34 @@ func (idx *index) ownerOff(o meta.Owner) bool {
 // limitsFor returns the rules of every rate limit the policy links that
 // applies to (provider, model, host): its unscoped links and the scoped ones
 // whose models match.
-func (idx *index) limitsFor(p *policy.Policy, provSlug, modelSlug, hostSlug string) []Limit {
-	return idx.limitsOnAnyHost(p, provSlug, modelSlug, []string{hostSlug})
+func (idx *index) limitsFor(p *policy.Policy, provSlug, modelSlug, hostSlug string, visible func(string) bool) ([]Limit, []string) {
+	return idx.limitsOnAnyHost(p, provSlug, modelSlug, []string{hostSlug}, visible)
 }
 
 // limitsOnAnyHost is limitsFor across hosts: a scoped link applies when its
-// models match on at least one of hostSlugs, and each link counts once.
-func (idx *index) limitsOnAnyHost(p *policy.Policy, provSlug, modelSlug string, hostSlugs []string) []Limit {
-	out := []Limit{}
+// models match on at least one of hostSlugs, and each link counts once. A rate
+// limit visible refuses contributes its id to hidden instead of its rules.
+func (idx *index) limitsOnAnyHost(p *policy.Policy, provSlug, modelSlug string, hostSlugs []string, visible func(string) bool) (limits []Limit, hidden []string) {
+	limits = []Limit{}
 	for _, l := range p.Spec.RateLimits {
 		if len(l.Models) > 0 && !slices.ContainsFunc(hostSlugs, func(h string) bool {
 			return modelref.MatchAny(l.Models, provSlug, modelSlug, h)
 		}) {
 			continue
 		}
-		out = append(out, idx.limitsOf(l.RateLimitID)...)
+		if !visible(l.RateLimitID) {
+			hidden = append(hidden, l.RateLimitID)
+			continue
+		}
+		limits = append(limits, idx.limitsOf(l.RateLimitID)...)
 	}
-	return out
+	return limits, hidden
+}
+
+// rateLimitVisible reports, per rate limit id, whether the caller may see the row; a missing row has nothing to hide.
+func (s *Service) rateLimitVisible(idx *index) func(string) bool {
+	return func(id string) bool {
+		rl, ok := idx.rlByID[id]
+		return !ok || s.visible("rate-limit", id, rl.Meta.Owner)
+	}
 }

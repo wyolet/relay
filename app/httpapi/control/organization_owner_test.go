@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -20,13 +25,13 @@ func orgThings() []*scopedThing {
 	return append(seedThings(), &scopedThing{Meta: meta.Metadata{ID: orgRowID, Name: "org-row", Owner: meta.Owner{Kind: meta.OwnerOrganization}}})
 }
 
-// An organization row is created, moved, edited and seen by an admin alone. Anyone else is refused the write with 403 and reads it as missing; without a scoping authorizer every caller is the operator, and governance still keeps its edits to an admin.
+// An organization row is created, moved, edited and seen by an admin alone. Anyone else is refused the write with 403 and, under a scoping authorizer, reads it as missing; without one every caller reads it, and an admin alone writes it, as POST /apply has it.
 func TestOrganizationOwnerByMode(t *testing.T) {
 	const (
 		orgBody   = `{"metadata":{"name":"org-cap","owner":{"kind":"organization"}}}`
 		intoOrg   = `{"metadata":{"name":"alice-row","owner":{"kind":"organization"}}}`
 		rename    = `{"metadata":{"name":"renamed"}}`
-		notAdmin  = "authz: forbidden: an organization-owned policy requires an admin"
+		notAdmin  = "an organization-owned policy requires an admin"
 		orgEdit   = "policy is owned by the organization: only an admin may edit it"
 		orgDelete = "policy is owned by the organization: only an admin may delete it"
 		reserved  = "owner.kind=system is reserved for seed; omit owner.kind on create"
@@ -46,14 +51,14 @@ func TestOrganizationOwnerByMode(t *testing.T) {
 	}{
 		{"admin creates", "root", "POST", "/policies", orgBody, ok(201), ok(201)},
 		{"admin token creates", "token", "POST", "/policies", orgBody, ok(201), ok(201)},
-		{"a user creates", "alice", "POST", "/policies", orgBody, ok(201), outcome{403, notAdmin}},
+		{"a user creates", "alice", "POST", "/policies", orgBody, outcome{403, notAdmin}, outcome{403, notAdmin}},
 		{"system stays reserved", "root", "POST", "/policies", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, outcome{400, reserved}, outcome{400, reserved}},
 
 		{"admin gets", "root", "GET", "/policies/" + orgRowID, "", ok(200), ok(200)},
 		{"a user gets", "alice", "GET", "/policies/" + orgRowID, "", ok(200), hidden},
 
 		{"admin moves a row in", "root", "PUT", byID + aliceID, intoOrg, ok(200), ok(200)},
-		{"a user moves their row in", "alice", "PUT", byID + aliceID, intoOrg, ok(200), outcome{403, notAdmin}},
+		{"a user moves their row in", "alice", "PUT", byID + aliceID, intoOrg, outcome{403, notAdmin}, outcome{403, notAdmin}},
 		{"admin edits", "root", "PUT", byID + orgRowID, rename, ok(200), ok(200)},
 		{"a user edits", "alice", "PUT", byID + orgRowID, rename, outcome{403, orgEdit}, hiddenID},
 		{"admin deletes", "root", "DELETE", byID + orgRowID, "", ok(204), ok(204)},
@@ -152,7 +157,7 @@ func TestOrganizationOwnerKinds(t *testing.T) {
 	}
 }
 
-// The owner check policy duplication shares with create: a 400 for a kind the organization owns no rows of, a 403 for a non-admin under a scoping authorizer.
+// The owner check policy duplication shares with create: a 400 for a kind the organization owns no rows of, a 403 for a non-admin in either mode.
 func TestRefuseOrganizationOwner(t *testing.T) {
 	org := meta.Owner{Kind: meta.OwnerOrganization}
 	for _, tc := range []struct {
@@ -166,7 +171,9 @@ func TestRefuseOrganizationOwner(t *testing.T) {
 		{"admin, policy", "root", testRBAC(), "policy", org, 0},
 		{"admin token, policy", "token", testRBAC(), "policy", org, 0},
 		{"user, policy", "alice", testRBAC(), "policy", org, 403},
-		{"user, single mode", "alice", authz.AlwaysAllowAuthenticated{}, "policy", org, 0},
+		{"user, single mode", "alice", authz.AlwaysAllowAuthenticated{}, "policy", org, 403},
+		{"admin, single mode", "root", authz.AlwaysAllowAuthenticated{}, "policy", org, 0},
+		{"global admin binding", "granted", globalAdminRBAC(t), "policy", org, 0},
 		{"admin, policy binding", "root", testRBAC(), "policy-binding", org, 400},
 		{"user, policy binding", "alice", testRBAC(), "policy-binding", org, 400},
 		{"another owner is not judged", "alice", testRBAC(), "host-key", meta.Owner{Kind: meta.OwnerUser}, 0},
@@ -178,6 +185,60 @@ func TestRefuseOrganizationOwner(t *testing.T) {
 			}
 		})
 	}
+}
+
+// globalAdminRBAC is testRBAC with the built-in roles and a global binding of the admin role to the "granted" actor.
+func globalAdminRBAC(t *testing.T) authz.RBAC {
+	t.Helper()
+	builtins, err := role.Builtins()
+	if err != nil {
+		t.Fatalf("built-in roles: %v", err)
+	}
+	on := true
+	b := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: ids.New(), Name: "granted-admin", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	for _, r := range builtins {
+		r.Meta.ID, r.Spec.Enabled = ids.New(), &on
+		if r.Meta.Name == role.BuiltinAdmin {
+			b.Spec.RoleID = r.Meta.ID
+		}
+	}
+	b.Spec.Scope, b.Spec.Enabled = meta.Owner{Kind: meta.OwnerSystem}, &on
+	b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: scopeActors["granted"].UserID}}
+	cat := catalogtest.Catalog{Roles: builtins, RoleBindings: []*rolebinding.RoleBinding{b}}.Load(t)
+	return authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+}
+
+// A user the admin role is bound to globally writes and governs organization rows as the admin role does.
+func TestOrganizationRowsByGlobalAdminBinding(t *testing.T) {
+	h, store := newThingHarness(t, globalAdminRBAC(t), "policies", "policy", noSettings{}, orgThings()...)
+	for _, tc := range []struct{ method, path, body string }{
+		{"POST", "/policies", `{"metadata":{"name":"org-cap","owner":{"kind":"organization"}}}`},
+		{"PUT", "/policies/by-id/" + aliceID, `{"metadata":{"name":"alice-row","owner":{"kind":"organization"}}}`},
+		{"PUT", "/policies/by-id/" + orgRowID, `{"metadata":{"name":"renamed"}}`},
+		{"DELETE", "/policies/by-id/" + orgRowID, ""},
+	} {
+		if w := scopeReq(t, h, "granted", tc.method, tc.path, tc.body); w.Code >= 300 {
+			t.Fatalf("%s %s = %d: %s", tc.method, tc.path, w.Code, w.Body)
+		}
+	}
+	if got := store.items[aliceID].Meta.Owner; got != (meta.Owner{Kind: meta.OwnerOrganization}) {
+		t.Fatalf("alice-row owner = %+v, want the organization", got)
+	}
+}
+
+// A row the catalog dropped is governed as a user's; moved into the organization it loses that mark and is an admin's alone.
+func TestDetachedRowMovedIntoOrganization(t *testing.T) {
+	detached := time.Now()
+	rows := append(seedThings(), &scopedThing{Meta: meta.Metadata{ID: orgRowID, Name: "dropped", Owner: meta.Owner{Kind: meta.OwnerSystem}, CatalogDetachedAt: &detached}})
+	h, store := newThingHarness(t, authz.AlwaysAllowAuthenticated{}, "policies", "policy", noSettings{}, rows...)
+	if w := scopeReq(t, h, "root", "PUT", "/policies/by-id/"+orgRowID, `{"metadata":{"name":"dropped","owner":{"kind":"organization"}}}`); w.Code != 200 {
+		t.Fatalf("admin move = %d: %s", w.Code, w.Body)
+	}
+	if m := store.items[orgRowID].Meta; m.Owner.Kind != meta.OwnerOrganization || m.CatalogDetachedAt != nil {
+		t.Fatalf("moved row owner %+v, detached at %v; want the organization and no mark", m.Owner, m.CatalogDetachedAt)
+	}
+	wantAPIError(t, scopeReq(t, h, "alice", "PUT", "/policies/by-id/"+orgRowID, `{"metadata":{"name":"renamed"}}`), 403, "", "policy is owned by the organization: only an admin may edit it")
+	wantAPIError(t, scopeReq(t, h, "alice", "DELETE", "/policies/by-id/"+orgRowID, ""), 403, "", "policy is owned by the organization: only an admin may delete it")
 }
 
 // usable_by names the organization the way it names the system.

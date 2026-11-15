@@ -108,6 +108,9 @@ func TestListUsableBy(t *testing.T) {
 		{open, "alice", "?usable_by=team:t-1", 200, []string{"pool-sys", "pool-t1"}},
 		{open, "alice", "?usable_by=user:u-alice", 200, alices},
 		{open, "alice", "?usable_by=system", 200, all},
+		// An organization policy takes an admin to write, in either mode.
+		{open, "root", "?usable_by=organization", 200, all},
+		{open, "alice", "?usable_by=organization", 403, nil},
 		{open, "alice", "?usable_by=project:p-1&name=pool-t1", 200, []string{"pool-t1"}},
 		{open, "alice", "?usable_by=project:p-2&sort=-name", 200, []string{"pool-t2", "pool-sys", "pool-p2"}},
 		{open, "alice", "?usable_by=project:p-2&limit=1", 200, []string{"pool-p2"}},

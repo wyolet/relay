@@ -13,7 +13,8 @@ import (
 // they are scoped to.
 type PolicyRateLimitRow struct {
 	ID      string   `json:"id"               doc:"Rate limit id."`
-	Name    string   `json:"name"             doc:"Rate limit slug."`
+	Name    string   `json:"name"             doc:"Rate limit slug; empty when hidden."`
+	Hidden  bool     `json:"hidden,omitempty" doc:"The caller may not see the rate limit: its name and rules are left out."`
 	Default bool     `json:"default"          doc:"The link has no model scope and applies to every model."`
 	Models  []string `json:"models,omitempty" doc:"Model references the link is scoped to."`
 	Limits  []Limit  `json:"limits"           doc:"The rate limit's rules."`
@@ -45,13 +46,14 @@ func (s *Service) PolicyRateLimits(ctx context.Context, ref string) (PolicyRef, 
 		return PolicyRef{}, PolicyRateLimitsView{}, err
 	}
 	view := PolicyRateLimitsView{
-		RateLimits:  idx.policyRateLimitRows(p),
+		RateLimits:  idx.policyRateLimitRows(p, s.rateLimitVisible(idx)),
 		Unthrottled: []UnthrottledModel{},
 	}
 	capped := map[string]bool{} // modelID → has a non-empty limit on some binding
 	uncapped := map[string]*model.Model{}
+	all := func(string) bool { return true }
 	for _, gb := range idx.grantedBindings(p, models) {
-		if len(idx.limitsFor(p, gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)) > 0 {
+		if limits, _ := idx.limitsFor(p, gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name, all); len(limits) > 0 {
 			capped[gb.model.Meta.ID] = true
 		} else {
 			uncapped[gb.model.Meta.ID] = gb.model
@@ -67,11 +69,17 @@ func (s *Service) PolicyRateLimits(ctx context.Context, ref string) (PolicyRef, 
 }
 
 // policyRateLimitRows is shared by PolicyRateLimits and HostPolicies: each
-// linked rate limit in declared order.
-func (idx *index) policyRateLimitRows(p *policy.Policy) []PolicyRateLimitRow {
+// linked rate limit in declared order, one visible refuses by its id alone.
+func (idx *index) policyRateLimitRows(p *policy.Policy, visible func(string) bool) []PolicyRateLimitRow {
 	rows := []PolicyRateLimitRow{}
 	for _, l := range p.Spec.RateLimits {
-		row := PolicyRateLimitRow{ID: l.RateLimitID, Default: len(l.Models) == 0, Models: l.Models, Limits: idx.limitsOf(l.RateLimitID)}
+		row := PolicyRateLimitRow{ID: l.RateLimitID, Default: len(l.Models) == 0, Models: l.Models}
+		if !visible(l.RateLimitID) {
+			row.Hidden, row.Limits = true, []Limit{}
+			rows = append(rows, row)
+			continue
+		}
+		row.Limits = idx.limitsOf(l.RateLimitID)
 		if rl, ok := idx.rlByID[l.RateLimitID]; ok {
 			row.Name = rl.Meta.Name
 		}

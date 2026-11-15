@@ -188,3 +188,33 @@ func IsAdmin(ctx context.Context) bool {
 	a := actor.From(ctx)
 	return a != nil && a.IsAuthenticated() && adminActor(a)
 }
+
+// Admin reports whether the caller in ctx administers the deployment under a: IsAdmin, or, under RBAC, a binding of the built-in admin role at the global scope, which already grants every verb everywhere. It is the notion of admin organization rows are guarded by.
+func Admin(ctx context.Context, a Authorizer) bool {
+	if IsAdmin(ctx) {
+		return true
+	}
+	r, ok := rbacOf(a)
+	act := actor.From(ctx)
+	if !ok || r.Snap == nil || act == nil || !act.IsAuthenticated() {
+		return false
+	}
+	return globalRole(r.Snap(), act.Subjects, builtinAdmin)
+}
+
+// rbacOf finds the RBAC authorizer under a's wrappers.
+func rbacOf(a Authorizer) (RBAC, bool) {
+	for a != nil {
+		switch v := a.(type) {
+		case RBAC:
+			return v, true
+		case *RBAC:
+			return *v, true
+		case interface{ Unwrap() Authorizer }:
+			a = v.Unwrap()
+		default:
+			return RBAC{}, false
+		}
+	}
+	return RBAC{}, false
+}
