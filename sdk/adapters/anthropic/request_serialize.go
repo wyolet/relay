@@ -140,7 +140,9 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			f := opts.Output.Format
 			// canonical: Format.Name/Description/Strict dropped — output_config.format
 			// takes only a schema, and its decoding is always constrained.
-			if f.Type == "json_schema" || f.Type == "json_object" {
+			switch f.Type {
+			case "text":
+			case "json_schema", "json_object":
 				// Native structured output takes only a strict schema, and an
 				// object schema must close additionalProperties, so "any JSON
 				// object" has no form here.
@@ -151,6 +153,8 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 					out.OutputConfig = &anthropicOutputConfig{}
 				}
 				out.OutputConfig.Format = &anthropicOutputFormat{Type: "json_schema", Schema: f.Schema}
+			default:
+				return nil, fmt.Errorf("anthropic serialize_request: %w: response format type %q", v1.ErrUnsupportedRequest, f.Type)
 			}
 		}
 	}

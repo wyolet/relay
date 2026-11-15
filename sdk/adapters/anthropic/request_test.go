@@ -647,7 +647,6 @@ func TestParseRequest_ModelConfigHoldsOnlyWhatTheBodySets(t *testing.T) {
 }
 
 func TestSerializeRequest_RejectsUnknownFormatType(t *testing.T) {
-	t.Skip("bug: a format type other than text, json_schema or json_object is dropped silently (rule 11)")
 	_, err := AnthropicTranslator{}.SerializeRequest(request(func(_ *v1.Request, opts *v1.ModelOpts) {
 		opts.Output = &v1.OutputConfig{Format: &v1.Format{Type: "grammar"}}
 	}))
