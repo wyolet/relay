@@ -19,6 +19,8 @@ func TestEvents_WireShape(t *testing.T) {
 		{"item.started message", ItemStartedEvent{ItemID: "i1", ItemType: ItemTypeMessage, Index: 0}, `{"item_id":"i1","item_type":"message","index":0}`},
 		{"item.started function_call", ItemStartedEvent{ItemID: "i2", ItemType: ItemTypeFunctionCall, Index: 1, Name: "f", CallID: "c1"},
 			`{"item_id":"i2","item_type":"function_call","index":1,"name":"f","call_id":"c1"}`},
+		{"item.started with provider data", ItemStartedEvent{ItemID: "i3", ItemType: ItemTypeReasoning, Index: 2, ProviderData: json.RawMessage(`{"data":"ENC","type":"redacted_thinking"}`)},
+			`{"item_id":"i3","item_type":"reasoning","index":2,"provider_data":{"data":"ENC","type":"redacted_thinking"}}`},
 		{"item.delta", ItemDeltaEvent{ItemID: "i1", Index: 0, Kind: DeltaKindText, Delta: ""}, `{"item_id":"i1","index":0,"kind":"text","delta":""}`},
 		{"item.completed", ItemCompletedEvent{ItemID: "i1", Index: 2, Item: &Reasoning{ID: "i1"}}, `{"item_id":"i1","index":2,"item":{"type":"reasoning","id":"i1"}}`},
 		{"generation.completed minimal", GenerationCompletedEvent{ID: "gen_1", Status: StatusCompleted}, `{"id":"gen_1","status":"completed"}`},

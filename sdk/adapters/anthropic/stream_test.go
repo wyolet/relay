@@ -73,6 +73,35 @@ func TestToCanonicalStream(t *testing.T) {
 			},
 		},
 		{
+			name: "redacted thinking between thinking and text keeps its data",
+			wire: frames(
+				"message_start", wireMessageStart,
+				"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"SIG"}}`,
+				"content_block_stop", wireBlockStop,
+				"content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"ENC"}}`,
+				"content_block_stop", `{"type":"content_block_stop","index":1}`,
+				"content_block_start", `{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"done"}}`,
+				"content_block_stop", `{"type":"content_block_stop","index":2}`,
+				"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+				"message_stop", wireMessageStop,
+			),
+			want: []string{
+				v1.EventGenerationCreated, canonCreated,
+				v1.EventItemStarted, `{"item_id":"t_0","item_type":"reasoning","index":0}`,
+				v1.EventItemDelta, `{"item_id":"t_0","index":0,"kind":"reasoning","delta":"plan"}`,
+				v1.EventItemCompleted, `{"item_id":"t_0","index":0,"item":{"type":"reasoning","id":"t_0","summary":[{"text":"plan"}],"content":"plan","status":"completed","provider_data":{"signature":"SIG","thinking":"plan","type":"thinking"}}}`,
+				v1.EventItemStarted, `{"item_id":"r_1","item_type":"reasoning","index":1,"provider_data":{"data":"ENC","type":"redacted_thinking"}}`,
+				v1.EventItemCompleted, `{"item_id":"r_1","index":1,"item":{"type":"reasoning","id":"r_1","status":"completed","provider_data":{"data":"ENC","type":"redacted_thinking"}}}`,
+				v1.EventItemStarted, `{"item_id":"t_2","item_type":"message","index":2}`,
+				v1.EventItemDelta, `{"item_id":"t_2","index":2,"kind":"text","delta":"done"}`,
+				v1.EventItemCompleted, `{"item_id":"t_2","index":2,"item":{"type":"message","id":"t_2","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
+				v1.EventGenerationCompleted, `{"id":"msg_1","status":"completed","finish_reason":"stop","usage":{"input":10,"output":5}}`,
+			},
+		},
+		{
 			// Eager input streaming lets a cut-off turn close the block on unterminated JSON.
 			name: "tool call cut off mid-arguments is incomplete",
 			wire: frames(
@@ -108,8 +137,6 @@ func TestToCanonicalStream(t *testing.T) {
 				"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"s1","name":"web_search"}}`,
 				"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}`,
 				"content_block_stop", wireBlockStop,
-				"content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"x"}}`,
-				"content_block_stop", `{"type":"content_block_stop","index":1}`,
 				"content_block_start", `{"type":"content_block_start","index":2,"content_block":{"text":""}}`,
 				"content_block_delta", `{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"lost"}}`,
 				"content_block_stop", `{"type":"content_block_stop","index":2}`,
@@ -185,7 +212,6 @@ func TestToCanonicalStream_MessageStartWithoutIDGetsOne(t *testing.T) {
 
 // ParseResponse gives a block with no canonical item no output index; the stream must number items the same way.
 func TestToCanonicalStream_UnmodeledBlockTakesNoIndex(t *testing.T) {
-	t.Skip("bug: a content block of an unmodeled type consumes an output index on the stream but not in ParseResponse")
 	got := translateAll(t, AnthropicTranslator{}.NewToCanonicalStream(), frames(
 		"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"web_search_tool_result","tool_use_id":"s1","content":[]}}`,
 		"content_block_stop", wireBlockStop,
@@ -235,6 +261,36 @@ func TestFromCanonicalStream(t *testing.T) {
 			},
 		},
 		{
+			name: "redacted thinking between thinking and text opens a redacted_thinking block",
+			canon: frames(
+				v1.EventGenerationCreated, canonCreated,
+				v1.EventItemStarted, `{"item_id":"t_0","item_type":"reasoning","index":0}`,
+				v1.EventItemDelta, `{"item_id":"t_0","index":0,"kind":"reasoning","delta":"plan"}`,
+				v1.EventItemCompleted, `{"item_id":"t_0","index":0,"item":{"type":"reasoning","id":"t_0","summary":[{"text":"plan"}],"content":"plan","status":"completed","provider_data":{"signature":"SIG","thinking":"plan","type":"thinking"}}}`,
+				v1.EventItemStarted, `{"item_id":"r_1","item_type":"reasoning","index":1,"provider_data":{"data":"ENC","type":"redacted_thinking"}}`,
+				v1.EventItemCompleted, `{"item_id":"r_1","index":1,"item":{"type":"reasoning","id":"r_1","status":"completed","provider_data":{"data":"ENC","type":"redacted_thinking"}}}`,
+				v1.EventItemStarted, `{"item_id":"t_2","item_type":"message","index":2}`,
+				v1.EventItemDelta, `{"item_id":"t_2","index":2,"kind":"text","delta":"done"}`,
+				v1.EventItemCompleted, `{"item_id":"t_2","index":2,"item":{"type":"message","id":"t_2","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
+				v1.EventGenerationCompleted, `{"id":"msg_1","status":"completed","finish_reason":"stop","usage":{"input":10,"output":5}}`,
+			),
+			want: []string{
+				"message_start", wireStart,
+				"ping", `{"type":"ping"}`,
+				"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"SIG"}}`,
+				"content_block_stop", `{"type":"content_block_stop","index":0}`,
+				"content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"ENC"}}`,
+				"content_block_stop", `{"type":"content_block_stop","index":1}`,
+				"content_block_start", `{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"done"}}`,
+				"content_block_stop", `{"type":"content_block_stop","index":2}`,
+				"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":""},"usage":{"input_tokens":10,"output_tokens":5}}`,
+				"message_stop", wireMessageStop,
+			},
+		},
+		{
 			name: "events for items that were never opened emit nothing",
 			canon: frames(
 				v1.EventItemDelta, `{"item_id":"x","index":5,"kind":"text","delta":"lost"}`,
@@ -280,7 +336,6 @@ func TestFromCanonicalStream(t *testing.T) {
 }
 
 func TestFromCanonicalStream_SkippedItemLeavesBlockIndexesDense(t *testing.T) {
-	t.Skip("bug: an item with no Anthropic block still consumes a block index, leaving a gap on the wire")
 	got := translateAll(t, AnthropicTranslator{}.NewFromCanonicalStream(), frames(
 		v1.EventItemStarted, `{"item_id":"ws_0","item_type":"web_search_call","index":0}`,
 		v1.EventItemStarted, `{"item_id":"msg_1","item_type":"message","index":1}`,

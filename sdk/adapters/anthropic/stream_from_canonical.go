@@ -92,9 +92,6 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 		return nil, fmt.Errorf("canonical→anthropic: item.started: %w", err)
 	}
 
-	idx := s.blockIndex
-	s.blockIndex++
-
 	// Each Anthropic content block type requires different fields on the
 	// opening frame. Emitting the wrong shape (e.g. text:"" on tool_use)
 	// trips strict clients like Claude Code with `undefined.slice()` when
@@ -116,10 +113,16 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 			"input": map[string]any{},
 		}
 	case v1.ItemTypeReasoning:
+		if data := redactedThinkingData(e.ProviderData); data != "" {
+			cb = map[string]any{"type": "redacted_thinking", "data": data}
+			break
+		}
 		cb = map[string]any{"type": "thinking", "thinking": "", "signature": ""}
 	default:
 		return nil, nil
 	}
+	idx := s.blockIndex
+	s.blockIndex++
 	if s.blockIndexByCanonical == nil {
 		s.blockIndexByCanonical = make(map[int]int)
 	}
@@ -218,6 +221,21 @@ func thinkingSignature(providerData json.RawMessage) string {
 		return ""
 	}
 	return pd.Signature
+}
+
+// redactedThinkingData returns the encrypted data an Anthropic redacted_thinking block left in provider_data; anything else yields "".
+func redactedThinkingData(providerData json.RawMessage) string {
+	if len(providerData) == 0 {
+		return ""
+	}
+	var pd struct {
+		Type string `json:"type"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(providerData, &pd); err != nil || pd.Type != "redacted_thinking" {
+		return ""
+	}
+	return pd.Data
 }
 
 func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]byte, error) {

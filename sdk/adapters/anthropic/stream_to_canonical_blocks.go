@@ -20,6 +20,8 @@ type anthropicStreamBlock struct {
 	sigBuf   strings.Builder
 	callID   string
 	toolName string
+	// redacted is the whole item for a redacted_thinking block: its data arrives on the start frame, never in deltas.
+	redacted *v1.Reasoning
 }
 
 func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byte, error) {
@@ -29,6 +31,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 			Type string `json:"type"`
 			ID   string `json:"id,omitempty"`
 			Name string `json:"name,omitempty"`
+			Data string `json:"data,omitempty"`
 		} `json:"content_block"`
 	}
 	if err := json.Unmarshal(data, &cbs); err != nil {
@@ -40,11 +43,24 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 		return nil, nil
 	}
 
-	// canonical: server_tool_use and redacted_thinking blocks dropped on the
-	// stream — no canonical item for a hosted tool call, and item.started has
-	// no provider_data, so a canonical→Anthropic stream could not open the
-	// redacted block it would need to replay.
-	if blockType == "server_tool_use" || blockType == "redacted_thinking" {
+	// canonical: server_tool_use blocks dropped on the stream — no canonical
+	// item for a hosted tool call; the buffered path drops them as well.
+	if blockType == "server_tool_use" {
+		return nil, nil
+	}
+
+	var itemType v1.ItemType
+	switch blockType {
+	case "text":
+		itemType = v1.ItemTypeMessage
+	case "tool_use":
+		itemType = v1.ItemTypeFunctionCall
+	case "thinking", "redacted_thinking":
+		itemType = v1.ItemTypeReasoning
+	default:
+		// canonical: unmodeled content blocks (tool results of hosted tools,
+		// future types) dropped — no canonical item type to start.
+		s.currentBlock = nil
 		return nil, nil
 	}
 
@@ -61,32 +77,23 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	case "tool_use":
 		b.callID = cbs.ContentBlock.ID
 		b.toolName = cbs.ContentBlock.Name
+	case "redacted_thinking":
+		b.redacted = redactedThinkingToReasoning(cbs.ContentBlock.Data)
 	}
 
 	s.currentBlock = b
 
-	var itemType v1.ItemType
-	switch blockType {
-	case "text":
-		itemType = v1.ItemTypeMessage
-	case "tool_use":
-		itemType = v1.ItemTypeFunctionCall
-	case "thinking":
-		itemType = v1.ItemTypeReasoning
-	default:
-		// canonical: unmodeled content blocks (tool results of hosted tools,
-		// future types) dropped — no canonical item type to start.
-		s.currentBlock = nil
-		return nil, nil
-	}
-
-	startData, _ := json.Marshal(v1.ItemStartedEvent{
+	started := v1.ItemStartedEvent{
 		ItemID:   b.itemID,
 		ItemType: itemType,
 		Name:     b.toolName,
 		CallID:   b.callID,
 		Index:    outputIndex,
-	})
+	}
+	if b.redacted != nil {
+		started.ProviderData = b.redacted.ProviderData
+	}
+	startData, _ := json.Marshal(started)
 	return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}}), nil
 }
 
@@ -190,6 +197,9 @@ func (s *anthropicToCanonicalStream) handleContentBlockStop(_ []byte) ([]byte, e
 			Status:       v1.StatusCompleted,
 			ProviderData: providerData,
 		}
+	case "redacted_thinking":
+		b.redacted.ID, b.redacted.Status = b.itemID, v1.StatusCompleted
+		completedItem = b.redacted
 	default:
 		return nil, nil
 	}
