@@ -471,7 +471,8 @@ func TestCRUDCreate(t *testing.T) {
 		{"an empty name is derived from displayName", "alice", "/rate-limits", `{"metadata":{"name":"","displayName":"Burst Cap!"}}`, 201, "", "burst-cap", alice},
 		{"a derived slug steps past a taken one", "alice", "/rate-limits", `{"metadata":{"name":"","displayName":"My Limit"}}`, 201, "", "my-limit-2", alice},
 		{"no name at all falls back to the kind", "alice", "/rate-limits", `{"metadata":{"name":""}}`, 201, "", "rate-limit", alice},
-		{"system is reserved on a personal kind", "root", "/rate-limits", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, 400, reserved, "", meta.Owner{}},
+		// A body from before the organization owner: system names it.
+		{"system on a moved kind is the organization", "root", "/rate-limits", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, 201, "", "sys", meta.Global},
 		{"a catalog owner needs a grant", "alice", "/rate-limits", `{"metadata":{"name":"shared","owner":{"kind":"host","id":"h-1"}}}`, 403, "forbidden", "", meta.Owner{}},
 		{"an admin creates a catalog-owned row", "root", "/rate-limits", `{"metadata":{"name":"shared","owner":{"kind":"host","id":"h-1"}}}`, 201, "", "shared", meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}},
 

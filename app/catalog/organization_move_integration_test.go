@@ -154,7 +154,7 @@ func TestIntegration_Migration45RoundTrip(t *testing.T) {
 		{"role_bindings", ids["team-binding"], "team"},
 		{"policy_bindings", pb.Meta.ID, "organization"},
 		{"accounts", acct.Meta.ID, "organization"},
-		{"policies", pol.Meta.ID, "system"}, // the boot decides, with the catalog tree in hand
+		{"policies", pol.Meta.ID, "system"}, // the boot moves it, next to the built-in rate limits it keeps
 	} {
 		if got := ownerKind(t, db, tc.table, tc.id); got != tc.want {
 			t.Errorf("%s %s owner = %q, want %q", tc.table, tc.id, got, tc.want)
@@ -204,7 +204,7 @@ func TestIntegration_Migration45RoundTrip(t *testing.T) {
 	}
 }
 
-// The boot moves the operator's system rows and host keys, seals a stored value under the organization's data key, keeps what the catalog or the binary ships, and does nothing on a second pass.
+// The boot moves the operator's system rows, a detached one included, and host keys, seals a stored value under the organization's data key, keeps the rate limits the binary ships, and does nothing on a second pass.
 func TestIntegration_OrganizationMove(t *testing.T) {
 	ctx := context.Background()
 	db := storagetest.Pool(t)
@@ -261,8 +261,8 @@ func TestIntegration_OrganizationMove(t *testing.T) {
 		t.Fatalf("move: %v", err)
 	}
 	want := &moveCounts{
-		Moved:  map[string]int{"Policy": 1, "RateLimit": 1, "Budget": 1, "Pool": 1, "HostKey": 2},
-		Kept:   map[string]int{"Policy": 1, "RateLimit": 1},
+		Moved:  map[string]int{"Policy": 2, "RateLimit": 1, "Budget": 1, "Pool": 1, "HostKey": 2},
+		Kept:   map[string]int{"RateLimit": 1},
 		Failed: map[string]int{"HostKey": 1},
 	}
 	if diff := cmp.Diff(want, res); diff != "" {
@@ -270,7 +270,7 @@ func TestIntegration_OrganizationMove(t *testing.T) {
 	}
 	for _, tc := range []struct{ table, id, want string }{
 		{"policies", ops.Meta.ID, "organization"},
-		{"policies", detached.Meta.ID, "system"},
+		{"policies", detached.Meta.ID, "organization"},
 		{"rate_limits", builtin.Meta.ID, "system"},
 		{"rate_limits", opsRL.Meta.ID, "organization"},
 		{"budgets", bud.Meta.ID, "organization"},
@@ -282,6 +282,9 @@ func TestIntegration_OrganizationMove(t *testing.T) {
 		if got := ownerKind(t, db, tc.table, tc.id); got != tc.want {
 			t.Errorf("%s %s owner = %q, want %q", tc.table, tc.id, got, tc.want)
 		}
+	}
+	if got, err := stores.Policy.Get(ctx, detached.Meta.ID); err != nil || got.Meta.CatalogDetachedAt != nil {
+		t.Errorf("moved detached policy = %+v, %v; want its detach mark cleared", got, err)
 	}
 	row, err := gen.New(db).GetSecretValue(ctx, storedKey.Meta.ID)
 	if err != nil || row.Scope.String != stored.ScopeOrganization {

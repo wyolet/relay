@@ -47,14 +47,20 @@ func TestIntegration_OrganizationToSystemRoundTrip(t *testing.T) {
 			t.Fatalf("upsert %s: %v", k.Meta.Name, err)
 		}
 	}
-	scope := func() string {
+	// A value under the organization's data key that no host key points at must not keep the rollback refused.
+	stray := meta.NewID()
+	if _, err := sec.Stored.CreateScoped(ctx, stored.ScopeOrganization, stray, []byte("sk-stray")); err != nil {
+		t.Fatalf("stray value: %v", err)
+	}
+	scopeOf := func(id string) string {
 		t.Helper()
-		row, err := gen.New(st.Pool()).GetSecretValue(ctx, org.Meta.ID)
+		row, err := gen.New(st.Pool()).GetSecretValue(ctx, id)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return row.Scope.String
 	}
+	scope := func() string { t.Helper(); return scopeOf(org.Meta.ID) }
 	if got := scope(); got != stored.ScopeOrganization {
 		t.Fatalf("value scope = %q, want organization", got)
 	}
@@ -71,6 +77,9 @@ func TestIntegration_OrganizationToSystemRoundTrip(t *testing.T) {
 	got, err := keys.Get(ctx, org.Meta.ID)
 	if err != nil || got == nil || got.Meta.Owner != (meta.Owner{Kind: meta.OwnerSystem}) || got.Resolved != "sk-org" || scope() != stored.ScopeSystem {
 		t.Fatalf("after organization-to-system: %+v (%v), scope %q; want system-owned, sealed under system, opening to sk-org", got, err, scope())
+	}
+	if got := scopeOf(stray); got != stored.ScopeSystem {
+		t.Fatalf("stray value scope = %q, want system", got)
 	}
 	if err := runMigrate([]string{"down", "44"}); err != nil {
 		t.Fatalf("relay migrate down 44 after organization-to-system: %v", err)

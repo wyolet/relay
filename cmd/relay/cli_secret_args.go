@@ -9,7 +9,7 @@ import (
 )
 
 const secretUsage = "usage: relay secret status | migrate | downgrade | organization-to-system | rotate (--scope <scope> | --all) | rewrap --to <kek id> | destroy <data key id> [--force]\n" +
-	"  organization-to-system  with every relay server stopped, move the organization's host keys back to system, their values sealed under the system data key; run it before `relay migrate down 44`"
+	"  organization-to-system  with every relay server stopped, move the organization's host keys back to system and seal every value under the organization's data key under the system one; run it before `relay migrate down 44`"
 
 // secretCommand is a parsed `relay secret` invocation.
 type secretCommand struct {

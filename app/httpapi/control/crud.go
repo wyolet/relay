@@ -85,15 +85,12 @@ func refuseTenantOwner(singular string, o meta.Owner) error {
 	return huma.Error400BadRequest(fmt.Sprintf("%s is shared catalog data and cannot be owned by a %s; omit metadata.owner", singular, o.Kind))
 }
 
-// globalScopeOwnerKinds are the kinds whose global row is owned by the global
-// scope, which bodies written before it was named organization call system.
-var globalScopeOwnerKinds = map[string]bool{"team": true, "group": true, "role-binding": true, "policy-binding": true}
-
 // readSystemAsGlobal reads a system owner as the organization on the kinds
-// whose owner names the global scope.
-func readSystemAsGlobal(singular string, o *meta.Owner) {
-	if globalScopeOwnerKinds[singular] {
-		*o = o.AsGlobalScope()
+// whose system rows moved there (authz.SystemMeansOrganization); stored is the
+// owner of the row being written, empty on create.
+func readSystemAsGlobal(singular string, o *meta.Owner, stored meta.Owner) {
+	if o.Kind == meta.OwnerSystem && authz.SystemMeansOrganization(singular, stored) {
+		*o = meta.Global
 	}
 }
 
@@ -361,7 +358,7 @@ func registerKind[T any](
 			}
 			// system is reserved for seed paths; where it names the global scope
 			// it is read as the organization.
-			readSystemAsGlobal(singular, &m.Owner)
+			readSystemAsGlobal(singular, &m.Owner, meta.Owner{})
 			if m.Owner.Kind == meta.OwnerSystem {
 				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 			}
@@ -454,7 +451,7 @@ func registerKind[T any](
 		if mergeUpdate != nil {
 			mergeUpdate(existing, v)
 		}
-		readSystemAsGlobal(singular, &m.Owner)
+		readSystemAsGlobal(singular, &m.Owner, metaOf(existing).Owner)
 		// An omitted owner, or the stored kind without an id, keeps the stored
 		// owner: a body echoing {kind: user} must not chown a row to its editor.
 		if stored := metaOf(existing).Owner; m.Owner == (meta.Owner{}) || (m.Owner.Kind == stored.Kind && (m.Owner.ID == "" || m.Owner.ID == stored.ID)) {

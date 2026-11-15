@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +35,6 @@ func TestOrganizationOwnerByMode(t *testing.T) {
 		notAdmin  = "an organization-owned policy requires an admin"
 		orgEdit   = "policy is owned by the organization: only an admin may edit it"
 		orgDelete = "policy is owned by the organization: only an admin may delete it"
-		reserved  = "owner.kind=system is reserved for seed; omit owner.kind on create"
 		byID      = "/policies/by-id/"
 	)
 	type outcome struct {
@@ -52,7 +52,10 @@ func TestOrganizationOwnerByMode(t *testing.T) {
 		{"admin creates", "root", "POST", "/policies", orgBody, ok(201), ok(201)},
 		{"admin token creates", "token", "POST", "/policies", orgBody, ok(201), ok(201)},
 		{"a user creates", "alice", "POST", "/policies", orgBody, outcome{403, notAdmin}, outcome{403, notAdmin}},
-		{"system stays reserved", "root", "POST", "/policies", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, outcome{400, reserved}, outcome{400, reserved}},
+		// A body from before the organization owner: system names it, for an admin alone.
+		{"system names the organization", "root", "POST", "/policies", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, ok(201), ok(201)},
+		{"a user's system body", "alice", "POST", "/policies", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, outcome{403, notAdmin}, outcome{403, notAdmin}},
+		{"an admin's system body keeps an organization row", "root", "PUT", byID + orgRowID, `{"metadata":{"name":"org-row","owner":{"kind":"system"}}}`, ok(200), ok(200)},
 
 		{"admin gets", "root", "GET", "/policies/" + orgRowID, "", ok(200), ok(200)},
 		{"a user gets", "alice", "GET", "/policies/" + orgRowID, "", ok(200), hidden},
@@ -83,7 +86,7 @@ func TestOrganizationOwnerByMode(t *testing.T) {
 				if w.Code != want.status {
 					t.Fatalf("status = %d, want %d: %s", w.Code, want.status, w.Body)
 				}
-				if tc.method == "POST" || (tc.method == "PUT" && tc.body == intoOrg) {
+				if tc.method == "POST" || (tc.method == "PUT" && strings.Contains(tc.body, `"owner"`)) {
 					if got := decodeMeta(t, w, want.status); got.Owner != (meta.Owner{Kind: meta.OwnerOrganization}) {
 						t.Fatalf("owner = %+v, want the organization", got.Owner)
 					}

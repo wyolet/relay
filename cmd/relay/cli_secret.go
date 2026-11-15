@@ -48,7 +48,7 @@ func runSecret(args []string) error {
 		return printJSON(status)
 	}
 	if cmd.name == "organization-to-system" {
-		n, err := organizationToSystem(ctx, hostkey.NewStore(st.Pool(), sec.Registry, sec.Stored))
+		n, err := organizationToSystem(ctx, hostkey.NewStore(st.Pool(), sec.Registry, sec.Stored), sec.Stored)
 		rows := []audit.Row{secretAuditRow("secret-keys.organization-to-system", "", rowCount(n), err)}
 		return errors.Join(err, writeSecretAudit(ctx, st.Pool(), cmd, rows))
 	}
@@ -56,8 +56,8 @@ func runSecret(args []string) error {
 	return errors.Join(err, writeSecretAudit(ctx, st.Pool(), cmd, rows))
 }
 
-// organizationToSystem moves every organization-owned host key back to system, its stored value sealed again under the system data key, so schema 45 can be rolled back. Keys it cannot move are listed in the error and keep the rollback refused.
-func organizationToSystem(ctx context.Context, keys *hostkey.Store) (int, error) {
+// organizationToSystem moves every organization-owned host key back to system, then seals every value still under the organization's data key under the system one, whatever owns it, so schema 45 can be rolled back. Keys and values it cannot move are listed in the error and keep the rollback refused.
+func organizationToSystem(ctx context.Context, keys *hostkey.Store, values *stored.Backend) (int, error) {
 	all, err := keys.List(ctx)
 	if err != nil {
 		return 0, err
@@ -75,8 +75,15 @@ func organizationToSystem(ctx context.Context, keys *hostkey.Store) (int, error)
 		moved++
 	}
 	fmt.Printf("moved %d host keys from the organization to system\n", moved)
+	resealed, resealErr := values.ResealScope(ctx, stored.ScopeOrganization, stored.ScopeSystem)
+	if resealed > 0 {
+		fmt.Printf("sealed %d more stored values under the system data key\n", resealed)
+	}
 	if len(failed) > 0 {
-		return moved, fmt.Errorf("%d host keys left with the organization: %v", len(failed), failed)
+		resealErr = errors.Join(fmt.Errorf("%d host keys left with the organization: %v", len(failed), failed), resealErr)
+	}
+	if resealErr != nil {
+		return moved, resealErr
 	}
 	fmt.Println("schema 45 can now be rolled back: relay migrate down 44")
 	return moved, nil

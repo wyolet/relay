@@ -63,6 +63,16 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		// A declared row is owned by apply, so it is not hand-edited.
 		m.Dirty = false
 		shared := authz.SharedCatalogKind(route.Singular)
+		// A document written before the organization owner names the moved rows system; the catalog seed keeps its own owners.
+		if m.Owner.Kind == meta.OwnerSystem && !b.opts.CatalogSeed {
+			var stored meta.Owner
+			if prev, ok := existing[name]; ok {
+				stored = k.Meta(prev).Owner
+			}
+			if authz.SystemMeansOrganization(route.Singular, stored) {
+				m.Owner = meta.Global
+			}
+		}
 		switch {
 		case shared && m.Owner == (meta.Owner{Kind: meta.OwnerUser}):
 			// Catalog documents written before the shared-kind rule use an
@@ -72,7 +82,7 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		case shared && m.Owner.Tenant():
 			return &InvalidError{Kind: k.Kind, Name: name, Err: fmt.Errorf("%s is shared catalog data and cannot be owned by a %s", route.Singular, m.Owner.Kind)}
 		case m.Owner.Kind == meta.OwnerOrganization && !authz.OrganizationKind(route.Singular):
-			return &InvalidError{Kind: k.Kind, Name: name, Err: fmt.Errorf("%s cannot be owned by the organization; only policies, rate limits, budgets and pools can", route.Singular)}
+			return &InvalidError{Kind: k.Kind, Name: name, Err: fmt.Errorf("%s cannot be owned by the organization", route.Singular)}
 		case m.Owner.Kind == meta.OwnerUser && m.Owner.ID == "":
 			// A user owner with no id names nobody; resolve it the way CRUD
 			// create does. Cannot fail: only a supplied id is checked.

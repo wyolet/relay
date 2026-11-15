@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 
@@ -95,26 +96,29 @@ func systemRateLimit(d manifest.Document) (*ratelimit.RateLimit, error) {
 	return rl, nil
 }
 
-// CreateMissingSystemRateLimits writes each definition whose name has no row and returns the names it created. A row that exists is never written, whoever owns it and whatever it holds, so an operator's edit or disable survives every boot.
+// CreateMissingSystemRateLimits writes each definition whose name has no row and returns the names it created. A row that exists keeps what it holds, so an operator's edit or disable survives every boot. One exception: a row of a built-in name the organization owns was moved there by a binary that did not ship that name, and goes back to system unless an operator edited it since (then it is logged and left alone), since the relay looks its limits up as a system row.
 func CreateMissingSystemRateLimits(ctx context.Context, store systemRateLimitStore, defs []*ratelimit.RateLimit) ([]string, error) {
 	if len(defs) == 0 {
 		return nil, nil
 	}
-	stored, err := storedRateLimitNames(ctx, store)
+	stored, err := storedRateLimits(ctx, store)
 	if err != nil {
 		return nil, err
 	}
 	var created []string
 	for _, def := range defs {
-		if stored[def.Meta.Name] {
+		if row, ok := stored[def.Meta.Name]; ok {
+			if err := takeBackBuiltin(ctx, store, row); err != nil {
+				return created, err
+			}
 			continue
 		}
 		row := *def
 		row.Meta.ID = meta.NewID()
 		if err := store.Upsert(ctx, &row); err != nil {
 			// Names are unique, so a writer that created the same row since the list makes this insert fail. That row is the one to keep.
-			now, listErr := storedRateLimitNames(ctx, store)
-			if listErr != nil || !now[def.Meta.Name] {
+			now, listErr := storedRateLimits(ctx, store)
+			if _, ok := now[def.Meta.Name]; listErr != nil || !ok {
 				return created, fmt.Errorf("system rate limits: create %q: %w", def.Meta.Name, err)
 			}
 			continue
@@ -124,14 +128,32 @@ func CreateMissingSystemRateLimits(ctx context.Context, store systemRateLimitSto
 	return created, nil
 }
 
-func storedRateLimitNames(ctx context.Context, store systemRateLimitStore) (map[string]bool, error) {
+// takeBackBuiltin returns an organization row of a built-in name to system, through Upsert at the version just read; an edited one stays and is logged.
+func takeBackBuiltin(ctx context.Context, store systemRateLimitStore, row *ratelimit.RateLimit) error {
+	if row.Meta.Owner.Kind != meta.OwnerOrganization {
+		return nil
+	}
+	if row.Meta.Dirty {
+		slog.Warn("system rate limits: an edited organization rate limit carries a built-in name; left with the organization, so the relay does not apply it as the built-in",
+			"name", row.Meta.Name, "id", row.Meta.ID)
+		return nil
+	}
+	row.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem}
+	if err := store.Upsert(ctx, row); err != nil {
+		return fmt.Errorf("system rate limits: take back %q: %w", row.Meta.Name, err)
+	}
+	slog.Info("system rate limits: built-in rate limit taken back from the organization", "name", row.Meta.Name)
+	return nil
+}
+
+func storedRateLimits(ctx context.Context, store systemRateLimitStore) (map[string]*ratelimit.RateLimit, error) {
 	rows, err := store.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("system rate limits: %w", err)
 	}
-	names := make(map[string]bool, len(rows))
+	byName := make(map[string]*ratelimit.RateLimit, len(rows))
 	for _, r := range rows {
-		names[r.Meta.Name] = true
+		byName[r.Meta.Name] = r
 	}
-	return names, nil
+	return byName, nil
 }

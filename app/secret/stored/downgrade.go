@@ -59,6 +59,54 @@ func (s *Backend) Downgrade(ctx context.Context, masterKey []byte) (int, error) 
 	return done, nil
 }
 
+// ResealScope seals every value stored under scope from again under scope to, each in a transaction of its own that decrypts the new bytes before it commits (Rescope). It reaches every such row, whatever owns it, so a value no host key points at cannot keep a schema rollback refused. Rows it cannot move are listed in the error and keep their scope.
+func (s *Backend) ResealScope(ctx context.Context, from, to string) (int, error) {
+	done := 0
+	var failed []string
+	err := storage.WithAdvisoryLock(ctx, s.keys.pool, rewriterLock, func(ctx context.Context) error {
+		after := ""
+		for {
+			rows, err := s.q.ListSealedSecretValues(ctx, gen.ListSealedSecretValuesParams{After: after, MaxRows: rewriteBatch})
+			if err != nil {
+				return err
+			}
+			if len(rows) == 0 {
+				return nil
+			}
+			for _, r := range rows {
+				after = r.ID
+				if r.Scope.String != from {
+					continue
+				}
+				if err := s.rescopeInTx(ctx, r.ID, to); err != nil {
+					failed = append(failed, fmt.Sprintf("%s: %v", r.ID, err))
+					continue
+				}
+				done++
+			}
+		}
+	})
+	if err != nil {
+		return done, err
+	}
+	if len(failed) > 0 {
+		return done, fmt.Errorf("secret: %d stored secrets left under scope %s: %v", len(failed), from, failed)
+	}
+	return done, nil
+}
+
+func (s *Backend) rescopeInTx(ctx context.Context, id, scope string) error {
+	tx, err := s.keys.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := s.WithDB(tx).Rescope(ctx, id, scope); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // SealedRows counts the stored secrets a relay from before the key ring cannot read (sealed, or without a nonce), the same rows migration 34's down refuses; 0 on a schema that predates the key ring.
 func (s *Backend) SealedRows(ctx context.Context) (int64, error) {
 	n, err := s.q.CountSealedSecretValues(ctx)

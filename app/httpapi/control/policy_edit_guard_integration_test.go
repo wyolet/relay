@@ -322,11 +322,11 @@ func TestPolicyDuplicate(t *testing.T) {
 		t.Fatalf("default copy metadata = %+v", mine.Meta)
 	}
 
-	// The owner rules of a create: erin views team one, so she reads its policy but may not create one there; nobody names the system or another user; a source the caller may not read is not found.
+	// The owner rules of a create: erin views team one, so she reads its policy but may not create one there; system names the organization, which takes an admin; nobody names another user; a source the caller may not read is not found.
 	rec = w.send("erin", http.MethodPost, "/policies/"+w.polA.Meta.ID+"/duplicate", `{"owner":{"kind":"team","id":"`+teamOne.ID+`"}}`)
 	wantStatus(t, rec, http.StatusForbidden)
 	rec = w.send("dave", http.MethodPost, "/policies/tier/duplicate", `{"owner":{"kind":"system"}}`)
-	wantStatus(t, rec, http.StatusBadRequest)
+	wantStatus(t, rec, http.StatusForbidden)
 	rec = w.send("dave", http.MethodPost, "/policies/tier/duplicate", `{"owner":{"kind":"user","id":"`+w.users["alice"]+`"}}`)
 	wantStatus(t, rec, http.StatusBadRequest)
 	rec = w.send("carol", http.MethodPost, "/policies/"+w.polA.Meta.ID+"/duplicate", "")

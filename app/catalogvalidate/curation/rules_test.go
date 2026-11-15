@@ -14,7 +14,7 @@ func TestRuleNames(t *testing.T) {
 	for _, r := range catalogvalidate.ListRules(Rules) {
 		got = append(got, r.Name)
 	}
-	want := []string{"host-has-tier-policy", "pricing-target-must-bind-to-host", "provider-icon-set"}
+	want := []string{"host-has-tier-policy", "host-owned-limits", "pricing-target-must-bind-to-host", "provider-icon-set"}
 	if len(got) != len(want) {
 		t.Fatalf("rules = %v, want %v", got, want)
 	}

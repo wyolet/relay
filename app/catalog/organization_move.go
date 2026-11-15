@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
@@ -43,37 +41,27 @@ func runOrganizationMove(ctx context.Context, stores *Stores, opts BootstrapOpti
 		slog.Error("organization move: pass stopped; the rows it had not reached stay system-owned", "err", err)
 	}
 	if res != nil && (len(res.Moved) > 0 || len(res.Failed) > 0) {
-		slog.Info("organization move: moved system-owned rows to the organization", "moved", res.Moved, "kept_as_catalog", res.Kept, "failed", res.Failed)
+		slog.Info("organization move: moved system-owned rows to the organization", "moved", res.Moved, "kept_built_in", res.Kept, "failed", res.Failed)
 	}
 }
 
-// moveToOrganization moves the deployment's rows still owned by system to the organization, after the schema migration moved every row whose owner needs no catalog to decide: operator policies, rate limits, budgets and pools (a system row of these kinds the catalog shipped, or a system rate limit the binary ships, stays), and host keys, whose stored value is sealed again under the organization's data key. Each row moves on its own, through its store's Upsert at the version just read, so a row edited meanwhile or a value that does not open is left as it was. Running it again moves nothing more.
+// moveToOrganization moves the deployment's rows still owned by system to the organization, after the schema migration moved every row it could decide on alone: every system policy, budget and pool, every system rate limit but the built-ins this binary ships, and host keys, whose stored value is sealed again under the organization's data key. The catalog ships none of these as system rows (its policies and rate limits are host-owned; catalogvalidate refuses a system one), so no tree is needed to tell them apart, and a moved row loses its detach mark. Each row moves on its own, through its store's Upsert at the version just read, so a row edited meanwhile or a value that does not open is left as it was. Running it again moves nothing more.
 func moveToOrganization(ctx context.Context, stores *Stores, opts BootstrapOptions) (*moveCounts, error) {
 	res := &moveCounts{Moved: map[string]int{}, Kept: map[string]int{}, Failed: map[string]int{}}
 	builtin := map[string]bool{}
 	for _, rl := range opts.SystemRateLimits {
 		builtin[rl.Meta.Name] = true
 	}
-	shipped := &catalogNames{dir: opts.AutoSeedDir}
-	keep := func(kind string, m *meta.Metadata) (bool, error) {
-		if m.CatalogDetachedAt != nil {
-			return true, nil
-		}
-		return shipped.declares(kind, m.Name)
-	}
-
+	none := func(*meta.Metadata) bool { return false }
 	err := errors.Join(
-		moveRows(ctx, res, "Policy", stores.Policy.List, func(p *policy.Policy) *meta.Metadata { return &p.Meta }, stores.Policy.Upsert, keep),
+		moveRows(ctx, res, "Policy", stores.Policy.List, func(p *policy.Policy) *meta.Metadata { return &p.Meta }, stores.Policy.Upsert, none),
 		moveRows(ctx, res, "RateLimit", stores.RateLimit.List, func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta }, stores.RateLimit.Upsert,
-			func(kind string, m *meta.Metadata) (bool, error) {
+			func(m *meta.Metadata) bool {
 				// Without the binary's definitions a built-in row cannot be told apart, and moving one would stop its limit.
-				if len(builtin) == 0 || builtin[m.Name] {
-					return true, nil
-				}
-				return keep(kind, m)
+				return len(builtin) == 0 || builtin[m.Name]
 			}),
-		moveRows(ctx, res, "Budget", stores.Budget.List, func(b *budget.Budget) *meta.Metadata { return &b.Meta }, stores.Budget.Upsert, keep),
-		moveRows(ctx, res, "Pool", stores.Pool.List, func(p *pool.Pool) *meta.Metadata { return &p.Meta }, stores.Pool.Upsert, keep),
+		moveRows(ctx, res, "Budget", stores.Budget.List, func(b *budget.Budget) *meta.Metadata { return &b.Meta }, stores.Budget.Upsert, none),
+		moveRows(ctx, res, "Pool", stores.Pool.List, func(p *pool.Pool) *meta.Metadata { return &p.Meta }, stores.Pool.Upsert, none),
 	)
 	if err != nil {
 		return res, err
@@ -84,7 +72,7 @@ func moveToOrganization(ctx context.Context, stores *Stores, opts BootstrapOptio
 // moveRows moves every system-owned row of one kind that keep does not hold back.
 func moveRows[T any](ctx context.Context, res *moveCounts, kind string,
 	list func(context.Context) ([]*T, error), metaOf func(*T) *meta.Metadata,
-	upsert func(context.Context, *T) error, keep func(string, *meta.Metadata) (bool, error),
+	upsert func(context.Context, *T) error, keep func(*meta.Metadata) bool,
 ) error {
 	rows, err := list(ctx)
 	if err != nil {
@@ -95,15 +83,11 @@ func moveRows[T any](ctx context.Context, res *moveCounts, kind string,
 		if m.Owner.Kind != meta.OwnerSystem {
 			continue
 		}
-		held, err := keep(kind, m)
-		if err != nil {
-			return err
-		}
-		if held {
+		if keep(m) {
 			res.count(res.Kept, kind)
 			continue
 		}
-		m.Owner = meta.Global
+		m.Owner, m.CatalogDetachedAt = meta.Global, nil
 		if err := upsert(ctx, row); err != nil {
 			res.count(res.Failed, kind)
 			slog.Error("organization move: row left system-owned", "kind", kind, "id", m.ID, "name", m.Name, "err", err)
@@ -137,37 +121,4 @@ func moveHostKeys(ctx context.Context, res *moveCounts, stores *Stores) error {
 		res.count(res.Moved, "HostKey")
 	}
 	return nil
-}
-
-// catalogNames is the names the catalog tree under dir declares, per kind, read on first use. With no tree the deployment seeds no catalog, so nothing is declared.
-type catalogNames struct {
-	dir    string
-	loaded bool
-	names  map[string]map[string]bool
-}
-
-func (c *catalogNames) declares(kind, name string) (bool, error) {
-	if !c.loaded {
-		c.loaded = true
-		if c.dir == "" {
-			return false, nil
-		}
-		if _, err := os.Stat(c.dir); err != nil {
-			return false, nil
-		}
-		docs, err := manifest.LoadDir(c.dir)
-		if err != nil {
-			return false, fmt.Errorf("read catalog tree %s: %w", c.dir, err)
-		}
-		c.names = map[string]map[string]bool{}
-		for _, d := range docs {
-			if m := d.Meta(); m != nil {
-				if c.names[d.Kind()] == nil {
-					c.names[d.Kind()] = map[string]bool{}
-				}
-				c.names[d.Kind()][m.Name] = true
-			}
-		}
-	}
-	return c.names[kind][name], nil
 }
