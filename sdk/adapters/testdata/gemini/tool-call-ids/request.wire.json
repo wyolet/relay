@@ -12,6 +12,7 @@
       "role": "model",
       "parts": [
         {
+          "thoughtSignature": "skip_thought_signature_validator",
           "functionCall": {
             "id": "fc-lima-7q2",
             "name": "get_weather",

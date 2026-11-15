@@ -7,6 +7,8 @@ import (
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
+const skipThoughtSignature = "skip_thought_signature_validator"
+
 // canonicalItemsToGemini converts canonical []v1.Item to Gemini contents.
 // System/developer text from LEADING items is returned separately for
 // systemInstruction; positional system items stay in contents as
@@ -53,6 +55,10 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 				p.ThoughtSignature = sig
 			}
 			parts = append(parts, p)
+		}
+		// Gemini 3 rejects a step whose first functionCall has no thoughtSignature; the documented skip value covers calls with no Gemini signature.
+		if parts[0].ThoughtSignature == "" {
+			parts[0].ThoughtSignature = skipThoughtSignature
 		}
 		contents = append(contents, geminiContent{Role: "model", Parts: parts})
 		pendingFCs = pendingFCs[:0]
