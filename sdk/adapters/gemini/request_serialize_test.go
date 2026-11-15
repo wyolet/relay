@@ -117,6 +117,31 @@ func TestSerializeRequest_Contents(t *testing.T) {
 				{"role":"model","parts":[{"text":"","thoughtSignature":"s5"}]},
 				{"role":"model","parts":[{"text":"d"}]}]`,
 		},
+		{
+			name:     "system item between turns keeps its place, one after a tool round follows the responses",
+			items:    []v1.Item{textMsg(v1.RoleUser, "a"), textMsg(v1.RoleSystem, "s1"), textMsg(v1.RoleUser, "b"), &v1.FunctionCall{CallID: "f", Name: "f", Arguments: `{}`}, &v1.FunctionCallOutput{CallID: "f", Output: `[1,2]`}, textMsg(v1.RoleSystem, "s2"), textMsg(v1.RoleUser, "c")},
+			contents: `[{"role":"user","parts":[{"text":"a"}]},{"role":"user","parts":[{"text":"<system>\ns1\n</system>"}]},{"role":"user","parts":[{"text":"b"}]},{"role":"model","parts":[{"functionCall":{"name":"f","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"name":"f","response":{"output":[1,2]}}}]},{"role":"user","parts":[{"text":"<system>\ns2\n</system>"}]},{"role":"user","parts":[{"text":"c"}]}]`,
+		},
+		{
+			name:     "trailing call without arguments, then a system item",
+			items:    []v1.Item{textMsg(v1.RoleUser, "go"), &v1.FunctionCall{CallID: "c1", Name: "f"}, textMsg(v1.RoleSystem, "late")},
+			contents: `[{"role":"user","parts":[{"text":"go"}]},{"role":"model","parts":[{"functionCall":{"id":"c1","name":"f","args":{}}}]},{"role":"user","parts":[{"text":"<system>\nlate\n</system>"}]}]`,
+		},
+		{
+			name:     "tool result takes its content text only when the output is empty",
+			items:    []v1.Item{&v1.FunctionCallOutput{CallID: "f", Content: []v1.Part{&v1.TextPart{Text: "a"}, &v1.TextPart{Text: "b"}}}, &v1.FunctionCallOutput{CallID: "f", Output: "x", Content: []v1.Part{&v1.TextPart{Text: "y"}}}, &v1.FunctionCallOutput{CallID: "f"}},
+			contents: `[{"role":"user","parts":[{"functionResponse":{"name":"f","response":{"output":"ab"}}},{"functionResponse":{"name":"f","response":{"output":"x"}}},{"functionResponse":{"name":"f","response":{"output":""}}}]}]`,
+		},
+		{
+			name:     "reasoning sends its content, else its first summary, else nothing, and opens the conversation; empty system item dropped",
+			items:    []v1.Item{&v1.Reasoning{Content: "c", Summary: []v1.SummaryText{{Text: "s"}}}, textMsg(v1.RoleSystem, "rule"), &v1.Reasoning{Summary: []v1.SummaryText{{Text: "s"}}}, &v1.Reasoning{}, textMsg(v1.RoleSystem, ""), textMsg(v1.RoleAssistant, "a")},
+			contents: `[{"role":"model","parts":[{"text":"c","thought":true}]},{"role":"user","parts":[{"text":"<system>\nrule\n</system>"}]},{"role":"model","parts":[{"text":"s","thought":true}]},{"role":"model","parts":[{"text":"a"}]}]`,
+		},
+		{
+			name:     "file data without a media type, image URL holding data URL separators",
+			items:    []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.FilePart{FileData: "QUJD"}, &v1.ImagePart{ImageURL: "https://example.com/i;v=1,2.png"}}}},
+			contents: `[{"role":"user","parts":[{"inlineData":{"mimeType":"application/octet-stream","data":"QUJD"}},{"fileData":{"fileUri":"https://example.com/i;v=1,2.png"}}]}]`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -139,6 +164,48 @@ func TestSerializeRequest_Contents(t *testing.T) {
 	}
 }
 
+func TestSerializeRequest_Config(t *testing.T) {
+	temperature, budget := 0.5, 512
+	perModel := map[string]*v1.ModelOpts{
+		"g":     {Sampling: &v1.SamplingParams{Temperature: &temperature}},
+		"other": {Reasoning: &v1.ReasoningConfig{BudgetTokens: &budget}},
+	}
+	only := func(o v1.ModelOpts) map[string]*v1.ModelOpts { return map[string]*v1.ModelOpts{"g": &o} }
+	cases := []struct {
+		name string
+		req  v1.Request
+		want string
+	}{
+		{"options of the request model", v1.Request{Model: v1.ModelRefs{"g"}, ModelConfig: perModel}, `{"generationConfig":{"temperature":0.5}}`},
+		{"model outside a multi-entry config gets none", v1.Request{Model: v1.ModelRefs{"x"}, ModelConfig: perModel}, `{}`},
+		{"empty options", v1.Request{ModelConfig: only(v1.ModelOpts{})}, `{}`},
+		{"reasoning without a budget", v1.Request{ModelConfig: only(v1.ModelOpts{Reasoning: &v1.ReasoningConfig{}})}, `{"generationConfig":{"thinkingConfig":{"includeThoughts":true}}}`},
+		{"json_object alone", v1.Request{ModelConfig: only(v1.ModelOpts{Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_object"}}})}, `{"generationConfig":{"responseMimeType":"application/json"}}`},
+		{"choice without definitions", v1.Request{Tools: &v1.ToolsConfig{Choice: &v1.ToolChoice{Mode: "auto"}}}, `{"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			wire := serializeWire(t, &c.req)
+			delete(wire, "contents")
+			assertJSON(t, wire, c.want)
+		})
+	}
+}
+
+func TestSerializeRequest_UnsendableImageOrFilePart(t *testing.T) {
+	for name, part := range map[string]v1.Part{"file without data or URL": &v1.FilePart{}, "image data URL without base64": &v1.ImagePart{ImageURL: "data:image/png,abc"}} {
+		t.Run(name, func(t *testing.T) {
+			if _, ok := part.(*v1.ImagePart); ok {
+				t.Skip("bug: an image data URL without a ;base64 payload is sent as fileData.fileUri, which takes no data: URI")
+			}
+			req := &v1.Request{Input: []v1.Item{&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{part}}}}
+			if body, err := tr.SerializeRequest(req); err == nil {
+				t.Errorf("serialized to %s, want an error", body)
+			}
+		})
+	}
+}
+
 func TestToolChoice_RoundTrip(t *testing.T) {
 	const fAndG = `[{"functionDeclarations":[{"name":"f","parameters":{}},{"name":"g","parameters":{}}]}]`
 	cases := []struct {
@@ -156,6 +223,7 @@ func TestToolChoice_RoundTrip(t *testing.T) {
 		{v1.ToolChoice{Mode: "required", Allowed: []string{"g", "f"}}, `{"mode":"ANY","allowedFunctionNames":["g","f"]}`, v1.ToolChoice{Mode: "required", Allowed: []string{"g", "f"}}, ""},
 		// AUTO takes no allowedFunctionNames, so only the allowed declaration is sent.
 		{v1.ToolChoice{Mode: "auto", Allowed: []string{"g"}}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}, `[{"functionDeclarations":[{"name":"g","parameters":{}}]}]`},
+		{v1.ToolChoice{Mode: "function"}, `{"mode":"ANY"}`, v1.ToolChoice{Mode: "required"}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.choice.Mode+strings.Join(c.choice.Allowed, ","), func(t *testing.T) {

@@ -94,6 +94,16 @@ func TestParseRequest_Contents(t *testing.T) {
 			  {"type":"message","role":"assistant","content":[{"type":"output_text","text":"c"}],"provider_data":{"emptyTextPart":true,"thoughtSignature":"s4"}},
 			  {"type":"reasoning","provider_data":{"emptyTextPart":true,"thoughtSignature":"s5"}}]`,
 		},
+		{
+			"marker beside other parts stays user text, empty turn skipped",
+			`[{"role":"user","parts":[{"text":` + string(marker) + `},{"text":"more"}]},{"role":"user","parts":[]},{"role":"user","parts":[{"functionResponse":{"name":"f","response":{"ok":true}}},{"text":` + string(marker) + `}]}]`,
+			`[{"type":"message","role":"user","content":[{"type":"input_text","text":` + string(marker) + `},{"type":"input_text","text":"more"}]},{"type":"function_call_output","call_id":"f","output":"{\"ok\":true}"},{"type":"message","role":"user","content":[{"type":"input_text","text":` + string(marker) + `}]}]`,
+		},
+		{
+			"model thoughts read as reasoning, empty text skipped",
+			`[{"role":"model","parts":[{"text":"plan","thought":true},{"text":""},{"text":"more","thought":true,"thoughtSignature":"sig"},{"text":"done"}]}]`,
+			`[{"type":"reasoning","summary":[{"text":"plan"}],"content":"plan"},{"type":"reasoning","summary":[{"text":"more"}],"content":"more","provider_data":{"thoughtSignature":"sig"}},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -148,11 +158,36 @@ func TestParseRequest_Config(t *testing.T) {
 			`{"model":null,"input":null,"model_config":{"*":{"sampling":{"top_p":0.9},"reasoning":{"budget_tokens":512},"output":{"format":{"type":"json_object"}}}},
 			  "tools":{"definitions":[{"type":"function","name":"f","parameters":{}}],"choice":{"type":"function","name":"f"}}}`,
 		},
+		{
+			"null schema is json_object, negative budget sets no reasoning",
+			`{"generationConfig":{"responseMimeType":"application/json","responseSchema":null,"thinkingConfig":{"thinkingBudget":-1}}}`,
+			`{"model":null,"input":null,"model_config":{"*":{"output":{"format":{"type":"json_object"}}}}}`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			assertJSON(t, parseRequest(t, c.body), c.want)
 		})
+	}
+}
+
+func TestParseRequest_SingleSamplingField(t *testing.T) {
+	for wire, canonical := range map[string]string{
+		`"temperature":0.5`: `"temperature":0.5`, `"topP":0.5`: `"top_p":0.5`, `"topK":5`: `"top_k":5`,
+		`"maxOutputTokens":5`: `"max_tokens":5`, `"stopSequences":["x"]`: `"stop":["x"]`, `"seed":5`: `"seed":5`,
+		`"frequencyPenalty":0.5`: `"frequency_penalty":0.5`, `"presencePenalty":0.5`: `"presence_penalty":0.5`,
+	} {
+		t.Run(wire, func(t *testing.T) {
+			assertJSON(t, parseRequest(t, `{"generationConfig":{`+wire+`}}`), `{"model":null,"input":null,"model_config":{"*":{"sampling":{`+canonical+`}}}}`)
+		})
+	}
+}
+
+func TestParseRequest_MalformedMemberReturnsError(t *testing.T) {
+	for _, body := range []string{`{"generationConfig":[]}`, `{"tools":["x"]}`, `{"contents":["x"]}`} {
+		if req, err := tr.ParseRequest([]byte(body)); err == nil {
+			t.Errorf("%s parsed to %+v, want an error", body, req)
+		}
 	}
 }
 

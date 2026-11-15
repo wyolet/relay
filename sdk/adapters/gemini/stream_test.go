@@ -264,6 +264,26 @@ func TestToCanonicalStream_BlockedPromptTerminates(t *testing.T) {
 	assertJSON(t, s.done, `{"id":"`+s.done.ID+`","status":"incomplete","finish_reason":"content_filter","usage":{"input":7},"incomplete_details":{"reason":"content_filter"}}`)
 }
 
+func TestToCanonicalStream_UnsignedChunkKeepsEarlierThoughtSignature(t *testing.T) {
+	s := toCanonical(t,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"a","thought":true,"thoughtSignature":"sig"}]},"index":0}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"b","thought":true}]},"finishReason":"STOP","index":0}]}`,
+	)
+	assertJSON(t, s.items, `[{"type":"reasoning","id":"rs_0","summary":[{"text":"ab"}],"content":"ab","status":"completed","provider_data":{"thoughtSignature":"sig"}}]`)
+}
+
+func TestToCanonicalStream_FramesWithoutContentThenCallWithoutArgs(t *testing.T) {
+	s := toCanonical(t,
+		`{"usageMetadata":{"promptTokenCount":7}}`,
+		`{"candidates":[{"index":0}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"f"}}]},"finishReason":"STOP"}]}`,
+	)
+	if want := []string{v1.EventGenerationCreated, v1.EventItemStarted, v1.EventItemDelta, v1.EventItemCompleted, v1.EventGenerationCompleted}; !reflect.DeepEqual(s.events, want) {
+		t.Errorf("events %v, want %v", s.events, want)
+	}
+	assertJSON(t, s.items, `[{"type":"function_call","id":"fc_0","call_id":"f__relay_call_0","name":"f","arguments":"{}","status":"completed"}]`)
+}
+
 func TestToCanonicalStream_ErrorFrameSurfaces(t *testing.T) {
 	s := toCanonical(t,
 		`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hel"}]},"index":0}]}`,
@@ -328,6 +348,20 @@ func TestFromCanonicalStream_FunctionArgsBuffered(t *testing.T) {
 		t.Errorf("events before item.completed emitted %q", got)
 	}
 	assertJSON(t, geminiData(t, out[4]), `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"search","args":{"q":"hi"}}}]},"index":0}],"modelVersion":"m","responseId":"r"}`)
+}
+
+func TestFromCanonicalStream_CompletionWithoutIDOrUsage(t *testing.T) {
+	ev := func(event, data string) v1.SSEFrame { return v1.SSEFrame{Event: event, Data: []byte(data)} }
+	out := fromCanonical(t,
+		ev(v1.EventGenerationCreated, `{"model":"m"}`),
+		ev("ping", `{}`),
+		ev(v1.EventItemDelta, `{"item_id":"x","kind":"audio","delta":"z"}`),
+		ev(v1.EventGenerationCompleted, `{"status":"completed","finish_reason":"stop"}`),
+	)
+	if got := strings.Join(out[:3], ""); got != "" {
+		t.Errorf("events before generation.completed emitted %q", got)
+	}
+	assertJSON(t, geminiData(t, out[3]), `{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP","index":0}],"modelVersion":"m"}`)
 }
 
 func TestFromCanonicalStream_ErrorEvent(t *testing.T) {
