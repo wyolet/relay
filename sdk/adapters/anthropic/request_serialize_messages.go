@@ -122,7 +122,12 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 							hasText = true
 						}
 					case *v1.ImagePart:
-						contentBlocks = append(contentBlocks, canonicalImageURLToAnthropicBlock(p.ImageURL))
+						b, err := canonicalImageURLToAnthropicBlock(p.ImageURL)
+						if err != nil {
+							toolResultErr = cmp.Or(toolResultErr, err)
+							continue
+						}
+						contentBlocks = append(contentBlocks, b)
 					case *v1.FilePart:
 						b, err := canonicalPartToAnthropicBlock(p)
 						if err != nil {
