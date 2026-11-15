@@ -196,6 +196,39 @@ func TestToCanonicalStream_ThoughtSignatureOnLaterChunk(t *testing.T) {
 	assertJSON(t, s.items, `[{"type":"reasoning","id":"rs_0","summary":[{"text":"ab"}],"content":"ab","status":"completed","provider_data":{"thoughtSignature":"sig"}}]`)
 }
 
+// Gemini may stream a signature on a part with empty text; relay's own canonical→Gemini stream sends a reasoning signature that way too.
+func TestToCanonicalStream_ThoughtSignatureOnEmptyTextPart(t *testing.T) {
+	const thoughtA = `{"candidates":[{"content":{"role":"model","parts":[{"text":"a","thought":true}]},"index":0}]}`
+	const stop = `{"candidates":[{"finishReason":"STOP","index":0}]}`
+	signedA := `[{"type":"reasoning","id":"rs_0","summary":[{"text":"a"}],"content":"a","status":"completed","provider_data":{"thoughtSignature":"sig"}}]`
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		want   string
+	}{
+		{
+			name:   "empty thought part after the thought text",
+			frames: []string{thoughtA, `{"candidates":[{"content":{"role":"model","parts":[{"thought":true,"thoughtSignature":"sig"}]},"index":0}]}`, stop},
+			want:   signedA,
+		},
+		{
+			name:   "empty non-thought part while the thought is open",
+			frames: []string{thoughtA, `{"candidates":[{"content":{"role":"model","parts":[{"text":"","thoughtSignature":"sig"}]},"index":0}]}`, stop},
+			want:   signedA,
+		},
+		{
+			name:   "empty thought part with no thought text",
+			frames: []string{`{"candidates":[{"content":{"role":"model","parts":[{"text":"","thought":true,"thoughtSignature":"sig"}]},"finishReason":"STOP","index":0}]}`},
+			want:   `[{"type":"reasoning","id":"rs_0","summary":[{"text":""}],"status":"completed","provider_data":{"thoughtSignature":"sig"}}]`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := toCanonical(t, tc.frames...)
+			assertJSON(t, s.items, tc.want)
+		})
+	}
+}
+
 func TestToCanonicalStream_BlockedPromptTerminates(t *testing.T) {
 	s := toCanonical(t, `{"promptFeedback":{"blockReason":"SAFETY"},"usageMetadata":{"promptTokenCount":7,"totalTokenCount":7}}`)
 	if want := []string{v1.EventGenerationCreated, v1.EventGenerationCompleted}; !reflect.DeepEqual(s.events, want) {

@@ -174,8 +174,9 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 			// Function call arrives complete in one frame.
 			out = append(out, s.closeCurrentItem()...)
 
-		} else if p.Text != "" && p.Thought {
-			// Reasoning part.
+		} else if p.Thought && (p.Text != "" || p.ThoughtSignature != "") ||
+			p.Text == "" && p.ThoughtSignature != "" && s.currentItemType == v1.ItemTypeReasoning {
+			// Reasoning part, or an empty-text part carrying the open reasoning's signature.
 			if s.currentItemType != v1.ItemTypeReasoning {
 				out = append(out, s.closeCurrentItem()...)
 				idx := s.nextIndex
@@ -197,6 +198,9 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 			if p.ThoughtSignature != "" {
 				s.currentThoughtSig = p.ThoughtSignature
 			}
+			if p.Text == "" {
+				continue
+			}
 			s.thinkBuf.WriteString(p.Text)
 			deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 				ItemID: s.currentItemID,
@@ -208,6 +212,7 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 
 		} else if p.Text != "" {
 			// Text part.
+			// canonical: thoughtSignature on a non-thought part dropped when no thought is open (empty text included) — the Gemini serializers replay no Message.ProviderData, and Gemini does not enforce text-part signatures.
 			if s.currentItemType != v1.ItemTypeMessage {
 				out = append(out, s.closeCurrentItem()...)
 				idx := s.nextIndex
