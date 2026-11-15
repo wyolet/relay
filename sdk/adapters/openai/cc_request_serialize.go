@@ -206,6 +206,9 @@ type ccToolChoice struct {
 }
 
 func ccToolChoiceFromCanonical(c *v1.ToolChoice) (json.RawMessage, error) {
+	if hasAllowedList(c) {
+		return ccAllowedChoiceFromCanonical(c)
+	}
 	if c.Mode != "function" {
 		return json.Marshal(c)
 	}
@@ -217,6 +220,12 @@ func ccToolChoiceFromCanonical(c *v1.ToolChoice) (json.RawMessage, error) {
 // ccToolChoiceToCanonical reads the CC form; the flat form is accepted too
 // since lenient clients send it.
 func ccToolChoiceToCanonical(raw json.RawMessage) (*v1.ToolChoice, error) {
+	if len(raw) > 0 && raw[0] == '{' {
+		var w ccAllowedChoice
+		if err := json.Unmarshal(raw, &w); err == nil && w.Type == "allowed_tools" {
+			return ccAllowedChoiceToCanonical(&w)
+		}
+	}
 	choice := &v1.ToolChoice{}
 	if err := json.Unmarshal(raw, choice); err != nil {
 		return nil, err

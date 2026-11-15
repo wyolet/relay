@@ -87,7 +87,13 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 			}
 		}
 		tc.Parallel = req.ParallelToolCalls
-		if req.ToolChoice != nil {
+		if req.ToolChoice != nil && req.ToolChoice.Mode == "allowed_tools" {
+			choice, err := responsesAllowedChoiceToCanonical(req.ToolChoice.Raw)
+			if err != nil {
+				return nil, err
+			}
+			tc.Choice = choice
+		} else if req.ToolChoice != nil {
 			choice := &v1.ToolChoice{
 				Mode:         req.ToolChoice.Mode,
 				FunctionName: req.ToolChoice.FunctionName,
@@ -325,7 +331,13 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 			})
 		}
 		rreq.ParallelToolCalls = tc.Parallel
-		if tc.Choice != nil {
+		if tc.Choice != nil && hasAllowedList(tc.Choice) {
+			choice, err := responsesAllowedChoiceFromCanonical(tc.Choice, newResponsesCustomLowering(req))
+			if err != nil {
+				return nil, err
+			}
+			rreq.ToolChoice = choice
+		} else if tc.Choice != nil {
 			rreq.ToolChoice = &ResponsesToolChoice{
 				Mode:         tc.Choice.Mode,
 				FunctionName: tc.Choice.FunctionName,

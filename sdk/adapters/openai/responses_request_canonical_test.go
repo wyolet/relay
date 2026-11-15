@@ -57,6 +57,21 @@ func TestResponsesParseRequest(t *testing.T) {
 			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":{"definitions":[{"type":"function","name":"f","parameters":{}}],"choice":{"type":"function","name":"f"}},"output_mode":"sync"}`,
 		},
 		{
+			name: "allowed_tools tool choice",
+			body: `{"model":"gpt-5","input":"hi","tools":[{"type":"function","name":"f"},{"type":"function","name":"g"}],"tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"g"}]}}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":{"definitions":[{"type":"function","name":"f","parameters":{}},{"type":"function","name":"g","parameters":{}}],
+				"choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"g"}]}},"output_mode":"sync"}`,
+		},
+		{
+			// A custom tool is lowered onto a function tool, so its allowed entry names that function.
+			name: "allowed_tools tool choice naming a custom tool",
+			body: `{"model":"gpt-5","input":"hi","tools":[{"type":"custom","name":"c"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"custom","name":"c"}]}}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":{"definitions":[{"type":"function","name":"c",
+				"parameters":{"type":"object","properties":{"input":{"type":"string","description":"Free-form text input for this tool."}},"required":["input"]},
+				"provider_data":{"type":"custom","name":"c"}}],
+				"choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"c"}]}},"output_mode":"sync"}`,
+		},
+		{
 			// A hosted-tool item has no canonical form and drops; reasoning content parts concatenate as the stream's deltas do.
 			name: "input items",
 			body: `{"model":"gpt-5","input":[
@@ -98,6 +113,12 @@ func TestResponsesParseRequest_Rejected(t *testing.T) {
 		{"context_management", `{"model":"m","input":"hi","context_management":{"type":"auto"}}`, stateful("context_management")},
 		{"stored prompt", `{"model":"m","input":"hi","prompt":{"id":"pmpt_1","version":"2"}}`, stateful("prompt")},
 		{"unmodeled input part", audioInput, `input item: unsupported part type "input_audio"`},
+		{"allowed hosted tool", `{"model":"m","input":"hi","tools":[{"type":"function","name":"f"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"},{"type":"file_search"}]}}`,
+			`tool_choice allowed_tools: tools[1]: "file_search" entries not supported by the upstream API`},
+		{"allowed mcp server", `{"model":"m","input":"hi","tools":[{"type":"function","name":"f"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"mcp","server_label":"docs"}]}}`,
+			`tool_choice allowed_tools: tools[0]: "mcp" entries not supported by the upstream API`},
+		{"empty allowed list", `{"model":"m","input":"hi","tools":[{"type":"function","name":"f"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[]}}`,
+			"tool_choice allowed_tools: tools is empty"},
 		{"no model", `{"input":"hi"}`, "responses parse_request: model is required"},
 		{"no input", `{"model":"m"}`, "responses parse_request: input is required"},
 		{"not JSON", `{"model":`, "responses parse_request: invalid JSON: unexpected end of JSON input"},
@@ -205,6 +226,24 @@ func TestResponsesSerializeRequest(t *testing.T) {
 				{"type":"function","name":"f","parameters":{}},
 				{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}}],
 				"tool_choice":{"type":"file_search"},"parallel_tool_calls":true,` + tail + `,"prompt_cache_key":"k"}`,
+		},
+		{
+			// A tool lowered from custom is allowed under its custom type, as its definition goes out.
+			name: "allowed_tools tool choice",
+			req: &v1.Request{Model: v1.ModelRefs{"gpt-5"}, Input: []v1.Item{respUserText("hi")},
+				Tools: &v1.ToolsConfig{
+					Definitions: v1.Tools{
+						&v1.FunctionTool{Name: "f"},
+						&v1.FunctionTool{Name: "c", ProviderData: json.RawMessage(`{"type":"custom","name":"c"}`)},
+						&v1.FunctionTool{Name: "g"},
+					},
+					Choice: &v1.ToolChoice{Mode: "auto", Allowed: []string{"f", "c"}},
+				}},
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":[
+				{"type":"function","name":"f","parameters":{}},
+				{"type":"custom","name":"c"},
+				{"type":"function","name":"g","parameters":{}}],
+				"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"},{"type":"custom","name":"c"}]},` + tail + `}`,
 		},
 	}
 	for _, tc := range cases {
