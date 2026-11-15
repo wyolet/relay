@@ -121,17 +121,3 @@ func signItemParts(parts []geminiPart, start int, pd json.RawMessage) []geminiPa
 	}
 	return parts
 }
-
-// resolveModelOpts picks the ModelOpts for the given model name following the
-// fallback rules: exact key match → single-entry fallback → nil.
-func resolveModelOpts(modelConfig map[string]*v1.ModelOpts, model string) *v1.ModelOpts {
-	if o, ok := modelConfig[model]; ok {
-		return o
-	}
-	if len(modelConfig) == 1 {
-		for _, o := range modelConfig {
-			return o
-		}
-	}
-	return nil
-}

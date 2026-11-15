@@ -13,13 +13,11 @@ import (
 func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	out := &geminiRequest{}
 
-	// Resolve model opts: prefer entry keyed by req.Model[0], fall back to
-	// single entry when ModelConfig has exactly one key.
 	modelKey := ""
 	if len(req.Model) > 0 {
 		modelKey = req.Model[0]
 	}
-	opts := resolveModelOpts(req.ModelConfig, modelKey)
+	opts := req.ModelOptsFor(modelKey)
 
 	// canonical: User dropped — generateContent has no end-user identifier.
 	// canonical: Metadata dropped — generateContent takes no request metadata

@@ -390,32 +390,23 @@ func applyOutputDefaults(req *v1.Request, modelMaxOutput int) {
 }
 
 // effectiveModelOpts returns the *ModelOpts a vendor SerializeRequest will
-// resolve for req, mirroring the resolution every translator uses (entry keyed
-// by the model, else the sole entry). Creates one keyed by the model if none
-// exists. Caller guarantees len(ModelConfig) <= 1.
+// resolve for req (v1.Request.ModelOptsFor). Creates one keyed by the model if
+// none exists. Caller guarantees len(ModelConfig) <= 1.
 func effectiveModelOpts(req *v1.Request) *v1.ModelOpts {
 	key := ""
 	if len(req.Model) > 0 {
 		key = req.Model[0]
+	}
+	if o := req.ModelOptsFor(key); o != nil {
+		return o
 	}
 	if req.ModelConfig == nil {
 		req.ModelConfig = map[string]*v1.ModelOpts{}
 	}
 	// Parse keeps a JSON-null entry as a nil value; it is replaced in place so the
 	// serializer still resolves the entry that gets seeded.
-	if o, ok := req.ModelConfig[key]; ok {
-		if o == nil {
-			o = &v1.ModelOpts{}
-			req.ModelConfig[key] = o
-		}
-		return o
-	}
-	for k, o := range req.ModelConfig { // sole entry (key may differ from upstream name)
-		if o == nil {
-			o = &v1.ModelOpts{}
-			req.ModelConfig[k] = o
-		}
-		return o
+	for k := range req.ModelConfig {
+		key = k
 	}
 	o := &v1.ModelOpts{}
 	req.ModelConfig[key] = o

@@ -254,7 +254,7 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 		rreq.Stream = &t
 	}
 
-	opts := req.ModelConfig[model]
+	opts := req.ModelOptsFor(model)
 	if opts != nil {
 		if opts.Sampling != nil {
 			s := opts.Sampling
