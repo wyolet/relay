@@ -104,8 +104,17 @@ var responseCases = []struct {
 	{
 		name: "blocks with no canonical item take no output index",
 		dir:  parseOnly,
-		wire: respBody(`"content":[{"type":"thinking","thinking":""},{"type":"server_tool_use","id":"s1","name":"web_search"},{"type":"future"},{"type":"text","text":"x"}],"stop_reason":"end_turn"`),
+		wire: respBody(`"content":[{"type":"server_tool_use","id":"s1","name":"web_search"},{"type":"future"},{"type":"text","text":"x"}],"stop_reason":"end_turn"`),
 		resp: response(func(r *v1.Response) { r.Output = []v1.Item{outputText("msg_0", "x")} }),
+	},
+	{
+		// The stream numbers the block at its start, before it can know the block stays empty.
+		name: "empty unsigned thinking takes an output index like the stream",
+		dir:  parseOnly,
+		wire: respBody(`"content":[{"type":"thinking","thinking":""},{"type":"text","text":"x"}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			r.Output = []v1.Item{&v1.Reasoning{ID: "rs_0", Status: v1.StatusCompleted}, outputText("msg_1", "x")}
+		}),
 	},
 	{
 		name: "reasoning from another vendor",
