@@ -222,7 +222,7 @@ func TestCrossShapeStream(t *testing.T) {
 }
 
 const (
-	messagesJSONAnswer =`{"id":"msg_01","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"{\"answer\":\"Paris\"}"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`
+	messagesJSONAnswer = `{"id":"msg_01","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"{\"answer\":\"Paris\"}"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`
 	messagesJSONStream = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"model\":\"m\",\"usage\":{\"input_tokens\":10}}}\n\n" +
 		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"{\\\"answer\\\":\"}}\n\n" +
