@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -81,8 +82,10 @@ func TestResponsesSerializeResponse_Status(t *testing.T) {
 		{"stop", v1.Response{Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop}, `{"status":"completed","incomplete_details":null,"error":null}`},
 		{"tool calls", v1.Response{FinishReason: v1.FinishReasonToolCalls}, `{"status":"completed","incomplete_details":null,"error":null}`},
 		{"length", v1.Response{Status: v1.StatusIncomplete, FinishReason: v1.FinishReasonLength}, `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"error":null}`},
+		{"length with empty details", v1.Response{FinishReason: v1.FinishReasonLength, IncompleteDetails: &v1.IncompleteDetails{}}, `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"error":null}`},
 		{"length keeps the raw reason", v1.Response{FinishReason: v1.FinishReasonLength, IncompleteDetails: &v1.IncompleteDetails{Reason: "anthropic:max_tokens"}}, `{"status":"incomplete","incomplete_details":{"reason":"anthropic:max_tokens"},"error":null}`},
 		{"content filter", v1.Response{Status: v1.StatusCompleted, FinishReason: v1.FinishReasonContentFilter}, `{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"error":null}`},
+		{"content filter with empty details", v1.Response{FinishReason: v1.FinishReasonContentFilter, IncompleteDetails: &v1.IncompleteDetails{}}, `{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"error":null}`},
 		{"content filter keeps the raw reason", v1.Response{FinishReason: v1.FinishReasonContentFilter, IncompleteDetails: &v1.IncompleteDetails{Reason: "gemini:SAFETY"}}, `{"status":"incomplete","incomplete_details":{"reason":"gemini:SAFETY"},"error":null}`},
 		{"other", v1.Response{Status: v1.StatusIncomplete, FinishReason: v1.FinishReasonOther, IncompleteDetails: &v1.IncompleteDetails{Reason: "anthropic:new_reason"}}, `{"status":"incomplete","incomplete_details":{"reason":"anthropic:new_reason"},"error":null}`},
 		{"other without details", v1.Response{Status: v1.StatusCompleted, FinishReason: v1.FinishReasonOther}, `{"status":"incomplete","incomplete_details":null,"error":null}`},
@@ -108,18 +111,73 @@ func TestResponsesSerializeResponse_Status(t *testing.T) {
 	}
 }
 
-func TestResponsesSerializeResponse_EmptyOutput(t *testing.T) {
-	wire, err := ResponsesTranslator{}.SerializeResponse(&v1.Response{ID: "r", Model: "m", Status: v1.StatusFailed}, nil)
+// An empty response still carries the members the API requires: an output array and a creation time; empty usage is left out.
+func TestResponsesSerializeResponse_Empty(t *testing.T) {
+	before := time.Now().Unix()
+	wire, err := ResponsesTranslator{}.SerializeResponse(&v1.Response{ID: "r", Model: "m", Status: v1.StatusFailed, Usage: usage.Tokens{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	respJSONEq(t, respMember(t, wire, "output"), `[]`)
+	if u := respMember(t, wire, "usage"); u != nil {
+		t.Errorf("usage = %s, want none", u)
+	}
+	var created struct {
+		CreatedAt int64 `json:"created_at"`
+	}
+	if err := json.Unmarshal(wire, &created); err != nil || created.CreatedAt < before || created.CreatedAt > time.Now().Unix() {
+		t.Errorf("created_at = %d (%v), want the serialize time", created.CreatedAt, err)
+	}
+}
+
+// A refusal marks every assistant message's text, wherever the message sits; the request's top_p is echoed, and a nil request echoes nothing.
+func TestResponsesSerializeResponse_RefusalAfterAToolCall(t *testing.T) {
+	resp := &v1.Response{ID: "r", Model: "m", CreatedAt: 1, Status: v1.StatusCompleted, FinishReason: v1.FinishReasonRefusal, Output: []v1.Item{
+		&v1.FunctionCall{ID: "fc_1", CallID: "c1", Name: "f", Arguments: `{}`},
+		&v1.Message{ID: "msg_1", Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "no"}}},
+	}}
+	req := &v1.Request{Model: v1.ModelRefs{"m"}, ModelConfig: map[string]*v1.ModelOpts{"m": {Sampling: &v1.SamplingParams{TopP: respPtr(0.9)}}}}
+	wire, err := ResponsesTranslator{}.SerializeResponse(resp, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respJSONEq(t, respMember(t, wire, "output"), `[{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}"},
+		{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"refusal","refusal":"no"}]}]`)
+	respJSONEq(t, respMember(t, wire, "top_p"), `0.9`)
+	ResponsesEchoRequest(&ResponsesResponse{}, nil)
+}
+
+// Canonical raw annotations go back out verbatim, except a file_citation, which is rebuilt in its typed form.
+func TestResponsesSerializeResponse_RawAnnotations(t *testing.T) {
+	resp := &v1.Response{ID: "r", Model: "m", CreatedAt: 1, Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop, Output: []v1.Item{
+		&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "x", Annotations: []v1.Annotation{
+			&v1.RawAnnotation{Type: "file_citation", JSON: json.RawMessage(`{"file_id":"f1","index":2}`)},
+			&v1.RawAnnotation{Type: "container_file_citation", JSON: json.RawMessage(`{"type":"container_file_citation","container_id":"c"}`)},
+			&v1.RawAnnotation{Type: "file_path", JSON: json.RawMessage(`{"type":"file_path","file_id":"f2"}`)},
+			&v1.RawAnnotation{Type: "file_path"},
+		}}}},
+	}}
+	wire, err := ResponsesTranslator{}.SerializeResponse(resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respJSONEq(t, respMember(t, wire, "output"), `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","logprobs":[],"annotations":[
+		{"type":"file_citation","file_id":"f1","index":2},
+		{"type":"container_file_citation","container_id":"c"},
+		{"type":"file_path","file_id":"f2"},
+		{"type":"file_path"}]}]}]`)
 }
 
 // v1.RawAnnotation exists to carry annotation types canonical does not model.
 func TestResponsesParseResponse_UnmodeledAnnotation(t *testing.T) {
 	resp := respParseResponse(t, `{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c","file_id":"f"}]}]}]}`)
 	respJSONEq(t, resp.Output, `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c","file_id":"f"}]}]}]`)
+}
+
+func TestResponsesParseResponse_FileCitationKeepsFilename(t *testing.T) {
+	t.Skip("bug: a file_citation annotation loses its filename, a documented member the typed annotation has no field for")
+	resp := respParseResponse(t, `{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":"f","filename":"a.pdf","index":3}]}]}]}`)
+	respJSONEq(t, resp.Output, `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":"f","filename":"a.pdf","index":3}]}]}]`)
 }
 
 // Responses input_tokens includes cached tokens and output_tokens includes reasoning; canonical meters do not overlap.
@@ -133,6 +191,7 @@ func TestResponsesUsage(t *testing.T) {
 			usage.Tokens{"input": 384, "cache_read": 5120, "output": 104, "reasoning": 49}},
 		{"all cached", ResponsesUsage{InputTokens: 10, OutputTokens: 1, TotalTokens: 11, InputTokensDetails: ResponsesInputDeets{CachedTokens: 10}}, usage.Tokens{"cache_read": 10, "output": 1}},
 		{"zero", ResponsesUsage{}, nil},
+		{"negative counts are dropped", ResponsesUsage{InputTokens: -10, OutputTokens: -1, InputTokensDetails: ResponsesInputDeets{CachedTokens: -5}, OutputTokensDetails: ResponsesOutputDeets{ReasoningTokens: -1}}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,6 +233,8 @@ func TestResponsesWireMarshal(t *testing.T) {
 		{"tool choice function", ResponsesToolChoice{Mode: "function", FunctionName: "f"}, `{"type":"function","name":"f"}`},
 		// Only auto/required/none are legal bare strings; a hosted-tool mode rebuilt from canonical has lost its object.
 		{"tool choice hosted, rebuilt", ResponsesToolChoice{Mode: "file_search"}, `{"type":"file_search"}`},
+		{"custom tool keeps its definition", &ResponsesCustomTool{Name: "n", Raw: json.RawMessage(`{"name":"n","type":"custom"}`)}, `{"name":"n","type":"custom"}`},
+		{"namespace keeps its definition", &ResponsesNamespaceTool{Name: "ns", Raw: json.RawMessage(`{"name":"ns","type":"namespace"}`)}, `{"name":"ns","type":"namespace"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,12 +249,27 @@ func TestResponsesWireMarshal(t *testing.T) {
 	}
 }
 
-// The type a part reports is the discriminator it writes on the wire.
-func TestResponsesPartTypeMatchesWire(t *testing.T) {
-	for _, p := range []ResponsesPart{&ResponsesTextPart{}, &ResponsesImagePart{}, &ResponsesFilePart{}, &ResponsesOutputTextPart{}, &ResponsesRefusalPart{}} {
-		var wire struct{ Type ResponsesPartType }
-		if err := json.Unmarshal([]byte(respMarshal(t, p)), &wire); err != nil || wire.Type != p.ResponsesPartType() {
-			t.Errorf("%T reports %q, writes %q (%v)", p, p.ResponsesPartType(), wire.Type, err)
+// The type an item, part, tool or annotation reports is the discriminator it writes on the wire.
+func TestResponsesReportedTypeMatchesWire(t *testing.T) {
+	reported := map[any]string{}
+	for _, v := range []ResponsesItem{&ResponsesMessage{}, &ResponsesFunctionCall{}, &ResponsesFunctionCallOutput{}, &ResponsesReasoning{}, &ResponsesCustomToolCall{}, &ResponsesCustomToolCallOutput{},
+		&ResponsesRawItem{Type: "mcp_call", Raw: json.RawMessage(`{"type":"mcp_call"}`)}} {
+		reported[v] = string(v.ResponsesItemType())
+	}
+	for _, v := range []ResponsesPart{&ResponsesTextPart{}, &ResponsesImagePart{}, &ResponsesFilePart{}, &ResponsesOutputTextPart{}, &ResponsesRefusalPart{},
+		&ResponsesRawPart{Type: "output_audio", Raw: json.RawMessage(`{"type":"output_audio"}`)}} {
+		reported[v] = string(v.ResponsesPartType())
+	}
+	for _, v := range []ResponsesTool{&ResponsesFunctionTool{}, &ResponsesCustomTool{}, &ResponsesNamespaceTool{}, &ResponsesRawTool{Type: "web_search", Raw: json.RawMessage(`{"type":"web_search"}`)}} {
+		reported[v] = string(v.ResponsesToolType())
+	}
+	for _, v := range []ResponsesAnnotation{&ResponsesURLCitationAnnotation{}, &ResponsesFileCitationAnnotation{}, &ResponsesRawAnnotation{Type: "file_path"}} {
+		reported[v] = v.ResponsesAnnotationType()
+	}
+	for v, want := range reported {
+		var wire struct{ Type string }
+		if err := json.Unmarshal([]byte(respMarshal(t, v)), &wire); err != nil || wire.Type != want {
+			t.Errorf("%T reports %q, writes %q (%v)", v, want, wire.Type, err)
 		}
 	}
 }
@@ -201,6 +277,7 @@ func TestResponsesPartTypeMatchesWire(t *testing.T) {
 // Unmodeled items, parts, annotations and tool-choice objects re-encode byte for byte.
 func TestResponsesWireVerbatimRoundTrip(t *testing.T) {
 	decodeItem := func(b []byte) (any, error) { return responsesUnmarshalItem(b) }
+	decodeTool := func(b []byte) (any, error) { return responsesUnmarshalTool(b) }
 	decodeChoice := func(b []byte) (any, error) {
 		var c ResponsesToolChoice
 		return c, json.Unmarshal(b, &c)
@@ -211,7 +288,10 @@ func TestResponsesWireVerbatimRoundTrip(t *testing.T) {
 		decode func([]byte) (any, error)
 	}{
 		{"hosted-tool item", `{"type":"mcp_call","id":"mcp_0","name":"lookup","arguments":"{}","output":"ok"}`, decodeItem},
-		{"unmodeled part and annotation", `{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c"}],"logprobs":[]},{"type":"output_audio","data":"UklGRg==","transcript":"hi"}]}`, decodeItem},
+		{"unmodeled part and annotation", `{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c"}],"logprobs":[{"token":"x","logprob":-0.5}]},{"type":"output_audio","data":"UklGRg==","transcript":"hi"}]}`, decodeItem},
+		{"custom tool", `{"name":"note","type":"custom"}`, decodeTool},
+		{"namespace tool", `{"name":"ns","type":"namespace","tools":[]}`, decodeTool},
+		{"mcp tool choice", `{"type":"mcp","server_label":"docs","name":"search"}`, decodeChoice},
 		{"required", `"required"`, decodeChoice},
 		{"hosted tool choice", `{"type":"file_search"}`, decodeChoice},
 		{"allowed_tools choice", `{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}`, decodeChoice},

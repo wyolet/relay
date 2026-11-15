@@ -61,6 +61,26 @@ func TestCCFinishReason(t *testing.T) {
 	}
 }
 
+// A refusal lifts a stop and nothing else, buffered or streamed.
+func TestCCRefusalLiftsOnlyStop(t *testing.T) {
+	for reason, want := range map[string]v1.FinishReason{"stop": v1.FinishReasonRefusal, "length": v1.FinishReasonLength, "tool_calls": v1.FinishReasonToolCalls} {
+		resp, err := CCTranslator{}.ParseResponse([]byte(ccResponse(`{"index":0,"message":{"role":"assistant","refusal":"no"},"finish_reason":"`+reason+`"}`, "")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.FinishReason != want {
+			t.Errorf("%s: buffered finish_reason = %s, want %s", reason, resp.FinishReason, want)
+		}
+		canon := splitCanonicalFrames(runStream(t, CCTranslator{}.NewToCanonicalStream(), ccChunk(`{"refusal":"no"}`),
+			`data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"`+reason+`"}]}`, "data: [DONE]"))
+		_, data, _ := v1.ParseSSEChunk(canon[len(canon)-1])
+		var ev v1.GenerationCompletedEvent
+		if err := json.Unmarshal(data, &ev); err != nil || ev.FinishReason != want {
+			t.Errorf("%s: streamed finish_reason = %s (%v), want %s", reason, ev.FinishReason, err, want)
+		}
+	}
+}
+
 // Only a Chat Completions upstream's own raw reason is written back; any other unknown reason must not read as stop.
 func TestCCSerialize_OtherFinishReason(t *testing.T) {
 	cases := []struct {
@@ -70,6 +90,7 @@ func TestCCSerialize_OtherFinishReason(t *testing.T) {
 		{&v1.IncompleteDetails{Reason: "openai:new_reason"}, "new_reason"},
 		{&v1.IncompleteDetails{Reason: "anthropic:new_reason"}, "content_filter"},
 		{&v1.IncompleteDetails{Reason: "new_reason"}, "content_filter"},
+		{&v1.IncompleteDetails{Reason: "openai:"}, "content_filter"},
 		{nil, "content_filter"},
 	}
 	for _, tc := range cases {

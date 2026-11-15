@@ -2,8 +2,11 @@ package openai
 
 import (
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -62,12 +65,43 @@ func TestResponsesToCanonicalStream(t *testing.T) {
 				respSSE("response.web_search_call.searching", `{"item_id":"ws_0","output_index":0}`),
 				respSSE(ResponsesEventOutputItemDone, `{"output_index":0,"item":{"type":"web_search_call","id":"ws_0","status":"completed"}}`),
 				respSSE(ResponsesEventOutputItemAdded, `{"output_index":1,"item":null}`),
+				respSSE(ResponsesEventOutputItemAdded, `{"output_index":1}`),
 				respSSE(ResponsesEventOutputItemAdded, `{"output_index":1,"item":{"type":"message"}}`),
 				respSSE(ResponsesEventOutputItemDone, `{"output_index":1}`),
 				respSSE("response.unknown_future_event", `{"type":"unknown"}`),
 				respSSE(ResponsesEventCompleted, `{"response":{"id":"resp_1","status":"completed","service_tier":"priority","output":[{"type":"web_search_call","id":"ws_0","status":"completed"}],"usage":{"input_tokens":5504,"input_tokens_details":{"cached_tokens":5120},"output_tokens":104,"output_tokens_details":{"reasoning_tokens":49},"total_tokens":5608}}}`),
 			},
 			want: `[{"event":"generation.completed","data":{"id":"resp_1","status":"completed","finish_reason":"stop","usage":{"input":384,"output":104,"cache_read":5120,"reasoning":49},"service_tier":"priority"}}]`,
+		},
+		{
+			// The summary an item closes with wins over the streamed one, and an item that streamed none gets none. A response.created without a response object still opens the generation.
+			name: "reasoning items closing with and without a summary",
+			chunks: [][]byte{
+				respSSE(ResponsesEventCreated, `{"type":"response.created"}`),
+				respSSE(ResponsesEventReasoningSummaryTextDelta, `{"item_id":"rs_1","output_index":0,"summary_index":0,"delta":"ab"}`),
+				respSSE(ResponsesEventOutputItemDone, `{"output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"a"},{"type":"summary_text","text":"b"}]}}`),
+				respSSE(ResponsesEventOutputItemDone, `{"output_index":1,"item":{"type":"reasoning","id":"rs_2","summary":[]}}`),
+			},
+			want: `[
+				{"event":"generation.created","data":{"id":"","model":""}},
+				{"event":"item.delta","data":{"item_id":"rs_1","index":0,"kind":"reasoning","delta":"ab"}},
+				{"event":"item.completed","data":{"item_id":"rs_1","index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"text":"a"},{"text":"b"}]}}},
+				{"event":"item.completed","data":{"item_id":"rs_2","index":1,"item":{"type":"reasoning","id":"rs_2"}}}]`,
+		},
+		{
+			// Only a call that closed as completed is second-guessed, and only when it has arguments to check.
+			name: "function calls keep the status they closed with; a tool result item starts under its own type",
+			chunks: [][]byte{
+				respSSE(ResponsesEventOutputItemDone, `{"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{\"q\":","status":"in_progress"}}`),
+				respSSE(ResponsesEventOutputItemDone, `{"output_index":1,"item":{"type":"function_call","id":"fc_2","call_id":"c2","name":"f","arguments":"{\"q\":"}}`),
+				respSSE(ResponsesEventOutputItemDone, `{"output_index":2,"item":{"type":"function_call","id":"fc_3","call_id":"c3","name":"f","arguments":"","status":"completed"}}`),
+				respSSE(ResponsesEventOutputItemAdded, `{"output_index":3,"item":{"type":"function_call_output","id":"fco_1","call_id":"c1"}}`),
+			},
+			want: `[
+				{"event":"item.completed","data":{"item_id":"fc_1","index":0,"item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{\"q\":","status":"in_progress"}}},
+				{"event":"item.completed","data":{"item_id":"fc_2","index":1,"item":{"type":"function_call","id":"fc_2","call_id":"c2","name":"f","arguments":"{\"q\":"}}},
+				{"event":"item.completed","data":{"item_id":"fc_3","index":2,"item":{"type":"function_call","id":"fc_3","call_id":"c3","name":"f","arguments":"","status":"completed"}}},
+				{"event":"item.started","data":{"item_id":"fco_1","item_type":"function_call_output","index":3,"call_id":"c1"}}]`,
 		},
 		{
 			name: "content filter after a refusal delta",
@@ -101,6 +135,13 @@ func TestResponsesToCanonicalStream(t *testing.T) {
 			respJSONEq(t, respStream(t, ResponsesTranslator{}.NewToCanonicalStream(), tc.chunks...), tc.want)
 		})
 	}
+}
+
+func TestResponsesToCanonicalStream_ToolResultItemKeepsItsID(t *testing.T) {
+	t.Skip("bug: a streamed function_call_output item starts under its wire id but completes with an empty item_id")
+	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(),
+		respSSE(ResponsesEventOutputItemDone, `{"output_index":0,"item":{"type":"function_call_output","id":"fco_1","call_id":"c1","output":"ok"}}`))
+	respJSONEq(t, frames, `[{"event":"item.completed","data":{"item_id":"fco_1","index":0,"item":{"type":"function_call_output","call_id":"c1","output":"ok"}}}]`)
 }
 
 func TestResponsesToCanonicalStream_FailedKeepsError(t *testing.T) {
@@ -156,13 +197,70 @@ func TestResponsesFromCanonicalStream_Reasoning(t *testing.T) {
 	respJSONEq(t, frames[8].Data, `{"type":"error","sequence_number":8,"code":"overloaded","message":"try later"}`)
 }
 
-// A producer that sends no call id at item.started still yields one on the argument deltas: the item id stands in.
+// A producer that sends no call id at item.started still yields one on the argument deltas: the item id stands in. The completed item's call id, name and arguments then win over what the stream carried.
 func TestResponsesFromCanonicalStream_CallIDFallback(t *testing.T) {
 	frames := respStream(t, ResponsesTranslator{}.NewFromCanonicalStream(),
 		canonicalChunk(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "fc_1", ItemType: v1.ItemTypeFunctionCall, Name: "search"}),
 		canonicalChunk(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "fc_1", Kind: v1.DeltaKindArguments, Delta: "{}"}),
+		canonicalChunk(v1.EventItemCompleted, v1.ItemCompletedEvent{ItemID: "fc_1", Item: &v1.FunctionCall{ID: "fc_1", CallID: "call_9", Name: "lookup", Arguments: `{"q":1}`, Status: v1.StatusCompleted}}),
 	)
 	respJSONEq(t, respData(t, frames, ResponsesEventFunctionCallArgumentsDelta), `{"type":"response.function_call_arguments.delta","sequence_number":1,"item_id":"fc_1","output_index":0,"call_id":"fc_1","delta":"{}"}`)
+	respJSONEq(t, respData(t, frames, ResponsesEventFunctionCallArgumentsDone), `{"type":"response.function_call_arguments.done","sequence_number":2,"item_id":"fc_1","output_index":0,"call_id":"call_9","arguments":"{\"q\":1}"}`)
+	respJSONEq(t, respData(t, frames, ResponsesEventOutputItemDone), `{"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_9","name":"lookup","arguments":"{\"q\":1}","status":"completed"}}`)
+}
+
+// Every event object gets its type and sequence number; data that is not a JSON object is left alone.
+func TestResponsesFromCanonicalStream_StampEnvelope(t *testing.T) {
+	for data, want := range map[string]string{
+		`{}`:      `{"type":"e","sequence_number":0}`,
+		`{"a":1}`: `{"type":"e","sequence_number":0,"a":1}`,
+		`x`:       `x`,
+		`[1]`:     `[1]`,
+		`[1}`:     `[1}`,
+		`{1]`:     `{1]`,
+		`}1}`:     `}1}`,
+		`{1~`:     `{1~`,
+	} {
+		if got := string((&canonicalToResponsesStream{}).stampEnvelope("e", []byte(data))); got != want {
+			t.Errorf("stampEnvelope(%s) = %s, want %s", data, got, want)
+		}
+	}
+}
+
+func TestSplitSSEFrames(t *testing.T) {
+	cases := map[string][]string{
+		"event: a\ndata: 1\n\nevent: b\ndata: 2\n\n": {"event: a\ndata: 1\n\n", "event: b\ndata: 2\n\n"},
+		"\n\ndata: 1\n\n\n\ndata: 2":                 {"data: 1\n\n", "data: 2\n\n"},
+		"data: 1\n\n \n":                             {"data: 1\n\n"},
+		"":                                           nil,
+	}
+	for in, want := range cases {
+		var got []string
+		for _, f := range splitSSEFrames([]byte(in)) {
+			got = append(got, string(f))
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("splitSSEFrames(%q) (-want +got):\n%s", in, diff)
+		}
+	}
+	frames := splitResponsesSSEFrames([]byte(": ping\n\nevent: a\ndata: 1\n\n"))
+	if diff := cmp.Diff([]ResponsesSSEFrame{{Event: "a", Data: []byte("1")}}, frames); diff != "" {
+		t.Errorf("splitResponsesSSEFrames skips a frame without data (-want +got):\n%s", diff)
+	}
+	if got := string(ResponsesSSEFrame{Data: []byte("1")}.Bytes()); got != "data: 1\n\n" {
+		t.Errorf("a frame without an event name writes %q, want the data line alone", got)
+	}
+}
+
+func TestComposedStream_PropagatesErrors(t *testing.T) {
+	boom := errors.New("boom")
+	fail := func([]byte) ([]byte, error) { return nil, boom }
+	pass := func(b []byte) ([]byte, error) { return b, nil }
+	for name, c := range map[string]*ComposedStream{"to canonical": NewComposedStream(fail, pass), "from canonical": NewComposedStream(pass, fail)} {
+		if frames, err := c.Translate([]byte("event: a\ndata: 1\n\n")); !errors.Is(err, boom) {
+			t.Errorf("%s: err = %v (frames %v), want boom", name, err, frames)
+		}
+	}
 }
 
 // Responses ends a failed generation with response.failed; response.completed tells the client the turn succeeded.

@@ -9,50 +9,58 @@ import (
 )
 
 // applyPatchTool is the `custom` (freeform) tool shape Codex ships apply_patch as, with a grammar constraining the patch envelope.
-const applyPatchTool = `{"type":"custom","name":"apply_patch","description":"Edit files.","format":{"type":"grammar","syntax":"lark","definition":"start: \"*** Begin Patch\" /.*/s \"*** End Patch\""}}`
+const applyPatchTool = `{"name":"apply_patch","type":"custom","description":"Edit files.","format":{"type":"grammar","syntax":"lark","definition":"start: \"*** Begin Patch\" /.*/s \"*** End Patch\""}}`
 
 // applyPatchParams is the lowered schema a non-OpenAI model is asked to satisfy: one required string, the grammar in its description.
 const applyPatchParams = `{"type":"object","properties":{"input":{"type":"string","description":"Free-form text input for this tool. It must match this lark grammar:\nstart: \"*** Begin Patch\" /.*/s \"*** End Patch\""}},"required":["input"]}`
 
 func respCustomToolRequest(t *testing.T) *v1.Request {
 	t.Helper()
-	return respParseRequest(t, `{"model":"gpt-5","input":"hi","tools":[`+applyPatchTool+`]}`)
+	return respParseRequest(t, `{"model":"gpt-5","input":"hi","tools":[{"type":"function","name":"f","parameters":{}},`+applyPatchTool+`,{"type":"custom","name":"note"}]}`)
 }
 
 func TestResponsesCustomToolDefinition(t *testing.T) {
 	req := respCustomToolRequest(t)
-	respJSONEq(t, req.Tools, `{"definitions":[{"type":"function","name":"apply_patch","description":"Edit files.","parameters":`+applyPatchParams+`,"provider_data":`+applyPatchTool+`}]}`)
+	// A custom tool without a grammar still lowers to a string input.
+	const noteTool = `{"type":"function","name":"note","parameters":{"type":"object","properties":{"input":{"type":"string","description":"Free-form text input for this tool."}},"required":["input"]},"provider_data":{"type":"custom","name":"note"}}`
+	respJSONEq(t, req.Tools, `{"definitions":[{"type":"function","name":"f","parameters":{}},
+		{"type":"function","name":"apply_patch","description":"Edit files.","parameters":`+applyPatchParams+`,"provider_data":`+applyPatchTool+`},`+noteTool+`]}`)
 
-	// Same vendor: the original definition goes back out byte for byte.
-	if got := string(respMember(t, respSerializeRequest(t, req), "tools")); got != "["+applyPatchTool+"]" {
-		t.Errorf("tools = %s, want the custom definition verbatim", got)
+	// Same vendor: the original definitions go back out byte for byte.
+	if got, want := string(respMember(t, respSerializeRequest(t, req), "tools")), `[{"type":"function","name":"f","parameters":{}},`+applyPatchTool+`,{"type":"custom","name":"note"}]`; got != want {
+		t.Errorf("tools = %s, want %s", got, want)
 	}
 
 	// Without the provider blob a non-OpenAI view of the tool is a plain function tool.
-	req.Tools.Definitions[0].(*v1.FunctionTool).ProviderData = nil
-	respJSONEq(t, respMember(t, respSerializeRequest(t, req), "tools"), `[{"type":"function","name":"apply_patch","description":"Edit files.","parameters":`+applyPatchParams+`}]`)
+	req.Tools.Definitions[1].(*v1.FunctionTool).ProviderData = nil
+	respJSONEq(t, respMember(t, respSerializeRequest(t, req), "tools"), `[{"type":"function","name":"f","parameters":{}},
+		{"type":"function","name":"apply_patch","description":"Edit files.","parameters":`+applyPatchParams+`},{"type":"custom","name":"note"}]`)
+}
 
-	// A custom tool without a grammar still lowers to a string input.
-	plain := respParseRequest(t, `{"model":"m","input":"hi","tools":[{"type":"custom","name":"note"}]}`)
-	respJSONEq(t, plain.Tools.Definitions[0], `{"type":"function","name":"note","parameters":{"type":"object","properties":{"input":{"type":"string","description":"Free-form text input for this tool."}},"required":["input"]},"provider_data":{"type":"custom","name":"note"}}`)
+// Only a grammar format that has a definition reaches the lowered argument's description.
+func TestResponsesCustomToolDefinition_FormatWithoutGrammar(t *testing.T) {
+	for _, format := range []string{`{"type":"grammar","syntax":"lark"}`, `{"type":"text","definition":"x"}`, `{"definition":"x"}`} {
+		req := respParseRequest(t, `{"model":"m","input":"hi","tools":[{"type":"custom","name":"note","format":`+format+`}]}`)
+		respJSONEq(t, req.Tools.Definitions[0].(*v1.FunctionTool).Parameters, `{"type":"object","properties":{"input":{"type":"string","description":"Free-form text input for this tool."}},"required":["input"]}`)
+	}
 }
 
 // A custom call and its result parse to an ordinary function call pair and go back to the same vendor in custom form, the result following its call by call id.
 func TestResponsesCustomToolCallInput(t *testing.T) {
 	req := respParseRequest(t, `{"model":"gpt-5","input":[
 		{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch","status":"completed"},
-		{"type":"custom_tool_call_output","call_id":"call_1","output":"Done"},
 		{"type":"custom_tool_call","id":"x_2","call_id":"call_2","name":"apply_patch","input":"again"},
+		{"type":"custom_tool_call_output","call_id":"call_1","output":"Done"},
 		{"type":"custom_tool_call_output","call_id":"call_2","output":[{"type":"input_text","text":"ok"}]}]}`)
 	respJSONEq(t, req.Input, `[
 		{"type":"function_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\"}","status":"completed","provider_data":{"type":"custom_tool_call"}},
-		{"type":"function_call_output","call_id":"call_1","output":"Done"},
 		{"type":"function_call","id":"x_2","call_id":"call_2","name":"apply_patch","arguments":"{\"input\":\"again\"}","provider_data":{"type":"custom_tool_call"}},
+		{"type":"function_call_output","call_id":"call_1","output":"Done"},
 		{"type":"function_call_output","call_id":"call_2","output":"[{\"type\":\"input_text\",\"text\":\"ok\"}]"}]`)
 	respJSONEq(t, respMember(t, respSerializeRequest(t, req), "input"), `[
 		{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch"},
-		{"type":"custom_tool_call_output","call_id":"call_1","output":"Done"},
 		{"type":"custom_tool_call","call_id":"call_2","name":"apply_patch","input":"again"},
+		{"type":"custom_tool_call_output","call_id":"call_1","output":"Done"},
 		{"type":"custom_tool_call_output","call_id":"call_2","output":"[{\"type\":\"input_text\",\"text\":\"ok\"}]"}]`)
 }
 

@@ -2,6 +2,8 @@ package openai
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -34,6 +36,7 @@ func feedStream(t *testing.T, translate func([]byte) ([]byte, error), chunks [][
 
 func TestResponsesToCanonicalStream_MalformedEventReturnsError(t *testing.T) {
 	for _, event := range []string{
+		ResponsesEventCreated,
 		ResponsesEventOutputItemAdded,
 		ResponsesEventOutputTextDelta,
 		ResponsesEventFunctionCallArgumentsDelta,
@@ -51,6 +54,12 @@ func TestResponsesToCanonicalStream_MalformedEventReturnsError(t *testing.T) {
 				t.Fatalf("malformed %s: want error, got nil (output %q)", event, out)
 			}
 		})
+	}
+	for _, event := range []string{ResponsesEventOutputItemAdded, ResponsesEventOutputItemDone} {
+		var typeErr *json.UnmarshalTypeError
+		if out, err := (ResponsesTranslator{}).NewToCanonicalStream()(sseEvent(event, `{"item":5}`)); !errors.As(err, &typeErr) {
+			t.Errorf("%s with a mistyped item: err = %v, want the decode error (output %q)", event, err, out)
+		}
 	}
 }
 
