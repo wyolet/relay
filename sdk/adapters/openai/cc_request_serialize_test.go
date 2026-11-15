@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -53,8 +54,8 @@ func TestCCSerializeRequest(t *testing.T) {
 				{"role":"tool","tool_call_id":"c1","content":"ok"}]}`,
 		},
 		{
-			name: "a short TTL takes the in_memory tier",
-			req:  &v1.Request{Model: v1.ModelRefs{"m"}, CacheConfig: &v1.CacheConfig{TTL: "5m"}},
+			name: "a TTL up to 10m takes the in_memory tier",
+			req:  &v1.Request{Model: v1.ModelRefs{"m"}, CacheConfig: &v1.CacheConfig{TTL: "10m"}},
 			wire: `{"model":"m","messages":null,"prompt_cache_retention":"in_memory"}`,
 		},
 		{
@@ -87,23 +88,33 @@ func TestCCSerializeRequest(t *testing.T) {
 				&v1.TextPart{Text: "see"},
 				&v1.ImagePart{ImageURL: "https://x/i.png", Detail: "high"},
 				&v1.FilePart{FileData: "QUJD", Filename: "a.txt", FileURL: "https://x/a.txt", MediaType: "text/plain"},
+				&v1.FilePart{FileID: "file-1"},
+				&v1.OutputTextPart{Text: "said"},
 			}}}},
 			wire: `{"model":"m","messages":[{"role":"user","content":[
 				{"type":"text","text":"see"},
 				{"type":"image_url","image_url":{"url":"https://x/i.png","detail":"high"}},
-				{"type":"file","file":{"file_data":"QUJD","filename":"a.txt"}}]}]}`,
+				{"type":"file","file":{"file_data":"QUJD","filename":"a.txt"}},
+				{"type":"file","file":{"file_id":"file-1"}},
+				{"type":"text","text":"said"}]}]}`,
 		},
 		{
-			name: "only the first model's options apply",
+			name: "a tool without parameters or a choice; a nil model config entry is skipped",
+			req: &v1.Request{Model: v1.ModelRefs{"m"}, ModelConfig: map[string]*v1.ModelOpts{"m": nil},
+				Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}}}},
+			wire: `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","parameters":{}}}]}`,
+		},
+		{
+			name: "only the first model's options apply; an unrecognised format type passes through",
 			req: &v1.Request{
 				Model: v1.ModelRefs{"a", "b"},
 				ModelConfig: map[string]*v1.ModelOpts{
-					"a": {Sampling: &v1.SamplingParams{TopK: new(40), Temperature: floatPtr(0.1)}},
+					"a": {Sampling: &v1.SamplingParams{TopK: new(40), Temperature: floatPtr(0.1)}, Output: &v1.OutputConfig{Format: &v1.Format{Type: "grammar"}}},
 					"b": {Sampling: &v1.SamplingParams{Temperature: floatPtr(0.9)}},
 				},
 				OutputMode: v1.OutputModeSync,
 			},
-			wire: `{"model":"a","messages":null,"temperature":0.1}`,
+			wire: `{"model":"a","messages":null,"temperature":0.1,"response_format":{"type":"grammar"}}`,
 		},
 	}
 	for _, tc := range cases {
@@ -122,10 +133,15 @@ func TestCCSerializeRequest_Errors(t *testing.T) {
 		"no model":                  {Input: []v1.Item{ccUser("x")}},
 		"non-function tool":         {Model: v1.ModelRefs{"m"}, Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.ServerTool{Name: "web_search"}}}},
 		"malformed owned extension": {Model: v1.ModelRefs{"m"}, Extensions: map[string]json.RawMessage{extLogprobs: json.RawMessage(`"yes"`)}},
+		"malformed format schema":   {Model: v1.ModelRefs{"m"}, ModelConfig: map[string]*v1.ModelOpts{"m": {Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_schema", Schema: json.RawMessage(`{`)}}}}},
 	}
 	for name, req := range cases {
 		if wire, err := (CCTranslator{}).SerializeRequest(req); err == nil {
 			t.Errorf("%s: want an error, got %s", name, wire)
 		}
+	}
+	var typeErr *json.UnmarshalTypeError
+	if _, err := (CCTranslator{}).SerializeRequest(cases["malformed owned extension"]); !errors.As(err, &typeErr) {
+		t.Errorf("malformed owned extension: %v does not wrap the decode error", err)
 	}
 }

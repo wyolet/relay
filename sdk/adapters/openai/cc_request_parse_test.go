@@ -12,7 +12,7 @@ func TestCCParseRequest(t *testing.T) {
 	}{
 		{
 			name: "system messages after the first become developer messages",
-			body: `{"model":"m","messages":[{"role":"system","content":"A"},{"role":"user","content":"hi"},{"role":"system","content":[{"type":"text","text":"B"},{"type":"text","text":"C"}]},{"role":"developer","content":"D"}]}`,
+			body: `{"model":"m","messages":[{"role":"system","content":"A"},{"role":"user","content":"hi"},{"role":"system","content":[{"type":"text","text":"B"},{"type":"audio","text":"x"},{"type":"video","text":"y"},{"type":"text","text":"C"}]},{"role":"developer","content":"D"}]}`,
 			canon: `{"model":"m","instructions":"A","output_mode":"sync","input":[
 				{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
 				{"type":"message","role":"developer","content":[{"type":"input_text","text":"BC"}]},
@@ -25,15 +25,16 @@ func TestCCParseRequest(t *testing.T) {
 				{"type":"text","text":"look"},
 				{"type":"image_url","image_url":{"url":"https://x/a.png","detail":"low"}},
 				{"type":"file","file":{"file_id":"file-1","filename":"a.pdf"}},
-				{"type":"input_audio","input_audio":{"data":"AAA","format":"wav"}}]}]}`,
+				{"type":"image_url"},
+				{"type":"input_audio","input_audio":{"data":"AAA","format":"wav"}}]},{"role":"user"}]}`,
 			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[
 				{"type":"input_text","text":"look"},
 				{"type":"input_image","image_url":"https://x/a.png","detail":"low"},
-				{"type":"input_file","file_id":"file-1","filename":"a.pdf"}]}]}`,
+				{"type":"input_file","file_id":"file-1","filename":"a.pdf"}]},{"type":"message","role":"user","content":null}]}`,
 			wire: `{"model":"m","messages":[{"role":"user","content":[
 				{"type":"text","text":"look"},
 				{"type":"image_url","image_url":{"url":"https://x/a.png","detail":"low"}},
-				{"type":"file","file":{"file_id":"file-1","filename":"a.pdf"}}]}]}`,
+				{"type":"file","file":{"file_id":"file-1","filename":"a.pdf"}}]},{"role":"user","content":null}]}`,
 		},
 		{
 			name: "assistant history with refusal, tool calls and tool results",
@@ -90,6 +91,12 @@ func TestCCParseRequest(t *testing.T) {
 				"tool_choice":{"type":"function","function":{"name":"f"}},"parallel_tool_calls":false}`,
 		},
 		{
+			name:  "tools without a tool_choice",
+			body:  `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`,
+			canon: `{"model":"m","output_mode":"sync","input":null,"tools":{"definitions":[{"type":"function","name":"f","parameters":{"type":"object"}}]}}`,
+			wire:  `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`,
+		},
+		{
 			name: "string tool_choice",
 			body: `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"tool_choice":"required"}`,
 			canon: `{"model":"m","output_mode":"sync","input":null,"tools":{
@@ -114,6 +121,12 @@ func TestCCParseRequest(t *testing.T) {
 			wire: `{"model":"m","messages":null,"verbosity":"high","response_format":{"type":"json_schema","json_schema":{"name":"out","description":"d","schema":{"type":"object"},"strict":true}}}`,
 		},
 		{
+			name:  "verbosity without a response format",
+			body:  `{"model":"m","messages":[],"verbosity":"low"}`,
+			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{"output":{"verbosity":"low"}}}}`,
+			wire:  `{"model":"m","messages":null,"verbosity":"low"}`,
+		},
+		{
 			name:  "json_object response format",
 			body:  `{"model":"m","messages":[],"response_format":{"type":"json_object"}}`,
 			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{"output":{"format":{"type":"json_object"}}}}}`,
@@ -127,15 +140,15 @@ func TestCCParseRequest(t *testing.T) {
 		},
 		{
 			name:  "in_memory cache retention maps to a 5m TTL",
-			body:  `{"model":"m","messages":[],"prompt_cache_key":"k","prompt_cache_retention":"in_memory","stream":true}`,
-			canon: `{"model":"m","output_mode":"stream","input":null,"cache_config":{"key":"k","ttl":"5m"}}`,
-			wire:  `{"model":"m","messages":null,"prompt_cache_key":"k","prompt_cache_retention":"in_memory","stream":true,"stream_options":{"include_usage":true}}`,
+			body:  `{"model":"m","messages":[],"prompt_cache_retention":"in_memory","stream":true}`,
+			canon: `{"model":"m","output_mode":"stream","input":null,"cache_config":{"ttl":"5m"}}`,
+			wire:  `{"model":"m","messages":null,"prompt_cache_retention":"in_memory","stream":true,"stream_options":{"include_usage":true}}`,
 		},
 		{
-			name:  "unknown cache retention is dropped",
-			body:  `{"model":"m","messages":[],"prompt_cache_retention":"forever"}`,
-			canon: `{"model":"m","output_mode":"sync","input":null}`,
-			wire:  `{"model":"m","messages":null}`,
+			name:  "unknown cache retention is dropped, the cache key stays",
+			body:  `{"model":"m","messages":[],"prompt_cache_key":"k","prompt_cache_retention":"forever"}`,
+			canon: `{"model":"m","output_mode":"sync","input":null,"cache_config":{"key":"k"}}`,
+			wire:  `{"model":"m","messages":null,"prompt_cache_key":"k"}`,
 		},
 	}
 	for _, tc := range cases {
@@ -154,6 +167,16 @@ func TestCCParseRequest(t *testing.T) {
 	}
 }
 
+func TestCCParseRequest_OneSamplingParamAlone(t *testing.T) {
+	for _, param := range []string{`"temperature":0.5`, `"top_p":0.9`, `"frequency_penalty":0.1`, `"presence_penalty":0.2`, `"seed":7`} {
+		req, err := CCTranslator{}.ParseRequest([]byte(`{"model":"m","messages":[],` + param + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSON(t, mustJSON(req.ModelConfig), `{"m":{"sampling":{`+param+`}}}`)
+	}
+}
+
 // Valid Chat Completions input must reach the re-serialized wire or fail the parse, never vanish (rule 11).
 func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 	cases := []struct{ name, bug, body, keep string }{
@@ -166,6 +189,12 @@ func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 			name: "allowed_tools tool_choice",
 			body: `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
 			keep: `"allowed_tools":{`,
+		},
+		{
+			name: "json_schema format with a mistyped member",
+			bug:  `a json_schema wrapper that fails to decode leaves a json_schema format with no schema, and no error`,
+			body: `{"model":"m","messages":[],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
+			keep: `"schema"`,
 		},
 		{
 			name: "legacy function role message",
@@ -202,6 +231,7 @@ func TestCCParseRequest_Errors(t *testing.T) {
 	for name, body := range map[string]string{
 		"invalid JSON":          `{"model":`,
 		"missing model":         `{"messages":[{"role":"user","content":"x"}]}`,
+		"mistyped messages":     `{"model":"m","messages":5}`,
 		"mistyped user content": `{"model":"m","messages":[{"role":"user","content":5}]}`,
 		"mistyped tool content": `{"model":"m","messages":[{"role":"tool","tool_call_id":"c","content":{}}]}`,
 		"mistyped tool_choice":  `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":5}`,
