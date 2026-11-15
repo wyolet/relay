@@ -120,6 +120,18 @@ func TestParseRequest_Config(t *testing.T) {
 			`{"model":null,"input":null,"tools":{"definitions":[{"type":"function","name":"f","parameters":{}}],"choice":"auto"}}`,
 		},
 		{
+			"ANY with several allowed names reads as an allowed required choice",
+			`{"tools":[{"functionDeclarations":[{"name":"f"},{"name":"g"},{"name":"h"}]}],"toolConfig":{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["f","g"]}}}`,
+			`{"model":null,"input":null,"tools":{"definitions":[{"type":"function","name":"f","parameters":{}},{"type":"function","name":"g","parameters":{}},{"type":"function","name":"h","parameters":{}}],
+			  "choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"f"},{"type":"function","name":"g"}]}}}`,
+		},
+		{
+			"VALIDATED with allowed names reads as an allowed auto choice",
+			`{"tools":[{"functionDeclarations":[{"name":"f"},{"name":"g"}]}],"toolConfig":{"functionCallingConfig":{"mode":"VALIDATED","allowedFunctionNames":["g"]}}}`,
+			`{"model":null,"input":null,"tools":{"definitions":[{"type":"function","name":"f","parameters":{}},{"type":"function","name":"g","parameters":{}}],
+			  "choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"g"}]}}}`,
+		},
+		{
 			"proto field names in config and tools",
 			`{"generation_config":{"top_p":0.9,"response_mime_type":"application/json","thinking_config":{"thinking_budget":512}},
 			  "tools":[{"function_declarations":[{"name":"f"}]}],"tool_config":{"function_calling_config":{"mode":"ANY","allowed_function_names":["f"]}}}`,

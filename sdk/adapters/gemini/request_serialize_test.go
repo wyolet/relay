@@ -5,6 +5,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -121,20 +122,26 @@ func TestSerializeRequest_Contents(t *testing.T) {
 }
 
 func TestToolChoice_RoundTrip(t *testing.T) {
+	const fAndG = `[{"functionDeclarations":[{"name":"f","parameters":{}},{"name":"g","parameters":{}}]}]`
 	cases := []struct {
 		choice v1.ToolChoice
 		wire   string
 		back   v1.ToolChoice
+		// tools is the declarations sent; empty means both f and g.
+		tools string
 	}{
-		{v1.ToolChoice{Mode: "auto"}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}},
-		{v1.ToolChoice{Mode: "required"}, `{"mode":"ANY"}`, v1.ToolChoice{Mode: "required"}},
-		{v1.ToolChoice{Mode: "none"}, `{"mode":"NONE"}`, v1.ToolChoice{Mode: "none"}},
-		{v1.ToolChoice{Mode: "function", FunctionName: "f"}, `{"mode":"ANY","allowedFunctionNames":["f"]}`, v1.ToolChoice{Mode: "function", FunctionName: "f"}},
-		{v1.ToolChoice{Mode: "unknown"}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}},
+		{v1.ToolChoice{Mode: "auto"}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}, ""},
+		{v1.ToolChoice{Mode: "required"}, `{"mode":"ANY"}`, v1.ToolChoice{Mode: "required"}, ""},
+		{v1.ToolChoice{Mode: "none"}, `{"mode":"NONE"}`, v1.ToolChoice{Mode: "none"}, ""},
+		{v1.ToolChoice{Mode: "function", FunctionName: "f"}, `{"mode":"ANY","allowedFunctionNames":["f"]}`, v1.ToolChoice{Mode: "function", FunctionName: "f"}, ""},
+		{v1.ToolChoice{Mode: "unknown"}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}, ""},
+		{v1.ToolChoice{Mode: "required", Allowed: []string{"g", "f"}}, `{"mode":"ANY","allowedFunctionNames":["g","f"]}`, v1.ToolChoice{Mode: "required", Allowed: []string{"g", "f"}}, ""},
+		// AUTO takes no allowedFunctionNames, so only the allowed declaration is sent.
+		{v1.ToolChoice{Mode: "auto", Allowed: []string{"g"}}, `{"mode":"AUTO"}`, v1.ToolChoice{Mode: "auto"}, `[{"functionDeclarations":[{"name":"g","parameters":{}}]}]`},
 	}
 	for _, c := range cases {
-		t.Run(c.choice.Mode, func(t *testing.T) {
-			req := &v1.Request{Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}}, Choice: &c.choice}}
+		t.Run(c.choice.Mode+strings.Join(c.choice.Allowed, ","), func(t *testing.T) {
+			req := &v1.Request{Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}, &v1.FunctionTool{Name: "g"}}, Choice: &c.choice}}
 			body, err := tr.SerializeRequest(req)
 			if err != nil {
 				t.Fatal(err)
@@ -146,7 +153,11 @@ func TestToolChoice_RoundTrip(t *testing.T) {
 			if err := json.Unmarshal(body, &wire); err != nil {
 				t.Fatal(err)
 			}
-			assertJSON(t, []byte(wire.Tools), `[{"functionDeclarations":[{"name":"f","parameters":{}}]}]`)
+			tools := c.tools
+			if tools == "" {
+				tools = fAndG
+			}
+			assertJSON(t, []byte(wire.Tools), tools)
 			assertJSON(t, []byte(wire.ToolConfig.FunctionCallingConfig), c.wire)
 			if back := parseRequest(t, string(body)).Tools; back == nil || !reflect.DeepEqual(back.Choice, &c.back) {
 				t.Errorf("parsed back %+v, want choice %+v", back, c.back)
