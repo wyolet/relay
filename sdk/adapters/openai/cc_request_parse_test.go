@@ -194,7 +194,7 @@ func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 			name: "json_schema format with a mistyped member",
 			bug:  `a json_schema wrapper that fails to decode leaves a json_schema format with no schema, and no error`,
 			body: `{"model":"m","messages":[],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
-			keep: `"schema"`,
+			keep: `"schema":{"type":"object"}`,
 		},
 		{
 			name: "legacy function role message",
