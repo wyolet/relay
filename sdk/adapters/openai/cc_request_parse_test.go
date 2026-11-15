@@ -75,80 +75,80 @@ func TestCCParseRequest(t *testing.T) {
 		},
 		{
 			name: "sampling with stop string and max_completion_tokens over max_tokens",
-			body: `{"model":"m","messages":[],"temperature":0.5,"top_p":0.9,"max_tokens":10,"max_completion_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":"END","reasoning_effort":"low"}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0.5,"top_p":0.9,"max_tokens":10,"max_completion_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":"END","reasoning_effort":"low"}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{
 				"sampling":{"temperature":0.5,"top_p":0.9,"max_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":["END"]},
 				"reasoning":{"effort":"low"}}}}`,
-			wire: `{"model":"m","messages":null,"temperature":0.5,"top_p":0.9,"max_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":["END"],"reasoning_effort":"low"}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0.5,"top_p":0.9,"max_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":["END"],"reasoning_effort":"low"}`,
 		},
 		{
 			name: "tools with the flat tool_choice form and no parameters",
-			body: `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f","description":"d"}}],"tool_choice":{"type":"function","name":"f"},"parallel_tool_calls":false}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"tools":{
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","description":"d"}}],"tool_choice":{"type":"function","name":"f"},"parallel_tool_calls":false}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"tools":{
 				"definitions":[{"type":"function","name":"f","description":"d","parameters":{}}],
 				"choice":{"type":"function","name":"f"},"parallel":false}}`,
-			wire: `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","description":"d","parameters":{}}}],
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","description":"d","parameters":{}}}],
 				"tool_choice":{"type":"function","function":{"name":"f"}},"parallel_tool_calls":false}`,
 		},
 		{
 			name:  "tools without a tool_choice",
-			body:  `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"tools":{"definitions":[{"type":"function","name":"f","parameters":{"type":"object"}}]}}`,
-			wire:  `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`,
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"tools":{"definitions":[{"type":"function","name":"f","parameters":{"type":"object"}}]}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}`,
 		},
 		{
 			name: "string tool_choice",
-			body: `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"tool_choice":"required"}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"tools":{
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"tool_choice":"required"}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"tools":{
 				"definitions":[{"type":"function","name":"f","parameters":{"type":"object"}}],"choice":"required"}}`,
-			wire: `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"tool_choice":"required"}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"tool_choice":"required"}`,
 		},
 		{
 			name: "allowed_tools tool_choice",
-			body: `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}},{"type":"function","function":{"name":"g"}}],
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}},{"type":"function","function":{"name":"g"}}],
 				"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"g"}}]}}}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"tools":{
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"tools":{
 				"definitions":[{"type":"function","name":"f","parameters":{}},{"type":"function","name":"g","parameters":{}}],
 				"choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"g"}]}}}`,
-			wire: `{"model":"m","messages":null,"tools":[{"type":"function","function":{"name":"f","parameters":{}}},{"type":"function","function":{"name":"g","parameters":{}}}],
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{}}},{"type":"function","function":{"name":"g","parameters":{}}}],
 				"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"g"}}]}}}`,
 		},
 		{
 			name: "json_schema response format with verbosity",
-			body: `{"model":"m","messages":[],"verbosity":"high","response_format":{"type":"json_schema","json_schema":{"name":"out","description":"d","schema":{"type":"object"},"strict":true}}}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{"output":{"verbosity":"high",
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"verbosity":"high","response_format":{"type":"json_schema","json_schema":{"name":"out","description":"d","schema":{"type":"object"},"strict":true}}}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{"output":{"verbosity":"high",
 				"format":{"type":"json_schema","name":"out","description":"d","schema":{"type":"object"},"strict":true}}}}}`,
-			wire: `{"model":"m","messages":null,"verbosity":"high","response_format":{"type":"json_schema","json_schema":{"name":"out","description":"d","schema":{"type":"object"},"strict":true}}}`,
+			wire: `{"model":"m","messages":[{"role":"user","content":"hi"}],"verbosity":"high","response_format":{"type":"json_schema","json_schema":{"name":"out","description":"d","schema":{"type":"object"},"strict":true}}}`,
 		},
 		{
 			name:  "verbosity without a response format",
-			body:  `{"model":"m","messages":[],"verbosity":"low"}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{"output":{"verbosity":"low"}}}}`,
-			wire:  `{"model":"m","messages":null,"verbosity":"low"}`,
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"verbosity":"low"}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{"output":{"verbosity":"low"}}}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"verbosity":"low"}`,
 		},
 		{
 			name:  "json_object response format",
-			body:  `{"model":"m","messages":[],"response_format":{"type":"json_object"}}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{"output":{"format":{"type":"json_object"}}}}}`,
-			wire:  `{"model":"m","messages":null,"response_format":{"type":"json_object"}}`,
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{"output":{"format":{"type":"json_object"}}}}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
 		},
 		{
 			name:  "text response format is the default and goes unsent",
-			body:  `{"model":"m","messages":[],"response_format":{"type":"text"}}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{"output":{"format":{"type":"text"}}}}}`,
-			wire:  `{"model":"m","messages":null}`,
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"text"}}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"model_config":{"m":{"output":{"format":{"type":"text"}}}}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
 		},
 		{
 			name:  "in_memory cache retention maps to a 5m TTL",
-			body:  `{"model":"m","messages":[],"prompt_cache_retention":"in_memory","stream":true}`,
-			canon: `{"model":"m","output_mode":"stream","input":null,"cache_config":{"ttl":"5m"}}`,
-			wire:  `{"model":"m","messages":null,"prompt_cache_retention":"in_memory","stream":true,"stream_options":{"include_usage":true}}`,
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_retention":"in_memory","stream":true}`,
+			canon: `{"model":"m","output_mode":"stream","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"cache_config":{"ttl":"5m"}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_retention":"in_memory","stream":true,"stream_options":{"include_usage":true}}`,
 		},
 		{
 			name:  "unknown cache retention is dropped, the cache key stays",
-			body:  `{"model":"m","messages":[],"prompt_cache_key":"k","prompt_cache_retention":"forever"}`,
-			canon: `{"model":"m","output_mode":"sync","input":null,"cache_config":{"key":"k"}}`,
-			wire:  `{"model":"m","messages":null,"prompt_cache_key":"k"}`,
+			body:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"k","prompt_cache_retention":"forever"}`,
+			canon: `{"model":"m","output_mode":"sync","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"cache_config":{"key":"k"}}`,
+			wire:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"k"}`,
 		},
 	}
 	for _, tc := range cases {
@@ -169,7 +169,7 @@ func TestCCParseRequest(t *testing.T) {
 
 func TestCCParseRequest_OneSamplingParamAlone(t *testing.T) {
 	for _, param := range []string{`"temperature":0.5`, `"top_p":0.9`, `"frequency_penalty":0.1`, `"presence_penalty":0.2`, `"seed":7`} {
-		req, err := CCTranslator{}.ParseRequest([]byte(`{"model":"m","messages":[],` + param + `}`))
+		req, err := CCTranslator{}.ParseRequest([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],` + param + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,17 +182,17 @@ func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 	cases := []struct{ name, bug, body, keep string }{
 		{
 			name: "custom tool",
-			body: `{"model":"m","messages":[],"tools":[{"type":"custom","custom":{"name":"grammar"}}]}`,
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"custom","custom":{"name":"grammar"}}]}`,
 			keep: `"grammar"`,
 		},
 		{
 			name: "allowed_tools tool_choice",
-			body: `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
 			keep: `"allowed_tools":{`,
 		},
 		{
 			name: "json_schema format with a mistyped member",
-			body: `{"model":"m","messages":[],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
+			body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
 			keep: `"schema":{"type":"object"}`,
 		},
 		{
@@ -233,14 +233,14 @@ func TestCCParseRequest_Errors(t *testing.T) {
 		"mistyped messages":     `{"model":"m","messages":5}`,
 		"mistyped user content": `{"model":"m","messages":[{"role":"user","content":5}]}`,
 		"mistyped tool content": `{"model":"m","messages":[{"role":"tool","tool_call_id":"c","content":{}}]}`,
-		"mistyped tool_choice":  `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":5}`,
-		"mistyped json_schema":  `{"model":"m","messages":[],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
-		"number stop":           `{"model":"m","messages":[],"stop":5}`,
-		"object stop":           `{"model":"m","messages":[],"stop":{"s":"END"}}`,
-		"non-string stop entry": `{"model":"m","messages":[],"stop":["END",5]}`,
-		"allowed custom tool":   `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"custom","custom":{"name":"g"}}]}}}`,
-		"empty allowed list":    `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[]}}}`,
-		"allowed mode none":     `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"none","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
+		"mistyped tool_choice":  `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":5}`,
+		"mistyped json_schema":  `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
+		"number stop":           `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":5}`,
+		"object stop":           `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":{"s":"END"}}`,
+		"non-string stop entry": `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":["END",5]}`,
+		"allowed custom tool":   `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"custom","custom":{"name":"g"}}]}}}`,
+		"empty allowed list":    `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[]}}}`,
+		"allowed mode none":     `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"none","tools":[{"type":"function","function":{"name":"f"}}]}}}`,
 	} {
 		if req, err := (CCTranslator{}).ParseRequest([]byte(body)); err == nil {
 			t.Errorf("%s: want an error, got %s", name, mustJSON(req))

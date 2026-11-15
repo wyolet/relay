@@ -133,6 +133,9 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gemini serialize_request: %w", err)
 	}
+	if len(contents) == 0 {
+		return nil, fmt.Errorf("gemini serialize_request: %w: no contents to send", v1.ErrUnsupportedRequest)
+	}
 	out.Contents = contents
 	for _, extra := range []string{extraSys, hoistedSys} {
 		if extra == "" {

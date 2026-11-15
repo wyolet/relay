@@ -232,6 +232,7 @@ func TestSerializeRequest_Config(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			c.req.Input = []v1.Item{textMsg(v1.RoleUser, "hi")}
 			wire := serializeWire(t, &c.req)
 			delete(wire, "contents")
 			assertJSON(t, wire, c.want)
@@ -240,9 +241,17 @@ func TestSerializeRequest_Config(t *testing.T) {
 }
 
 func TestSerializeRequest_RejectsUnknownFormatType(t *testing.T) {
-	req := &v1.Request{ModelConfig: map[string]*v1.ModelOpts{"g": {Output: &v1.OutputConfig{Format: &v1.Format{Type: "grammar"}}}}}
+	req := &v1.Request{Input: []v1.Item{textMsg(v1.RoleUser, "hi")}, ModelConfig: map[string]*v1.ModelOpts{"g": {Output: &v1.OutputConfig{Format: &v1.Format{Type: "grammar"}}}}}
 	if _, err := tr.SerializeRequest(req); !errors.Is(err, v1.ErrUnsupportedRequest) {
 		t.Errorf("err = %v, want ErrUnsupportedRequest", err)
+	}
+}
+
+func TestSerializeRequest_RejectsNoContents(t *testing.T) {
+	req := &v1.Request{Instructions: "be brief", Input: []v1.Item{textMsg(v1.RoleSystem, "and kind")}}
+	_, err := tr.SerializeRequest(req)
+	if err == nil || err.Error() != "gemini serialize_request: not supported by the upstream API: no contents to send" || !errors.Is(err, v1.ErrUnsupportedRequest) {
+		t.Errorf("err = %v, want an unsupported-request error", err)
 	}
 }
 
@@ -278,7 +287,7 @@ func TestToolChoice_RoundTrip(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.choice.Mode+strings.Join(c.choice.Allowed, ","), func(t *testing.T) {
-			req := &v1.Request{Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}, &v1.FunctionTool{Name: "g"}}, Choice: &c.choice}}
+			req := &v1.Request{Input: []v1.Item{textMsg(v1.RoleUser, "hi")}, Tools: &v1.ToolsConfig{Definitions: v1.Tools{&v1.FunctionTool{Name: "f"}, &v1.FunctionTool{Name: "g"}}, Choice: &c.choice}}
 			body, err := tr.SerializeRequest(req)
 			if err != nil {
 				t.Fatal(err)
