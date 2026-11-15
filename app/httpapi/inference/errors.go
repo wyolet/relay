@@ -212,16 +212,6 @@ func normalizeRetryAfter(w http.ResponseWriter) {
 	w.Header().Del("Retry-After")
 }
 
-// isHopByHop returns true for headers that mustn't traverse the proxy.
-func isHopByHop(k string) bool {
-	switch http.CanonicalHeaderKey(k) {
-	case "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
-		"Te", "Trailers", "Transfer-Encoding", "Upgrade":
-		return true
-	}
-	return false
-}
-
 // ForwardUpstreamHeaders copies src → dst, dropping hop-by-hop, and stamps
 // the response origin as "upstream" (Set, not Add — an upstream must not be
 // able to spoof a relay-origin claim). The caller is responsible for any
@@ -230,7 +220,7 @@ func isHopByHop(k string) bool {
 // it from their own cross-shape handlers.
 func ForwardUpstreamHeaders(dst, src http.Header) {
 	for k, vs := range src {
-		if isHopByHop(k) {
+		if httpheader.Match(k, httpheader.HopByHop) {
 			continue
 		}
 		for _, v := range vs {

@@ -241,7 +241,7 @@ func TestForwardUpstreamHeaders(t *testing.T) {
 		"Transfer-Encoding":  {"chunked"},
 		"Upgrade":            {"h2c"},
 		"Te":                 {"trailers"},
-		"Trailers":           {"X"},
+		"Trailer":            {"X-Checksum"},
 		"Proxy-Authenticate": {"Basic"},
 	})
 	want := http.Header{"X-Existing": {"kept"}, "X-Foo": {"a", "b"}, "Content-Type": {"text/event-stream"}, HeaderOrigin: {"upstream"}}
