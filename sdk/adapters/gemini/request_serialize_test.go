@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"encoding/json"
+	"errors"
 	"maps"
 	"reflect"
 	"slices"
@@ -181,6 +182,7 @@ func TestSerializeRequest_Config(t *testing.T) {
 		{"empty options", v1.Request{ModelConfig: only(v1.ModelOpts{})}, `{}`},
 		{"reasoning without a budget", v1.Request{ModelConfig: only(v1.ModelOpts{Reasoning: &v1.ReasoningConfig{}})}, `{"generationConfig":{"thinkingConfig":{"includeThoughts":true}}}`},
 		{"json_object alone", v1.Request{ModelConfig: only(v1.ModelOpts{Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_object"}}})}, `{"generationConfig":{"responseMimeType":"application/json"}}`},
+		{"text format alone", v1.Request{ModelConfig: only(v1.ModelOpts{Output: &v1.OutputConfig{Format: &v1.Format{Type: "text"}}})}, `{}`},
 		{"choice without definitions", v1.Request{Tools: &v1.ToolsConfig{Choice: &v1.ToolChoice{Mode: "auto"}}}, `{"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}`},
 	}
 	for _, c := range cases {
@@ -189,6 +191,13 @@ func TestSerializeRequest_Config(t *testing.T) {
 			delete(wire, "contents")
 			assertJSON(t, wire, c.want)
 		})
+	}
+}
+
+func TestSerializeRequest_RejectsUnknownFormatType(t *testing.T) {
+	req := &v1.Request{ModelConfig: map[string]*v1.ModelOpts{"g": {Output: &v1.OutputConfig{Format: &v1.Format{Type: "grammar"}}}}}
+	if _, err := tr.SerializeRequest(req); !errors.Is(err, v1.ErrUnsupportedRequest) {
+		t.Errorf("err = %v, want ErrUnsupportedRequest", err)
 	}
 }
 

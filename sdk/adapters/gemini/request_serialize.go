@@ -71,6 +71,7 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		// takes the bare schema only.
 		if o := opts.Output; o != nil && o.Format != nil {
 			switch o.Format.Type {
+			case "text":
 			case "json_object":
 				gc.ResponseMIMEType = "application/json"
 				hasGC = true
@@ -80,6 +81,8 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 					gc.ResponseSchema = o.Format.Schema
 				}
 				hasGC = true
+			default:
+				return nil, fmt.Errorf("gemini serialize_request: %w: response format type %q", v1.ErrUnsupportedRequest, o.Format.Type)
 			}
 		}
 		if hasGC {
