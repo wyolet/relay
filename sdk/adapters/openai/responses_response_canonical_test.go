@@ -175,7 +175,6 @@ func TestResponsesParseResponse_UnmodeledAnnotation(t *testing.T) {
 }
 
 func TestResponsesParseResponse_FileCitationKeepsFilename(t *testing.T) {
-	t.Skip("bug: a file_citation annotation loses its filename, a documented member the typed annotation has no field for")
 	resp := respParseResponse(t, `{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":"f","filename":"a.pdf","index":3}]}]}]}`)
 	respJSONEq(t, resp.Output, `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":"f","filename":"a.pdf","index":3}]}]}]`)
 }
