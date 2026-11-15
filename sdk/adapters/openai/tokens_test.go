@@ -27,6 +27,13 @@ func TestExtractTokens(t *testing.T) {
 			want: usage.Tokens{"input": 10, "output": 5},
 		},
 		{name: "prompt only", body: `{"usage":{"prompt_tokens":5}}`, want: usage.Tokens{"input": 5}},
+		{name: "completion only", body: `{"usage":{"completion_tokens":5}}`, want: usage.Tokens{"output": 5}},
+		{
+			name: "negative counts are dropped",
+			body: `{"usage":{"prompt_tokens":-10,"completion_tokens":-1,"prompt_tokens_details":{"cached_tokens":-5,"audio_tokens":-1},
+				"completion_tokens_details":{"reasoning_tokens":-1,"audio_tokens":-1,"accepted_prediction_tokens":-1,"rejected_prediction_tokens":-1}}}`,
+			want: usage.Tokens{},
+		},
 		{name: "all cached", body: `{"usage":{"prompt_tokens":9,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":9}}}`, want: usage.Tokens{"output": 1, "cache_read": 9}},
 		{name: "zero usage", body: `{"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`},
 		{name: "no usage", body: `{"id":"c","choices":[{"delta":{"content":"hello"}}]}`},
@@ -42,8 +49,8 @@ func TestExtractTokens(t *testing.T) {
 			want: usage.Tokens{"input": 30, "output": 7, "cache_read": 12, "reasoning": 3},
 		},
 		{
-			name: "stream: one event split over data lines",
-			body: "data: {\"choices\":[],\ndata: \"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n",
+			name: "stream: one event split over data lines, after a non-JSON frame",
+			body: "data: ping\n\ndata: {\"choices\":[],\ndata: \"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n",
 			want: usage.Tokens{"input": 3, "output": 5},
 		},
 	}

@@ -2,10 +2,13 @@ package openai
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -66,6 +69,33 @@ func TestCCToCanonicalStream(t *testing.T) {
 			},
 		},
 		{
+			name: "an id-only fragment takes the first name that follows; a call without arguments is complete",
+			frames: []string{
+				ccChunk(`{"tool_calls":[{"index":0,"id":"call_a"}]}`),
+				ccChunk(`{"tool_calls":[{"index":0,"function":{"name":"f"}}]}`),
+				ccChunk(`{"tool_calls":[{"index":0,"function":{"name":"g"}}]}`),
+				"data: [DONE]",
+			},
+			want: []string{
+				`generation.created {"id":"c1","model":"m"}`,
+				`item.started {"item_id":"call_a","item_type":"function_call","index":0,"call_id":"call_a"}`,
+				`item.completed {"item_id":"call_a","index":0,"item":{"type":"function_call","id":"call_a","call_id":"call_a","name":"f","arguments":"","status":"completed"}}`,
+				`generation.completed {"id":"c1","status":"completed","finish_reason":"stop"}`,
+			},
+		},
+		{
+			name: "usage, service tier and finish reason outlast chunks that leave them out",
+			frames: []string{
+				`data: {"id":"c1","model":"m","service_tier":"flex","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`,
+				`data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":""}]}`,
+				"data: [DONE]",
+			},
+			want: []string{
+				`generation.created {"id":"c1","model":"m"}`,
+				`generation.completed {"id":"c1","status":"incomplete","finish_reason":"length","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input":3,"output":2},"service_tier":"flex"}`,
+			},
+		},
+		{
 			name:   "a chunk without an id takes one from created",
 			frames: []string{`data: {"created":5,"choices":[]}`},
 			want:   []string{`generation.created {"id":"resp_5","model":""}`},
@@ -75,6 +105,24 @@ func TestCCToCanonicalStream(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assertEvents(t, runStream(t, CCTranslator{}.NewToCanonicalStream(), tc.frames...), tc.want...)
 		})
+	}
+}
+
+// Parallel tool calls complete in the order they started, whatever index the wire gave them.
+func TestCCToCanonicalStream_ToolCallsCompleteInArrivalOrder(t *testing.T) {
+	var frames, want []string
+	for i := range 12 {
+		frames = append(frames, ccChunk(fmt.Sprintf(`{"tool_calls":[{"index":%d,"id":"call_%d","function":{"name":"f"}}]}`, 11-i, i)))
+		want = append(want, fmt.Sprintf("call_%d", i))
+	}
+	var got []string
+	for _, f := range splitCanonicalFrames(runStream(t, CCTranslator{}.NewToCanonicalStream(), append(frames, "data: [DONE]")...)) {
+		if event, data, _ := v1.ParseSSEChunk(f); event == v1.EventItemCompleted {
+			got = append(got, decodeMap(t, data)["item_id"].(string))
+		}
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("completion order (-want +got):\n%s", diff)
 	}
 }
 
@@ -97,6 +145,7 @@ func TestCCToCanonicalStream_ErrorFrame(t *testing.T) {
 	cases := []struct{ frame, want string }{
 		{`{"error":{"message":"overloaded","type":"server_error"}}`, `{"code":"server_error","message":"overloaded"}`},
 		{`{"error":{"message":"slow down","code":"rate_limit_exceeded"}}`, `{"code":"rate_limit_exceeded","message":"slow down"}`},
+		{`{"error":{"message":"bad","type":"invalid_request_error","code":"model_not_found"}}`, `{"code":"invalid_request_error","message":"bad"}`},
 		{`{"error":{"code":429}}`, `{"code":"429","message":"{\"error\":{\"code\":429}}"}`},
 		{`{"error":"boom"}`, `{"code":"","message":"{\"error\":\"boom\"}"}`},
 		{`{"error":{"message":"x"},"created":"not a number"}`, `{"code":"","message":"x"}`},
@@ -142,15 +191,17 @@ func TestCCFromCanonicalStream(t *testing.T) {
 		"event: item.started\ndata: {\"item_id\":\"fc_1\",\"item_type\":\"function_call\",\"index\":1,\"name\":\"f\"}",
 		"event: item.delta\ndata: {\"item_id\":\"fc_1\",\"index\":1,\"kind\":\"arguments\",\"delta\":\"{}\"}",
 		"event: item.delta\ndata: {\"item_id\":\"fc_9\",\"index\":9,\"kind\":\"arguments\",\"delta\":\"lost\"}",
+		"event: item.started\ndata: {\"item_id\":\"fc_2\",\"item_type\":\"function_call\",\"index\":2,\"name\":\"g\",\"call_id\":\"call_2\"}",
 		"event: item.completed\ndata: {\"item_id\":\"fc_1\",\"index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"f\",\"arguments\":\"{}\"}}",
 		"event: error\ndata: {\"code\":\"server_error\",\"message\":\"boom\"}",
 	)
-	// The tool call goes out under its item id: the real call_id only arrives with item.completed, after the header chunk.
+	// A tool call that starts without a call_id goes out under its item id: the real call_id only arrives with item.completed, after the header chunk.
 	assertCCChunks(t, out,
 		`{`+head+`,"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		`{`+head+`,"choices":[{"index":0,"delta":{"reasoning_content":"hm"},"finish_reason":null}]}`,
 		`{`+head+`,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"fc_1","type":"function","function":{"name":"f"}}]},"finish_reason":null}]}`,
 		`{`+head+`,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}`,
+		`{`+head+`,"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_2","type":"function","function":{"name":"g"}}]},"finish_reason":null}]}`,
 		`{"error":{"message":"boom","type":"server_error","code":"server_error"}}`,
 		`[DONE]`,
 	)

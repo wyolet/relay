@@ -20,9 +20,9 @@ func TestCCParseResponse(t *testing.T) {
 	cases := []struct{ name, body, canon string }{
 		{
 			name: "url citations attach to the text; other annotations are skipped",
-			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Paris [1].","annotations":[
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Paris [1].","refusal":"","annotations":[
 				{"type":"url_citation","url_citation":{"start_index":6,"end_index":9,"url":"https://x/p","title":"P"}},
-				{"type":"file_citation"}]}}`, ""),
+				{"type":"file_citation"},{"type":"x_citation"}]}}`, ""),
 			canon: `{` + head + `,"status":"completed","finish_reason":"stop","output":[{"type":"message","id":"msg_c1","status":"completed","role":"assistant",
 				"content":[{"type":"output_text","text":"Paris [1].","annotations":[{"type":"url_citation","start_index":6,"end_index":9,"url":"https://x/p","title":"P"}]}]}]}`,
 		},
@@ -35,7 +35,7 @@ func TestCCParseResponse(t *testing.T) {
 		},
 		{
 			name: "reasoning_content as a part array wins over reasoning",
-			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","reasoning_content":[{"type":"text","text":"a"},{"type":"text","text":"b"}],"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}`, ""),
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","reasoning":"x","reasoning_content":[{"type":"text","text":"a"},{"type":"text","text":"b"}],"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}`, ""),
 			canon: `{` + head + `,"status":"completed","finish_reason":"stop","output":[
 				{"type":"reasoning","id":"rs_c1","summary":[{"text":"ab"}],"content":"ab","status":"completed","provider_data":{"cc_reasoning_field":"reasoning_content"}},
 				{"type":"function_call","id":"call_1","call_id":"call_1","name":"f","arguments":"{}","status":"completed"}]}`,
@@ -51,6 +51,27 @@ func TestCCParseResponse(t *testing.T) {
 			body: ccResponse(`{"index":0,"finish_reason":"length","message":{"role":"assistant","content":null,"refusal":"No"}}`, ""),
 			canon: `{` + head + `,"status":"incomplete","finish_reason":"length","incomplete_details":{"reason":"max_output_tokens"},
 				"output":[{"type":"message","id":"msg_c1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"No"}]}]}`,
+		},
+		{
+			name: "text beside tool calls keeps its message",
+			body: ccResponse(`{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"On it.","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}`, ""),
+			canon: `{` + head + `,"status":"completed","finish_reason":"tool_calls","output":[
+				{"type":"message","id":"msg_c1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"On it."}]},
+				{"type":"function_call","id":"call_1","call_id":"call_1","name":"f","arguments":"{}","status":"completed"}]}`,
+		},
+		{
+			name: "a refusal beside tool calls keeps its message and the tool_calls finish",
+			body: ccResponse(`{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"refusal":"No","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}`, ""),
+			canon: `{` + head + `,"status":"completed","finish_reason":"tool_calls","output":[
+				{"type":"message","id":"msg_c1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"No"}]},
+				{"type":"function_call","id":"call_1","call_id":"call_1","name":"f","arguments":"{}","status":"completed"}]}`,
+		},
+		{
+			name: "negative counts are dropped",
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":""}}`, `,"usage":{"prompt_tokens":-10,"completion_tokens":-1,
+				"prompt_tokens_details":{"cached_tokens":-5,"audio_tokens":-1},
+				"completion_tokens_details":{"reasoning_tokens":-1,"audio_tokens":-1,"accepted_prediction_tokens":-1,"rejected_prediction_tokens":-1}}`),
+			canon: `{` + head + `,"status":"completed","finish_reason":"stop","output":[{"type":"message","id":"msg_c1","status":"completed","role":"assistant","content":null}]}`,
 		},
 		{
 			name:  "no choices",
@@ -171,6 +192,46 @@ func TestCCSerializeResponse(t *testing.T) {
 			}
 			assertJSON(t, wire, tc.wire)
 		})
+	}
+}
+
+// Only an unset or other finish reason takes the raw upstream one, and a failed or incomplete status with nothing else to say never reads as a clean stop.
+func TestCCSerializeResponse_FinishReasonFallbacks(t *testing.T) {
+	raw := func(s string) map[string]json.RawMessage {
+		return map[string]json.RawMessage{extFinishReason: json.RawMessage(s)}
+	}
+	cases := []struct {
+		status v1.Status
+		finish v1.FinishReason
+		ext    map[string]json.RawMessage
+		want   string
+	}{
+		{v1.StatusCompleted, "", nil, "stop"},
+		{v1.StatusInProgress, "", nil, "stop"},
+		{v1.StatusFailed, v1.FinishReasonStop, nil, "stop"},
+		{v1.StatusIncomplete, "", nil, "content_filter"},
+		{v1.StatusIncomplete, "", raw(`"zzz"`), "zzz"},
+		{v1.StatusIncomplete, "", raw(`""`), "content_filter"},
+		{v1.StatusIncomplete, v1.FinishReasonOther, raw(`"new_reason"`), "new_reason"},
+		{v1.StatusCompleted, v1.FinishReasonStop, raw(`"new_reason"`), "stop"},
+		{v1.StatusIncomplete, v1.FinishReasonLength, raw(`"new_reason"`), "length"},
+	}
+	for _, tc := range cases {
+		wire, err := CCTranslator{}.SerializeResponse(&v1.Response{Status: tc.status, FinishReason: tc.finish, Extensions: tc.ext}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := decodeMap(t, wire)["choices"].([]any)[0].(map[string]any)["finish_reason"]; got != tc.want {
+			t.Errorf("%s/%s/%s: buffered finish_reason = %v, want %s", tc.status, tc.finish, tc.ext[extFinishReason], got, tc.want)
+		}
+		if tc.ext != nil {
+			continue
+		}
+		out := runStream(t, CCTranslator{}.NewFromCanonicalStream(), "event: generation.completed\ndata: "+string(mustJSON(v1.GenerationCompletedEvent{Status: tc.status, FinishReason: tc.finish})))
+		_, data, _ := v1.ParseSSEChunk(splitCanonicalFrames(out)[0])
+		if got := decodeMap(t, data)["choices"].([]any)[0].(map[string]any)["finish_reason"]; got != tc.want {
+			t.Errorf("%s/%s: streamed finish_reason = %v, want %s", tc.status, tc.finish, got, tc.want)
+		}
 	}
 }
 
