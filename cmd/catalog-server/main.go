@@ -199,6 +199,33 @@ func build(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	return buildMCP(ctx, repo, commit, *version, *out)
+}
+
+// buildMCP writes the MCP template tarball when the tree has an mcp/ tree
+// with live documents. Documents that disagree on apiVersion fail the build:
+// the server would never index such a release.
+func buildMCP(ctx context.Context, repo catalogserver.Repo, commit, version, out string) int {
+	name := catalogserver.MCPAsset(version)
+	archive, err := catalogserver.BuildMCP(ctx, repo, commit)
+	if errors.Is(err, catalogserver.ErrNoMCPTree) {
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		return 1
+	}
+	if _, err := catalogserver.MCPArchiveChannel(archive); errors.Is(err, catalogserver.ErrNoDocuments) {
+		fmt.Fprintf(os.Stderr, "%s: mcp/ has no live documents; not written\n", name)
+		return 0
+	} else if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		return 1
+	}
+	if err := writeWithSum(out, name, archive); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	return 0
 }
 

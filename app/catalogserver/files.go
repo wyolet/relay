@@ -92,7 +92,13 @@ func (s *Server) produce(tag string, a asset) ([]byte, error) {
 
 func (s *Server) rebuild(ctx context.Context, t Tag, a asset) ([]byte, error) {
 	s.metrics.builds.WithLabelValues(a.label()).Inc()
-	data, err := s.mirror.Archive(ctx, t.Commit)
+	var data []byte
+	var err error
+	if a == assetMCP {
+		data, err = BuildMCP(ctx, s.mirror.Repo, t.Commit)
+	} else {
+		data, err = BuildData(ctx, s.mirror.Repo, t.Commit)
+	}
 	if err == nil && a == assetCatalog {
 		data, err = BuildCatalog(data, t.Committed, t.Name)
 	}

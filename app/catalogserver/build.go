@@ -30,10 +30,24 @@ const CatalogAsset = "catalog.json.gz"
 // DataAsset is the relay seed tree file of the release tagged tag.
 func DataAsset(tag string) string { return "relay-catalog-data-" + tag + ".tar.gz" }
 
+// MCPAsset is the MCP template tree file of the release tagged tag.
+func MCPAsset(tag string) string { return "mcp-catalog-data-" + tag + ".tar.gz" }
+
+// ErrNoMCPTree means a commit has no mcp/ directory, so its release has no
+// MCP template tarball.
+var ErrNoMCPTree = errors.New("no mcp tree")
+
 // BuildData builds the data tarball of commit. It never depends on compose,
 // so a tree this binary can't load still yields its tarball.
 func BuildData(ctx context.Context, repo Repo, commit string) ([]byte, error) {
 	return repo.Archive(ctx, commit)
+}
+
+// BuildMCP builds the MCP template tarball of commit, or returns
+// ErrNoMCPTree. Its documents are never parsed here: their schema belongs to
+// the gateway that seeds them.
+func BuildMCP(ctx context.Context, repo Repo, commit string) ([]byte, error) {
+	return repo.MCPArchive(ctx, commit)
 }
 
 // BuildCatalog composes catalog.json.gz from a data tarball, so the catalog
@@ -111,10 +125,24 @@ func parseSumFile(b []byte, name string) (string, error) {
 
 var channelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
 
+// ErrNoDocuments means a tarball's tree holds no YAML document, so it has no
+// channel.
+var ErrNoDocuments = errors.New("no documents")
+
 // ArchiveChannel is the schema channel of a data tarball: the apiVersion
 // suffix every document in it shares. It reads only apiVersion, so a schema
 // this binary can't load still gets its channel.
 func ArchiveChannel(archive []byte) (string, error) {
+	return archiveChannel(archive, "data")
+}
+
+// MCPArchiveChannel is the channel of an MCP template tarball, read the same
+// way from its mcp/ tree. It is independent of the data tree's channel.
+func MCPArchiveChannel(archive []byte) (string, error) {
+	return archiveChannel(archive, "mcp")
+}
+
+func archiveChannel(archive []byte, root string) (string, error) {
 	dir, err := os.MkdirTemp("", "catalog-channel-")
 	if err != nil {
 		return "", err
@@ -123,7 +151,7 @@ func ArchiveChannel(archive []byte) (string, error) {
 	if err := catalogarchive.Extract(bytes.NewReader(archive), dir); err != nil {
 		return "", fmt.Errorf("extract: %w", err)
 	}
-	apiVersion, err := treeAPIVersion(filepath.Join(dir, "data"))
+	apiVersion, err := treeAPIVersion(filepath.Join(dir, root))
 	if err != nil {
 		return "", err
 	}
@@ -138,6 +166,11 @@ func ArchiveChannel(archive []byte) (string, error) {
 func treeAPIVersion(dir string) (string, error) {
 	var apiVersion, first string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+		// git archive writes no directory for a tree whose files are all
+		// excluded, such as an mcp/ holding only drafts.
+		if walkErr != nil && path == dir && errors.Is(walkErr, fs.ErrNotExist) {
+			return fs.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -186,7 +219,7 @@ func treeAPIVersion(dir string) (string, error) {
 		return "", err
 	}
 	if apiVersion == "" {
-		return "", errors.New("no documents")
+		return "", ErrNoDocuments
 	}
 	return apiVersion, nil
 }

@@ -118,6 +118,23 @@ func (r Repo) Archive(ctx context.Context, commit string) ([]byte, error) {
 	return r.git(ctx, gitCommandTime, "archive", "--format=tar.gz", commit, "--", "data", ":(exclude)data/drafts")
 }
 
+// MCPArchive is Archive for the mcp/ tree without mcp/drafts, or
+// ErrNoMCPTree. The tree is checked first because git archive fails on a
+// pathspec that matches nothing.
+func (r Repo) MCPArchive(ctx context.Context, commit string) ([]byte, error) {
+	if !isHexOID(commit) {
+		return nil, fmt.Errorf("invalid commit %q", commit)
+	}
+	out, err := r.git(ctx, gitCommandTime, "ls-tree", "-d", "--name-only", commit, "--", "mcp")
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return nil, ErrNoMCPTree
+	}
+	return r.git(ctx, gitCommandTime, "archive", "--format=tar.gz", commit, "--", "mcp", ":(exclude)mcp/drafts")
+}
+
 // Mirror is a bare clone of URL that follows its tags and main branch.
 type Mirror struct {
 	Repo

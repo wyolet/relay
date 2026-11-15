@@ -118,7 +118,7 @@ func (r *sourceRepo) git(at time.Time, args ...string) string {
 // commit replaces the work tree with files and commits it at at.
 func (r *sourceRepo) commit(files map[string]string, at time.Time) string {
 	r.t.Helper()
-	for _, sub := range []string{"data", "README.md"} {
+	for _, sub := range []string{"data", "mcp", "README.md"} {
 		if err := os.RemoveAll(filepath.Join(r.dir, sub)); err != nil {
 			r.t.Fatal(err)
 		}
@@ -178,11 +178,12 @@ type fakeReleases struct {
 	mu    sync.Mutex
 	files map[string][]byte
 	hits  map[string]int
+	asked map[string]int // every request, published or not
 	srv   *httptest.Server
 }
 
 func newFakeReleases(t *testing.T) *fakeReleases {
-	f := &fakeReleases{files: map[string][]byte{}, hits: map[string]int{}}
+	f := &fakeReleases{files: map[string][]byte{}, hits: map[string]int{}, asked: map[string]int{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if rest, ok := strings.CutPrefix(r.URL.Path, "/objects/"); ok {
 			f.mu.Lock()
@@ -198,6 +199,7 @@ func newFakeReleases(t *testing.T) *fakeReleases {
 		}
 		key := strings.TrimPrefix(r.URL.Path, "/")
 		f.mu.Lock()
+		f.asked[key]++
 		_, ok := f.files[key]
 		f.mu.Unlock()
 		if !ok {
