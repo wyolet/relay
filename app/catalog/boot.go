@@ -97,8 +97,9 @@ type BootstrapOptions struct {
 	// SystemRateLimits are the system-owned rate limits the binary looks up by name. Every hydrate creates the ones with no row and leaves existing rows alone.
 	SystemRateLimits []*ratelimit.RateLimit
 
-	// Prune deletes the detached rows nothing holds, after every versioned
-	// reseed when Prune.Auto is set and on demand through PruneDetached.
+	// Prune deletes the detached rows nothing holds: with Prune.Auto after
+	// every versioned reseed and on a follower's checks, and on demand
+	// through PruneDetached.
 	Prune PruneOptions
 }
 

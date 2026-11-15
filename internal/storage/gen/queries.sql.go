@@ -33,6 +33,25 @@ func (q *Queries) AllowLegacySecretWrite(ctx context.Context) error {
 	return err
 }
 
+const anyCatalogDetached = `-- name: AnyCatalogDetached :one
+SELECT EXISTS (SELECT 1 FROM host_bindings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM pricings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM models WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM policies WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM rate_limits WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM hosts WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM providers WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+`
+
+// Whether a catalog release left any row detached; the follower asks on
+// every poll before it runs a prune.
+func (q *Queries) AnyCatalogDetached(ctx context.Context) (pgtype.Bool, error) {
+	row := q.db.QueryRow(ctx, anyCatalogDetached)
+	var column_1 pgtype.Bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countLegacySecretValues = `-- name: CountLegacySecretValues :one
 SELECT count(*) FROM secret_values WHERE dek_id IS NULL
 `

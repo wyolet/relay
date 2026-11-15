@@ -25,7 +25,7 @@ import (
 var ErrSeedBusy = errors.New("catalog: another relay is seeding the catalog")
 
 // CheckResult is the catalog-source version before and after one check, and
-// what the prune after a seed it made did (nil when none ran).
+// what the prune the check ran did (nil when none ran).
 type CheckResult struct {
 	Previous string
 	Current  string
@@ -201,6 +201,11 @@ func (f *Follower) check(ctx context.Context) (checkReport, error) {
 			if outcome == seedUpdated {
 				res.Current = idx.Latest
 			}
+		}
+		// A seed prunes on its own; a check that seeds nothing prunes what
+		// earlier releases detached.
+		if outcome != seedUpdated && seedErr == nil {
+			res.Pruned = pruneBacklog(ctx, f.stores, f.opts.Prune)
 		}
 		return writeCheckStatus(ctx, f.stores, time.Now(), seedErr)
 	})

@@ -114,7 +114,8 @@ type Config struct {
 	// registers none.
 	CatalogWebhookURL string
 	// CatalogPrune runs the prune of detached catalog rows after every
-	// versioned reseed (RELAY_CATALOG_PRUNE, default on).
+	// versioned reseed and on a following relay's checks (RELAY_CATALOG_PRUNE,
+	// default on).
 	CatalogPrune bool
 	// CatalogPruneIdle is how long a detached model or host binding must have
 	// served no request to be pruned (RELAY_CATALOG_PRUNE_IDLE, default 720h).

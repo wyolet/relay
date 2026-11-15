@@ -153,8 +153,9 @@ relay:
   # nudges it on every new release. Must be https and reachable from the
   # catalog server. Empty = polling only.
   catalogWebhookUrl: ""
-  # -- "off" stops deleting, after each catalog upgrade, the detached catalog
-  # rows nothing holds. Empty uses the relay default (on).
+  # -- "off" stops deleting the detached catalog rows nothing holds, after each
+  # catalog upgrade and on a following relay's checks. Empty uses the relay
+  # default (on).
   catalogPrune: ""
   # -- How long a detached model or host binding must have served no request
   # before the prune deletes it (Go duration). Empty uses the relay default (720h).

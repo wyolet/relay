@@ -16,7 +16,7 @@ type catalogSyncOutput struct {
 		Previous string                 `json:"previous" doc:"Catalog release the database was seeded from before the check."`
 		Current  string                 `json:"current" doc:"Catalog release the database is seeded from after it."`
 		Changed  bool                   `json:"changed" doc:"Whether the check seeded a newer release."`
-		Prune    *settings.CatalogPrune `json:"prune,omitempty" doc:"What the prune after the seed did; absent when the check seeded nothing, or the prune is off or failed."`
+		Prune    *settings.CatalogPrune `json:"prune,omitempty" doc:"What the prune the check ran did: after a seed, or with no seed, on rows earlier releases detached. Absent when none ran: the prune is off, no row is detached, usage could not answer yet, or it failed."`
 	}
 }
 

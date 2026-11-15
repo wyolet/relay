@@ -429,6 +429,17 @@ DELETE FROM host_bindings WHERE id = $1;
 -- name: DeleteHostBindingAtVersion :execrows
 DELETE FROM host_bindings WHERE id = $1 AND resource_version = $2;
 
+-- name: AnyCatalogDetached :one
+-- Whether a catalog release left any row detached; the follower asks on
+-- every poll before it runs a prune.
+SELECT EXISTS (SELECT 1 FROM host_bindings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM pricings WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM models WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM policies WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM rate_limits WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM hosts WHERE metadata->>'catalogDetachedAt' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM providers WHERE metadata->>'catalogDetachedAt' IS NOT NULL);
+
 -- name: GetProvider :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers WHERE id = $1;
 

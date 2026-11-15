@@ -130,7 +130,7 @@ func main() {
 
 	usageCtl, usageReader := buildUsageLog(listenerCtx, cfg, cat, kvStore, lifecycleReg)
 	defer usageCtl.Close()
-	bootOpts.Prune.Usage = pruneUsage{usageCtl}
+	bootOpts.Prune.Usage, bootOpts.Prune.UsageReady = pruneUsage{usageCtl}, usageCtl.ReaderReady
 
 	// Payload logging: the second lifecycle observer. Always wired; its
 	// runtime config lives in the "payload-logging" settings section, so it
