@@ -138,10 +138,15 @@ func TestResponsesToCanonicalStream(t *testing.T) {
 }
 
 func TestResponsesToCanonicalStream_ToolResultItemKeepsItsID(t *testing.T) {
-	t.Skip("bug: a streamed function_call_output item starts under its wire id but completes with an empty item_id")
 	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(),
 		respSSE(ResponsesEventOutputItemDone, `{"output_index":0,"item":{"type":"function_call_output","id":"fco_1","call_id":"c1","output":"ok"}}`))
 	respJSONEq(t, frames, `[{"event":"item.completed","data":{"item_id":"fco_1","index":0,"item":{"type":"function_call_output","call_id":"c1","output":"ok"}}}]`)
+}
+
+func TestResponsesToCanonicalStream_CustomToolResultItemKeepsItsID(t *testing.T) {
+	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(),
+		respSSE(ResponsesEventOutputItemDone, `{"output_index":1,"item":{"type":"custom_tool_call_output","id":"ctco_1","call_id":"c1","output":"ok"}}`))
+	respJSONEq(t, frames, `[{"event":"item.completed","data":{"item_id":"ctco_1","index":1,"item":{"type":"function_call_output","call_id":"c1","output":"ok"}}}]`)
 }
 
 func TestResponsesToCanonicalStream_FailedKeepsError(t *testing.T) {

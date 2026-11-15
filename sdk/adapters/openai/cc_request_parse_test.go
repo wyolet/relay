@@ -192,7 +192,6 @@ func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 		},
 		{
 			name: "json_schema format with a mistyped member",
-			bug:  `a json_schema wrapper that fails to decode leaves a json_schema format with no schema, and no error`,
 			body: `{"model":"m","messages":[],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
 			keep: `"schema":{"type":"object"}`,
 		},
@@ -235,6 +234,10 @@ func TestCCParseRequest_Errors(t *testing.T) {
 		"mistyped user content": `{"model":"m","messages":[{"role":"user","content":5}]}`,
 		"mistyped tool content": `{"model":"m","messages":[{"role":"tool","tool_call_id":"c","content":{}}]}`,
 		"mistyped tool_choice":  `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":5}`,
+		"mistyped json_schema":  `{"model":"m","messages":[],"response_format":{"type":"json_schema","json_schema":{"name":5,"schema":{"type":"object"}}}}`,
+		"number stop":           `{"model":"m","messages":[],"stop":5}`,
+		"object stop":           `{"model":"m","messages":[],"stop":{"s":"END"}}`,
+		"non-string stop entry": `{"model":"m","messages":[],"stop":["END",5]}`,
 		"allowed custom tool":   `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"custom","custom":{"name":"g"}}]}}}`,
 		"empty allowed list":    `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[]}}}`,
 		"allowed mode none":     `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"none","tools":[{"type":"function","function":{"name":"f"}}]}}}`,

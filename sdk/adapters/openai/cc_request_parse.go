@@ -75,10 +75,11 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			hasSampling = true
 		} else {
 			var single string
-			if err2 := json.Unmarshal(wire.Stop, &single); err2 == nil {
-				sampling.Stop = []string{single}
-				hasSampling = true
+			if err2 := json.Unmarshal(wire.Stop, &single); err2 != nil {
+				return nil, fmt.Errorf("cc parse_request: stop: want a string or an array of strings")
 			}
+			sampling.Stop = []string{single}
+			hasSampling = true
 		}
 	}
 	if hasSampling {
@@ -135,12 +136,13 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 				Schema      json.RawMessage `json:"schema"`
 				Strict      *bool           `json:"strict"`
 			}
-			if err := json.Unmarshal(wire.ResponseFormat.JSONSchema, &inner); err == nil {
-				f.Name = inner.Name
-				f.Description = inner.Description
-				f.Schema = inner.Schema
-				f.Strict = inner.Strict
+			if err := json.Unmarshal(wire.ResponseFormat.JSONSchema, &inner); err != nil {
+				return nil, fmt.Errorf("cc parse_request: response_format.json_schema: %w", err)
 			}
+			f.Name = inner.Name
+			f.Description = inner.Description
+			f.Schema = inner.Schema
+			f.Strict = inner.Strict
 		}
 		opts.Output.Format = f
 	}

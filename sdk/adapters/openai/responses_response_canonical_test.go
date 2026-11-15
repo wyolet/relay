@@ -147,11 +147,13 @@ func TestResponsesSerializeResponse_RefusalAfterAToolCall(t *testing.T) {
 	ResponsesEchoRequest(&ResponsesResponse{}, nil)
 }
 
-// Canonical raw annotations go back out verbatim, except a file_citation, which is rebuilt in its typed form.
+// Canonical raw annotations go back out verbatim, except a file_citation, which is rebuilt in its typed form; required members are sent even when zero.
 func TestResponsesSerializeResponse_RawAnnotations(t *testing.T) {
 	resp := &v1.Response{ID: "r", Model: "m", CreatedAt: 1, Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop, Output: []v1.Item{
 		&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "x", Annotations: []v1.Annotation{
 			&v1.RawAnnotation{Type: "file_citation", JSON: json.RawMessage(`{"file_id":"f1","index":2}`)},
+			&v1.RawAnnotation{Type: "file_citation", JSON: json.RawMessage(`{"file_id":"f0","index":0}`)},
+			&v1.URLCitationAnnotation{StartIndex: 0, EndIndex: 1, URL: "https://x"},
 			&v1.RawAnnotation{Type: "container_file_citation", JSON: json.RawMessage(`{"type":"container_file_citation","container_id":"c"}`)},
 			&v1.RawAnnotation{Type: "file_path", JSON: json.RawMessage(`{"type":"file_path","file_id":"f2"}`)},
 			&v1.RawAnnotation{Type: "file_path"},
@@ -163,6 +165,8 @@ func TestResponsesSerializeResponse_RawAnnotations(t *testing.T) {
 	}
 	respJSONEq(t, respMember(t, wire, "output"), `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","logprobs":[],"annotations":[
 		{"type":"file_citation","file_id":"f1","index":2},
+		{"type":"file_citation","file_id":"f0","index":0},
+		{"type":"url_citation","start_index":0,"end_index":1,"url":"https://x","title":""},
 		{"type":"container_file_citation","container_id":"c"},
 		{"type":"file_path","file_id":"f2"},
 		{"type":"file_path"}]}]}]`)
@@ -175,7 +179,6 @@ func TestResponsesParseResponse_UnmodeledAnnotation(t *testing.T) {
 }
 
 func TestResponsesParseResponse_FileCitationKeepsFilename(t *testing.T) {
-	t.Skip("bug: a file_citation annotation loses its filename, a documented member the typed annotation has no field for")
 	resp := respParseResponse(t, `{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":"f","filename":"a.pdf","index":3}]}]}]}`)
 	respJSONEq(t, resp.Output, `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"file_citation","file_id":"f","filename":"a.pdf","index":3}]}]}]`)
 }
