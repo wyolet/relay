@@ -20,7 +20,7 @@ ARG CATALOG_REF
 ARG CATALOG_SHA256
 
 # --- assets: fetch pinned UI dist + catalog data; no toolchain reaches final ---
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS assets
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS assets
 RUN apk add --no-cache curl tar jq ca-certificates
 ARG UI_VERSION
 ARG UI_SHA256
@@ -125,7 +125,7 @@ ENTRYPOINT ["/relay"]
 # the apk postgresql16 package (no LLVM JIT) — a fraction of the official
 # postgres image's size. Single-node only; production uses the lean image above
 # against managed PG.
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS standalone
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS standalone
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
 RUN apk add --no-cache postgresql16 postgresql16-client tzdata \
     && mkdir -p /var/lib/postgresql/data /run/postgresql \
@@ -158,7 +158,7 @@ ENTRYPOINT ["/usr/local/bin/relay-standalone-entrypoint.sh"]
 # --- catalog-server: serves relay-catalog releases; also the catalog repo's CI tools ---
 # git is required: release data tarballs are `git archive` output. No ENTRYPOINT,
 # so `docker run <image> catalog-validate ...` runs either binary.
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS catalog-server
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS catalog-server
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
 RUN apk add --no-cache git \
     && addgroup -S -g 65532 catalog \
