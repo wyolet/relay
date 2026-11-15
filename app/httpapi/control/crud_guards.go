@@ -132,9 +132,14 @@ func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
 }
 
 func guardPolicyBindingWith(c refcheck.Checker) mutationGuard[policybinding.PolicyBinding] {
-	return func(ctx context.Context, action string, _, incoming *policybinding.PolicyBinding) error {
+	return func(ctx context.Context, action string, existing, incoming *policybinding.PolicyBinding) error {
 		if action == "delete" || incoming == nil {
 			return nil
+		}
+		c := c
+		// The policy the stored binding already uses, in the same scope, is kept rather than chosen.
+		if action == "update" && existing.Meta.Owner == incoming.Meta.Owner {
+			c.Held = map[string]bool{existing.Spec.PolicyID: true}
 		}
 		return refErr(c.PolicyBinding(ctx, incoming))
 	}

@@ -354,3 +354,18 @@ func TestRunKeepsWhatUsageCannotAnswerFor(t *testing.T) {
 		})
 	}
 }
+
+// A row with the detach mark that is owned by the organization is an operator's, never a prune candidate, even when the mark outlived the move.
+func TestRunLeavesOrganizationRowsAlone(t *testing.T) {
+	f := newFixture()
+	org := &policy.Policy{Meta: rowMeta("moved-policy", true)}
+	org.Meta.Owner = meta.Owner{Kind: meta.OwnerOrganization}
+	orgRL := &ratelimit.RateLimit{Meta: rowMeta("moved-rl", true)}
+	orgRL.Meta.Owner = meta.Owner{Kind: meta.OwnerOrganization}
+	f.policies.rows = []*policy.Policy{org}
+	f.rateLimits.rows = []*ratelimit.RateLimit{orgRL}
+	rep := f.run(t, true)
+	if len(outcomes(rep)) != 0 || rep.Pruned != 0 || len(f.policies.deleted)+len(f.rateLimits.deleted) != 0 {
+		t.Fatalf("prune judged organization rows: %+v, deleted %v %v", outcomes(rep), f.policies.deleted, f.rateLimits.deleted)
+	}
+}

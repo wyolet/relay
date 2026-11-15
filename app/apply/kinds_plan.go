@@ -3,6 +3,7 @@ package apply
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/wyolet/relay/app/authz"
@@ -70,6 +71,8 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 			m.Owner = meta.Owner{Kind: meta.OwnerSystem}
 		case shared && m.Owner.Tenant():
 			return &InvalidError{Kind: k.Kind, Name: name, Err: fmt.Errorf("%s is shared catalog data and cannot be owned by a %s", route.Singular, m.Owner.Kind)}
+		case m.Owner.Kind == meta.OwnerOrganization && !authz.OrganizationKind(route.Singular):
+			return &InvalidError{Kind: k.Kind, Name: name, Err: fmt.Errorf("%s cannot be owned by the organization; only policies, rate limits, budgets and pools can", route.Singular)}
 		case m.Owner.Kind == meta.OwnerUser && m.Owner.ID == "":
 			// A user owner with no id names nobody; resolve it the way CRUD
 			// create does. Cannot fail: only a supplied id is checked.
@@ -82,6 +85,15 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		}
 
 		prev, found := existing[name]
+		if found && b.opts.CatalogSeed {
+			if po := k.Meta(prev).Owner; po.Kind == meta.OwnerOrganization || po.Tenant() {
+				slog.Warn("seed: a stored row of this name is not the catalog's; left alone",
+					"kind", k.Kind, "name", name, "owner_kind", po.Kind)
+				e.ID, e.owner, e.Action = k.Meta(prev).ID, po, ActionConflict
+				b.entries = append(b.entries, e)
+				continue
+			}
+		}
 		if found {
 			pm := k.Meta(prev)
 			e.prev = rowState{present: true, dirty: pm.Dirty, updatedAt: pm.UpdatedAt}
@@ -103,6 +115,10 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 				m.Owner = k.Meta(prev).Owner
 			}
 			e.owner = m.Owner
+			// The organization's rows are never the catalog's, so one moved there sheds the detach mark the catalog gave it.
+			if m.Owner.Kind == meta.OwnerOrganization {
+				m.CatalogDetachedAt = nil
+			}
 			if k.Keep != nil {
 				if err := k.Keep(prev, obj); err != nil {
 					return &InvalidError{Kind: k.Kind, Name: name, Err: err}

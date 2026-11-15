@@ -144,8 +144,8 @@ type DeprecationView struct {
 	Replacement string `json:"replacement,omitempty" doc:"Id of the replacement model."`
 }
 type OwnerRef struct {
-	Kind string `json:"kind"           doc:"Owner kind: system, host, user, team or project."` // "user" | "host" | "system" | …
-	ID   string `json:"id,omitempty"   doc:"Owner id; for a host's tier preset, the host id."` // for host-tier policies, the host id
+	Kind string `json:"kind"           doc:"Owner kind: system, organization, host, user, team or project."` // "user" | "host" | "system" | …
+	ID   string `json:"id,omitempty"   doc:"Owner id; for a host's tier preset, the host id."`               // for host-tier policies, the host id
 	Name string `json:"name,omitempty" doc:"Owner slug, when it has one."`
 }
 type BindingView struct {
@@ -199,6 +199,8 @@ type ModelPolicyRow struct {
 	Name   string   `json:"name"   doc:"Policy slug."`
 	Owner  OwnerRef `json:"owner"  doc:"The policy's owner; a host for a tier preset."`
 	Limits []Limit  `json:"limits" doc:"Rules of every rate limit the policy applies to this model."`
+	// HiddenRateLimits are rate limits that apply but the caller may not see.
+	HiddenRateLimits []string `json:"hiddenRateLimits,omitempty" doc:"Ids of rate limits that apply here but the caller may not see; their rules are left out of limits."`
 }
 
 // ── projections ─────────────────────────────────────────────────────────────
@@ -269,11 +271,13 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 		if !granted {
 			continue
 		}
+		limits, hidden := idx.limitsOnAnyHost(p, provSlug, m.Meta.Name, hostSlugs, s.rateLimitVisible(idx))
 		rows = append(rows, ModelPolicyRow{
-			ID:     p.Meta.ID,
-			Name:   p.Meta.Name,
-			Owner:  idx.ownerRefOf(p.Meta.Owner),
-			Limits: idx.limitsOnAnyHost(p, provSlug, m.Meta.Name, hostSlugs),
+			ID:               p.Meta.ID,
+			Name:             p.Meta.Name,
+			Owner:            idx.ownerRefOf(p.Meta.Owner),
+			Limits:           limits,
+			HiddenRateLimits: hidden,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })

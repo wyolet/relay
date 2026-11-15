@@ -114,6 +114,8 @@ var scopeActors = map[string]*actor.Actor{
 	"bob":   {UserID: "u-bob", Username: "bob"},
 	"root":  {UserID: "u-root", Username: "root", Roles: []string{user.RoleAdmin}},
 	"token": {AdminToken: true, Username: "admin-token"},
+	// granted holds no admin role on its session; a role binding may make it one.
+	"granted": {UserID: "u-granted", Username: "granted", Subjects: appcatalog.UserSubjects("u-granted", nil, nil)},
 }
 
 // testAPI is a router whose requests run as the actor X-Test-Actor names, with the relay error envelope installed.
@@ -664,7 +666,7 @@ func newSharedCatalogHarness(t *testing.T) (http.Handler, *actor.Actor) {
 	rlmeta := func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta }
 	mountKind[ratelimit.RateLimit](api, "rate-limits", "rate-limit", newMemStore(rlmeta), rbac, rlmeta, (*ratelimit.RateLimit).Validate, meta.OwnerUser, nil, noSettings{})
 	polmeta := func(p *policy.Policy) *meta.Metadata { return &p.Meta }
-	mountKind[policy.Policy](api, "policies", "policy", newMemStore(polmeta), rbac, polmeta, (*policy.Policy).Validate, meta.OwnerUser, guardPolicyModels(d), noSettings{})
+	mountKind[policy.Policy](api, "policies", "policy", newMemStore(polmeta), rbac, polmeta, (*policy.Policy).Validate, meta.OwnerUser, guardPolicyModels(d, nil), noSettings{})
 	return r, nobody
 }
 

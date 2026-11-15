@@ -61,19 +61,23 @@ func (b *Budget) Default() {
 	}
 }
 
-// Validate runs intra-row rules via the shared meta.Validator and requires an owner of kind system, team, project or user; team and project owners carry an id.
+// Validate runs intra-row rules via the shared meta.Validator and requires an owner of kind system, organization, team, project or user; team and project owners carry an id, an organization owner none.
 func (b *Budget) Validate() error {
 	if err := meta.Validator.Struct(b); err != nil {
 		return err
 	}
 	switch b.Meta.Owner.Kind {
 	case meta.OwnerSystem, meta.OwnerUser:
+	case meta.OwnerOrganization:
+		if b.Meta.Owner.ID != "" {
+			return fmt.Errorf("budget %q: an organization owner carries no id", b.Meta.Name)
+		}
 	case meta.OwnerTeam, meta.OwnerProject:
 		if b.Meta.Owner.ID == "" {
 			return fmt.Errorf("budget %q: owner.kind %q requires an id", b.Meta.Name, b.Meta.Owner.Kind)
 		}
 	default:
-		return fmt.Errorf("budget %q: owner.kind must be system, team, project or user, got %q", b.Meta.Name, b.Meta.Owner.Kind)
+		return fmt.Errorf("budget %q: owner.kind must be system, organization, team, project or user, got %q", b.Meta.Name, b.Meta.Owner.Kind)
 	}
 	return nil
 }

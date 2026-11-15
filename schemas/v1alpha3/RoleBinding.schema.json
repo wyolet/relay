@@ -96,6 +96,7 @@
         "kind": {
           "enum": [
             "system",
+            "organization",
             "user",
             "team",
             "project",

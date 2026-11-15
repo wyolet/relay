@@ -98,11 +98,11 @@ func ReachOf(v *engine.View, accountID string, over *Override) *Reach {
 // ScopeHolds reports whether scope outer holds inner in v: the system holds everything, a scope itself, a team its projects.
 func ScopeHolds(v *engine.View, outer, inner meta.Owner) bool { return scopeHolds(v, outer, inner) }
 
-// OwnerAccount returns the account a policy owned by owner is previewed in: a team's or project's own account, a user's personal account. ok is false when owner is another kind or its account is not made yet; the system scope answers nil, true, as it has no account.
+// OwnerAccount returns the account a policy owned by owner is previewed in: a team's or project's own account, a user's personal account. ok is false when owner is another kind or its account is not made yet; the system and the organization answer nil, true, as they have no account.
 func OwnerAccount(v *engine.View, owner meta.Owner) (acc *account.Account, ok bool) {
 	var place string
 	switch owner.Kind {
-	case meta.OwnerSystem:
+	case meta.OwnerSystem, meta.OwnerOrganization:
 		return nil, true
 	case meta.OwnerTeam, meta.OwnerProject:
 		place = string(owner.Kind) + ":" + owner.ID

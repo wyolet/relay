@@ -95,6 +95,20 @@ func refuseNonSystemScopeOwner(singular string, o meta.Owner) error {
 	return nil
 }
 
+// refuseOrganizationOwner answers 400 for an organization owner on a kind the organization owns no rows of, and 403 for a caller who is no admin (authz.Admin), under every authorization mode: organization rows are the deployment admins' own.
+func refuseOrganizationOwner(ctx context.Context, a authz.Authorizer, singular string, o meta.Owner) error {
+	if o.Kind != meta.OwnerOrganization {
+		return nil
+	}
+	if !authz.OrganizationKind(singular) {
+		return huma.Error400BadRequest(singular + " cannot be owned by the organization; only policies, rate limits, budgets and pools can")
+	}
+	if !authz.Admin(ctx, a) {
+		return huma.Error403Forbidden("an organization-owned " + singular + " requires an admin")
+	}
+	return nil
+}
+
 // registerKind installs the five CRUD operations for kind T on api and returns how they find a row. The metaOf, validate, defaultOwnerKind, and resolveSlug closures supply the kind-specific glue.
 //
 // defaultOwnerKind is stamped on Create when the caller omits
@@ -347,6 +361,9 @@ func registerKind[T any](
 			if err := refuseNonSystemScopeOwner(singular, m.Owner); err != nil {
 				return nil, err
 			}
+			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
+				return nil, err
+			}
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
 			}
@@ -435,8 +452,15 @@ func registerKind[T any](
 			if err := refuseNonSystemScopeOwner(singular, m.Owner); err != nil {
 				return nil, err
 			}
+			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
+				return nil, err
+			}
 		}
 		m.CatalogDetachedAt = metaOf(existing).CatalogDetachedAt
+		// The organization's rows are never the catalog's, so one moved there sheds the detach mark.
+		if m.Owner.Kind == meta.OwnerOrganization {
+			m.CatalogDetachedAt = nil
+		}
 		if err := checks.valid(v); err != nil {
 			return nil, err
 		}

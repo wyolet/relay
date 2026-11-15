@@ -32,7 +32,7 @@ func (k kindChecks[T]) mayUpdate(ctx context.Context, id string, m *meta.Metadat
 	if err := k.authz.Authorize(ctx, k.plural+".update", authz.Resource{Kind: k.singular, ID: id, Owner: &m.Owner}); err != nil {
 		return mapAuthzErr(err)
 	}
-	if err := settings.Governs(k.gov, settings.OpEdit, k.singular, string(m.GovernedOwnerKind()), authz.IsAdmin(ctx)); err != nil {
+	if err := settings.Governs(k.gov, settings.OpEdit, k.singular, string(m.GovernedOwnerKind()), authz.Admin(ctx, k.authz)); err != nil {
 		return huma.Error403Forbidden(err.Error())
 	}
 	return nil
@@ -43,7 +43,7 @@ func (k kindChecks[T]) mayDelete(ctx context.Context, id string, m *meta.Metadat
 	if err := k.authz.Authorize(ctx, k.plural+".delete", authz.Resource{Kind: k.singular, ID: id, Owner: &m.Owner}); err != nil {
 		return mapAuthzErr(err)
 	}
-	if err := settings.Governs(k.gov, settings.OpDelete, k.singular, string(m.GovernedOwnerKind()), authz.IsAdmin(ctx)); err != nil {
+	if err := settings.Governs(k.gov, settings.OpDelete, k.singular, string(m.GovernedOwnerKind()), authz.Admin(ctx, k.authz)); err != nil {
 		return huma.Error403Forbidden(err.Error())
 	}
 	return nil

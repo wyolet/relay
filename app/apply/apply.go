@@ -116,6 +116,11 @@ type Options struct {
 	Prune    bool
 	Selector string
 
+	// CatalogSeed marks a run that seeds a catalog tree. A stored row of a
+	// document's name that the organization or a tenant owns is not the
+	// catalog's: it is left as it is and reported as a conflict.
+	CatalogSeed bool
+
 	// Gov supplies the governance:<kind> sections every planned mutation is
 	// checked against. Nil skips the check — the boot seed runs before the
 	// settings cache exists.
@@ -257,7 +262,7 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 	}
 
 	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel,
-		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License,
+		admin: opts.Authz == nil || authz.Admin(ctx, opts.Authz), lic: opts.License,
 		operator: refcheck.RequireAdmin(ctx, opts.Authz, "") == nil}
 	b.dir, b.dirErr = directoryFor(opts)
 	if err := b.run(ctx, docs); err != nil {

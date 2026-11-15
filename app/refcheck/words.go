@@ -40,6 +40,8 @@ func (c Checker) rowText(ctx context.Context, kind string, m meta.Metadata) stri
 	switch m.Owner.Kind {
 	case meta.OwnerSystem:
 		return "system " + name
+	case meta.OwnerOrganization:
+		return "organization " + name
 	case meta.OwnerUser:
 		return c.userPossessive(ctx, m.Owner.ID) + " personal " + name
 	}
@@ -55,11 +57,13 @@ func hiddenRowText(kind string) string {
 	return "a " + w + " you cannot see"
 }
 
-// scopeText names a scope: `team "Platform"`, `project "Web"`, "your personal scope", "the system".
+// scopeText names a scope: `team "Platform"`, `project "Web"`, "your personal scope", "the organization", "the system".
 func (c Checker) scopeText(ctx context.Context, o meta.Owner) string {
 	switch o.Kind {
 	case meta.OwnerSystem, "":
 		return "the system"
+	case meta.OwnerOrganization:
+		return "the organization"
 	case meta.OwnerUser:
 		return c.userPossessive(ctx, o.ID) + " personal scope"
 	case meta.OwnerTeam:

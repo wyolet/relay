@@ -19,8 +19,9 @@ import (
 //go:embed builtin.yaml
 var builtinYAML []byte
 
-// Names of the built-in roles that administer one team or one project.
+// Names of the built-in roles that administer the deployment, one team or one project.
 const (
+	BuiltinAdmin        = "admin"
 	BuiltinTeamAdmin    = "team-admin"
 	BuiltinProjectAdmin = "project-admin"
 )

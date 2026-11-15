@@ -111,7 +111,7 @@ func (p *Policy) BudgetIDs() []string {
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is system, host, team, project or user.
+//   - Owner.Kind is system, organization (with no id), host, team, project or user.
 //   - no pool or budget is linked twice.
 //   - host-owned policies link no pools.
 //   - every model ref names a provider or a provider's model, never a host.
@@ -124,6 +124,10 @@ func (p *Policy) Validate() error {
 	}
 	switch p.Meta.Owner.Kind {
 	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject, meta.OwnerTeam:
+	case meta.OwnerOrganization:
+		if p.Meta.Owner.ID != "" {
+			return fmt.Errorf("policy %q: an organization owner carries no id", p.Meta.Name)
+		}
 	case meta.OwnerHost:
 		// A host-owned policy is a tier preset: what the provider grants an
 		// account. It caps; it never hands out keys.
@@ -134,7 +138,7 @@ func (p *Policy) Validate() error {
 			return fmt.Errorf("policy %q: host-owned policies must not list poolIds", p.Meta.Name)
 		}
 	default:
-		return fmt.Errorf("policy %q: owner.kind required (user|system|host|team|project)", p.Meta.Name)
+		return fmt.Errorf("policy %q: owner.kind required (user|system|organization|host|team|project)", p.Meta.Name)
 	}
 	if err := uniqueIDs("poolIds", p.Meta.Name, p.Spec.PoolIDs); err != nil {
 		return err

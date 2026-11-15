@@ -191,7 +191,8 @@ func tableOf[T any](kind string, t Table[T], metaOf func(*T) *meta.Metadata, tra
 			var out []*candidate
 			for _, row := range rows {
 				m := metaOf(row)
-				if m.CatalogDetachedAt == nil {
+				// An organization row is never the catalog's, whatever mark it carries.
+				if m.CatalogDetachedAt == nil || m.Owner.Kind == meta.OwnerOrganization {
 					continue
 				}
 				c := &candidate{kind: kind, id: m.ID, name: m.Name, owner: m.Owner,

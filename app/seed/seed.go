@@ -84,6 +84,7 @@ type Result struct {
 	Pools           int
 	Budgets         int
 	Skipped         int // dirty rows preserved (operator-edited; not re-seeded)
+	Conflicts       int // rows left alone: changed during the run, or a name the organization or a tenant owns
 	Detached        int // catalog rows the tree no longer declares, marked this run
 	Reattached      int // detached rows the tree declares again, unmarked this run
 }
@@ -115,8 +116,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	stores := apply.NewStores(opts.Pool, opts.Secrets)
 	plan, err := apply.Plan(ctx, docs, apply.Options{
-		Stores: stores,
-		Force:  opts.ClearDirty,
+		Stores:      stores,
+		Force:       opts.ClearDirty,
+		CatalogSeed: opts.CatalogKindsOnly,
 		// The seed runs as the deployment's operator, whose environment it is.
 		EnvPasswords: true,
 	})
@@ -126,12 +128,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if _, err := apply.Execute(ctx, plan, nil); err != nil {
 		return nil, fmt.Errorf("seed: %w", err)
 	}
-	// A conflict is a row someone wrote between plan and write. The seed
-	// leaves it alone, which is silent unless it is said out loud.
+	// A conflict is a row someone wrote between plan and write, or one of the
+	// tree's names the organization or a tenant owns. The seed leaves it
+	// alone, which is silent unless it is said out loud.
 	for _, e := range plan.Entries {
 		if e.Action == apply.ActionConflict {
-			slog.Warn("seed: row changed during the run and was left alone",
-				"kind", e.Kind, "name", e.Name)
+			slog.Warn("seed: row left alone", "kind", e.Kind, "name", e.Name)
 		}
 	}
 	res := tally(plan)
@@ -186,8 +188,12 @@ func tally(p *apply.Result) *Result {
 		"User": &res.Users, "Account": &res.Accounts, "Pool": &res.Pools, "Budget": &res.Budgets,
 	}
 	for _, e := range p.Entries {
-		if e.Action == apply.ActionSkipDirty {
+		switch e.Action {
+		case apply.ActionSkipDirty:
 			res.Skipped++
+			continue
+		case apply.ActionConflict:
+			res.Conflicts++
 			continue
 		}
 		if c := counters[e.Kind]; c != nil {

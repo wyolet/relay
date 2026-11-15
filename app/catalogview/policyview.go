@@ -54,6 +54,8 @@ type PolicyBindingRow struct {
 	Binding   BindingView `json:"binding"   doc:"The binding of the model at the host."`
 	MatchedBy []string    `json:"matchedBy" doc:"The policy's model entries that allow this binding; * when the policy lists no models."`
 	Limits    []Limit     `json:"limits"    doc:"Rules of every rate limit the policy applies to this binding."`
+	// HiddenRateLimits are rate limits that apply but the caller may not see.
+	HiddenRateLimits []string `json:"hiddenRateLimits,omitempty" doc:"Ids of rate limits that apply here but the caller may not see; their rules are left out of limits."`
 }
 
 // PolicyModelExclusion — a model this policy does NOT grant, with why. Surfaced
@@ -106,14 +108,17 @@ func (s *Service) PolicyModels(ctx context.Context, ref string) (PolicyRef, []Po
 		return PolicyRef{}, nil, err
 	}
 	rows := []PolicyBindingRow{}
+	visible := s.rateLimitVisible(idx)
 	for _, gb := range idx.grantedBindings(p, models) {
+		limits, hidden := idx.limitsFor(p, gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name, visible)
 		rows = append(rows, PolicyBindingRow{
-			Provider:  providerRefOf(gb.prov),
-			Host:      hostRefOf(gb.host),
-			Model:     modelRefOf(gb.model),
-			Binding:   bindingViewOf(gb.binding),
-			MatchedBy: gb.matchedBy,
-			Limits:    idx.limitsFor(p, gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name),
+			Provider:         providerRefOf(gb.prov),
+			Host:             hostRefOf(gb.host),
+			Model:            modelRefOf(gb.model),
+			Binding:          bindingViewOf(gb.binding),
+			MatchedBy:        gb.matchedBy,
+			Limits:           limits,
+			HiddenRateLimits: hidden,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {

@@ -62,7 +62,7 @@ func checkOrphans(g *graph) []Issue {
 	keyReferenced := map[string]bool{}
 	for _, pol := range g.Policies {
 		switch pol.Metadata.Owner.Kind {
-		case "user", "system", "team", "project":
+		case "user", "system", "organization", "team", "project":
 		default:
 			continue
 		}

@@ -49,6 +49,7 @@ func TestValidate(t *testing.T) {
 		{"least recently used", func(p *Pool) { p.Spec.Selection = keypool.KeySelectionLeastRecentlyUsed }, ""},
 		{"no keys", func(p *Pool) { p.Spec.CredentialIDs = nil }, ""},
 		{"system owner", owner(meta.OwnerSystem, ""), ""},
+		{"organization owner", owner(meta.OwnerOrganization, ""), ""},
 		{"user owner", owner(meta.OwnerUser, idB), ""},
 		{"project owner", owner(meta.OwnerProject, idB), ""},
 		{"accounts and keys", func(p *Pool) { p.Spec.AccountIDs = []string{idA, idB} }, ""},
@@ -62,8 +63,9 @@ func TestValidate(t *testing.T) {
 		{"unknown selection", func(p *Pool) { p.Spec.Selection = "random" }, "Key: 'Pool.Spec.Selection' Error:Field validation for 'Selection' failed on the 'oneof' tag"},
 		{"team owner without id", owner(meta.OwnerTeam, ""), `pool "openai-main": owner.kind "team" requires an id`},
 		{"project owner without id", owner(meta.OwnerProject, ""), `pool "openai-main": owner.kind "project" requires an id`},
-		{"host owner", owner(meta.OwnerHost, idB), `pool "openai-main": owner.kind must be system, team, project or user, got "host"`},
-		{"no owner", owner("", ""), `pool "openai-main": owner.kind must be system, team, project or user, got ""`},
+		{"organization owner with an id", owner(meta.OwnerOrganization, idB), `pool "openai-main": an organization owner carries no id`},
+		{"host owner", owner(meta.OwnerHost, idB), `pool "openai-main": owner.kind must be system, organization, team, project or user, got "host"`},
+		{"no owner", owner("", ""), `pool "openai-main": owner.kind must be system, organization, team, project or user, got ""`},
 	} {
 		p := fix()
 		tc.edit(p)

@@ -88,6 +88,7 @@ func TestSharedOwner(t *testing.T) {
 	}{
 		{"same project", projectOne, projectOne, ""},
 		{"system row", system, projectOne, ""},
+		{"organization row", meta.Owner{Kind: meta.OwnerOrganization}, projectOne, ""},
 		{"another project's row", projectTwo, projectOne, refusal},
 		{"a team's row", teamOne, projectOne, refusal},
 		{"a user's row", alice, projectOne, refusal},
@@ -109,6 +110,7 @@ func TestPolicyRefAndRateLimitRef(t *testing.T) {
 		"same-project":  projectOne,
 		"other-project": projectTwo,
 		"team":          teamOne,
+		"organization":  {Kind: meta.OwnerOrganization},
 		"hidden":        system,
 	} {
 		rls[id] = &ratelimit.RateLimit{Meta: meta.Metadata{ID: id, Name: id, Owner: o}}
@@ -126,10 +128,11 @@ func TestPolicyRefAndRateLimitRef(t *testing.T) {
 	scopes := map[string]meta.Owner{"user": {Kind: meta.OwnerUser, ID: "u-1"}, "team": teamOne, "project": projectOne}
 	const hostTier = `400: policy "host" is a host tier policy and cannot be bound`
 	for name, ref := range scopes {
-		for _, target := range []string{"system", "provider", "host", ""} {
+		// The organization's rows serve every scope, as the system's do.
+		for _, target := range []string{"system", "organization", "provider", "host", ""} {
 			wantRefused(t, name+" policy, "+target+" rate limit", c.RateLimitRef(ctx, target, ref), "")
 		}
-		for _, target := range []string{"system", "provider", ""} {
+		for _, target := range []string{"system", "organization", "provider", ""} {
 			wantRefused(t, name+" row, "+target+" policy", c.PolicyRef(ctx, target, ref), "")
 		}
 		wantRefused(t, name+" row, a host tier policy", c.PolicyRef(ctx, "host", ref), hostTier)

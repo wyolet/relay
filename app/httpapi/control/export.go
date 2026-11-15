@@ -192,7 +192,7 @@ func (e *exporter) wanted(ctx context.Context, plural, singular string, m *meta.
 	case tenantOwnedKinds[singular]:
 	default:
 		switch m.Owner.Kind {
-		case meta.OwnerUser, meta.OwnerTeam, meta.OwnerProject:
+		case meta.OwnerUser, meta.OwnerTeam, meta.OwnerProject, meta.OwnerOrganization:
 		case meta.OwnerSystem:
 			// The catalog's rows are host- or provider-owned, so a system-owned
 			// one was written on this deployment and only it can back it up.

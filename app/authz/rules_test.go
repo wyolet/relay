@@ -216,4 +216,64 @@ func TestKindNames(t *testing.T) {
 			t.Errorf("SharedCatalogKind(%q) = %v, want %v", k, got, shared[k])
 		}
 	}
+
+	organization := map[string]bool{"policy": true, "rate-limit": true, "budget": true, "pool": true}
+	for _, kind := range role.Kinds {
+		k := authz.Singular(kind)
+		if got := authz.OrganizationKind(k); got != organization[k] {
+			t.Errorf("OrganizationKind(%q) = %v, want %v", k, got, organization[k])
+		}
+	}
+}
+
+// An organization row is an admin's alone: no binding reaches it, not even a global one, and ownership grants nothing.
+func TestOrganizationRows(t *testing.T) {
+	cat := newFixture(t)
+	r := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	org := &meta.Owner{Kind: meta.OwnerOrganization}
+	strangerID := ids.New()
+	globalEditor := actorOf(daveID, subjectsOf(daveID))
+	teamAdmin := actorOf(aliceID, subjectsOf(aliceID))
+	refused := map[string]*actor.Actor{
+		"global catalog editor": globalEditor,
+		"team admin":            teamAdmin,
+		"no binding":            actorOf(strangerID, subjectsOf(strangerID)),
+	}
+	admitted := map[string]*actor.Actor{
+		"admin role":  actorOf(ids.New(), nil, user.RoleAdmin),
+		"admin token": {AdminToken: true},
+	}
+	for _, kind := range []string{"rate-limits", "policies", "budgets", "pools"} {
+		for _, verb := range []string{"get", "list", "create", "update", "delete"} {
+			res := authz.Resource{Kind: authz.Singular(kind), ID: ids.New(), Owner: org}
+			for name, a := range refused {
+				x, err := r.Explain(t.Context(), a, kind+"."+verb, res)
+				if err != nil || x.Allowed || x.Rule != "organization-row" {
+					t.Errorf("%s: %s.%s explained %+v (%v), want refused by organization-row", name, kind, verb, x, err)
+				}
+				if err := r.Authorize(ctxOf(a), kind+"."+verb, res); err != authz.ErrForbidden {
+					t.Errorf("%s: %s.%s = %v, want forbidden", name, kind, verb, err)
+				}
+			}
+			for name, a := range admitted {
+				if err := r.Authorize(ctxOf(a), kind+"."+verb, res); err != nil {
+					t.Errorf("%s: %s.%s = %v, want allowed", name, kind, verb, err)
+				}
+			}
+		}
+	}
+	if err := r.Authorize(ctxOf(globalEditor), "rate-limits.update", authz.Resource{Kind: "rate-limit", ID: ids.New(), Owner: &globalScope}); err != nil {
+		t.Fatalf("global editor on a system rate limit = %v, want allowed", err)
+	}
+
+	// A filter cannot take back what a global grant selects, so ScopeOf declines there and answers everywhere else.
+	if _, err := authz.ScopeOf(ctxOf(globalEditor), r, "get", "rate-limits"); !errors.Is(err, rbac.ErrUnfilterable) {
+		t.Fatalf("ScopeOf for a global grant on rate-limits = %v, want ErrUnfilterable", err)
+	}
+	if _, err := authz.ScopeOf(ctxOf(globalEditor), r, "get", "models"); err != nil {
+		t.Fatalf("ScopeOf on a kind with no organization rows = %v", err)
+	}
+	if _, err := authz.ScopeOf(ctxOf(teamAdmin), r, "get", "rate-limits"); err != nil {
+		t.Fatalf("ScopeOf without a global grant = %v", err)
+	}
 }

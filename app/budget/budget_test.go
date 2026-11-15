@@ -52,6 +52,7 @@ func TestValidate(t *testing.T) {
 		{"alert mode", func(b *Budget) { b.Spec.Mode = ModeAlert }, ""},
 		{"hard mode", func(b *Budget) { b.Spec.Mode = ModeHard }, ""},
 		{"system owner", owner(meta.OwnerSystem, ""), ""},
+		{"organization owner", owner(meta.OwnerOrganization, ""), ""},
 		{"user owner", owner(meta.OwnerUser, someID), ""},
 		{"project owner", owner(meta.OwnerProject, someID), ""},
 		{"no amount", amount(""), "Key: 'Budget.Spec.AmountUSD' Error:Field validation for 'AmountUSD' failed on the 'required' tag"},
@@ -67,8 +68,9 @@ func TestValidate(t *testing.T) {
 		{"unknown mode", func(b *Budget) { b.Spec.Mode = "soft" }, "Key: 'Budget.Spec.Mode' Error:Field validation for 'Mode' failed on the 'oneof' tag"},
 		{"project owner without id", owner(meta.OwnerProject, ""), `budget "ml-monthly": owner.kind "project" requires an id`},
 		{"team owner without id", owner(meta.OwnerTeam, ""), `budget "ml-monthly": owner.kind "team" requires an id`},
-		{"host owner", owner(meta.OwnerHost, someID), `budget "ml-monthly": owner.kind must be system, team, project or user, got "host"`},
-		{"no owner", owner("", ""), `budget "ml-monthly": owner.kind must be system, team, project or user, got ""`},
+		{"organization owner with an id", owner(meta.OwnerOrganization, someID), `budget "ml-monthly": an organization owner carries no id`},
+		{"host owner", owner(meta.OwnerHost, someID), `budget "ml-monthly": owner.kind must be system, organization, team, project or user, got "host"`},
+		{"no owner", owner("", ""), `budget "ml-monthly": owner.kind must be system, organization, team, project or user, got ""`},
 	} {
 		b := fix()
 		tc.edit(b)

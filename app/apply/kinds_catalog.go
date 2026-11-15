@@ -137,8 +137,24 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		To: manifest.ToPolicy, Meta: func(p *policy.Policy) *meta.Metadata { return &p.Meta },
 		// Bindings of a pruned policy go with it (foreign key).
 		Upsert: s.Policy.Upsert, Delete: s.Policy.Delete,
-		Check: refsFor(b, refcheck.Checker.Policy),
+		Check: b.checkPolicy(),
 	})
+}
+
+// checkPolicy is refcheck's policy rules, with the links the stored row already holds under the same owner kept (refcheck.Checker.Held).
+func (b *builder) checkPolicy() func(context.Context, *policy.Policy) error {
+	if b.opts.Authz == nil {
+		return nil
+	}
+	c := b.refs()
+	stored := storedByID(b.rows.Policies, func(p *policy.Policy) *meta.Metadata { return &p.Meta })
+	return func(ctx context.Context, p *policy.Policy) error {
+		c := c
+		if prev := stored[p.Meta.ID]; prev != nil && prev.Meta.Owner == p.Meta.Owner {
+			c.Held = refcheck.PolicyLinks(prev)
+		}
+		return c.Policy(ctx, p)
+	}
 }
 
 // keepAccountPlace keeps what relay decides about a caller account (its owner, holder, closed mark and kind), so a document edits only its display fields and payload logging; a document cannot give it a host or turn a provider account into one. A share keeps the account it was shared from and its receiver.

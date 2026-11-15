@@ -151,7 +151,7 @@ func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dat
 	}
 	attrs := []any{"version", version, "previous", prev, "source", source,
 		"models", res.Models, "bindings", res.HostBindings, "pricings", res.Pricings,
-		"skipped_dirty", res.Skipped, "detached", res.Detached, "reattached", res.Reattached}
+		"skipped_dirty", res.Skipped, "conflicts", res.Conflicts, "detached", res.Detached, "reattached", res.Reattached}
 	if pruned != nil {
 		attrs = append(attrs, "pruned", pruned.Pruned, "kept_detached", pruned.KeptDetached)
 	}

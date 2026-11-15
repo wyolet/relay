@@ -12,6 +12,7 @@ import (
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
@@ -76,10 +77,13 @@ func (d Deps) duplicatePolicy(ctx context.Context, ref string, in duplicatePolic
 	if m.Owner.Kind == "" {
 		m.Owner.Kind = meta.OwnerUser
 	}
+	if err := refuseOrganizationOwner(ctx, d.Authz, "policy", m.Owner); err != nil {
+		return nil, err
+	}
 	if err := stampOwnerID(ctx, &m.Owner); err != nil {
 		return nil, huma.Error400BadRequest(err.Error())
 	}
-	checks := policyChecks(d)
+	checks := policyChecksCopying(d, refcheck.PolicyLinks(src))
 	if err := checks.guarded(ctx, "create", nil, cp); err != nil {
 		return nil, err
 	}
