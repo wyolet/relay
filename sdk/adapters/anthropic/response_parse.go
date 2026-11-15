@@ -79,10 +79,8 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			// Empty-text blocks are NOT skipped: on the 4.7+/Sonnet 5/Fable 5
 			// family display defaults to "omitted", so thinking arrives with empty
 			// text but a signature that same-model replay must echo back verbatim.
-			// Dropping the block loses the signature and the item entirely.
-			if block.Thinking == "" && block.Signature == "" {
-				continue
-			}
+			// An empty unsigned block stays too: the stream numbers it at its
+			// start, and both paths must give later items the same index.
 			// Carry the full thinking block (including signature) in ProviderData for
 			// same-vendor round-trip. Cross-vendor consumers ignore ProviderData.
 			var providerData json.RawMessage

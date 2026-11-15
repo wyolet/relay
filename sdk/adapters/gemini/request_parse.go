@@ -97,6 +97,7 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			opts.Sampling = sp
 			hasOpts = true
 		}
+		// canonical: thinkingBudget 0 (off) and -1 (dynamic) dropped — canonical has no "off" or "dynamic" that is safe across models and vendors (effort "none" is a 400 on several), and 2.5 Flash-Lite thinks only when sent -1.
 		if gc.ThinkingConfig != nil && gc.ThinkingConfig.ThinkingBudget > 0 {
 			rc := &v1.ReasoningConfig{BudgetTokens: &gc.ThinkingConfig.ThinkingBudget}
 			opts.Reasoning = rc

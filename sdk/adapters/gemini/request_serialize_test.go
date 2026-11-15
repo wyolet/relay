@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"encoding/json"
+	"errors"
 	"maps"
 	"reflect"
 	"slices"
@@ -142,6 +143,11 @@ func TestSerializeRequest_Contents(t *testing.T) {
 			items:    []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.FilePart{FileData: "QUJD"}, &v1.ImagePart{ImageURL: "https://example.com/i;v=1,2.png"}}}},
 			contents: `[{"role":"user","parts":[{"inlineData":{"mimeType":"application/octet-stream","data":"QUJD"}},{"fileData":{"fileUri":"https://example.com/i;v=1,2.png"}}]}]`,
 		},
+		{
+			name:     "image data URL without base64 goes inline re-encoded",
+			items:    []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.ImagePart{ImageURL: "data:image/png,abc"}}}},
+			contents: `[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"YWJj"}}]}]`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -181,6 +187,7 @@ func TestSerializeRequest_Config(t *testing.T) {
 		{"empty options", v1.Request{ModelConfig: only(v1.ModelOpts{})}, `{}`},
 		{"reasoning without a budget", v1.Request{ModelConfig: only(v1.ModelOpts{Reasoning: &v1.ReasoningConfig{}})}, `{"generationConfig":{"thinkingConfig":{"includeThoughts":true}}}`},
 		{"json_object alone", v1.Request{ModelConfig: only(v1.ModelOpts{Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_object"}}})}, `{"generationConfig":{"responseMimeType":"application/json"}}`},
+		{"text format alone", v1.Request{ModelConfig: only(v1.ModelOpts{Output: &v1.OutputConfig{Format: &v1.Format{Type: "text"}}})}, `{}`},
 		{"choice without definitions", v1.Request{Tools: &v1.ToolsConfig{Choice: &v1.ToolChoice{Mode: "auto"}}}, `{"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}`},
 	}
 	for _, c := range cases {
@@ -192,12 +199,16 @@ func TestSerializeRequest_Config(t *testing.T) {
 	}
 }
 
+func TestSerializeRequest_RejectsUnknownFormatType(t *testing.T) {
+	req := &v1.Request{ModelConfig: map[string]*v1.ModelOpts{"g": {Output: &v1.OutputConfig{Format: &v1.Format{Type: "grammar"}}}}}
+	if _, err := tr.SerializeRequest(req); !errors.Is(err, v1.ErrUnsupportedRequest) {
+		t.Errorf("err = %v, want ErrUnsupportedRequest", err)
+	}
+}
+
 func TestSerializeRequest_UnsendableImageOrFilePart(t *testing.T) {
-	for name, part := range map[string]v1.Part{"file without data or URL": &v1.FilePart{}, "image data URL without base64": &v1.ImagePart{ImageURL: "data:image/png,abc"}} {
+	for name, part := range map[string]v1.Part{"file without data or URL": &v1.FilePart{}, "image data URL with a bad percent escape": &v1.ImagePart{ImageURL: "data:image/png,%zz"}, "image data URL without a comma": &v1.ImagePart{ImageURL: "data:image/png;base64"}} {
 		t.Run(name, func(t *testing.T) {
-			if _, ok := part.(*v1.ImagePart); ok {
-				t.Skip("bug: an image data URL without a ;base64 payload is sent as fileData.fileUri, which takes no data: URI")
-			}
 			req := &v1.Request{Input: []v1.Item{&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{part}}}}
 			if body, err := tr.SerializeRequest(req); err == nil {
 				t.Errorf("serialized to %s, want an error", body)
