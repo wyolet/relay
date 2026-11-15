@@ -92,9 +92,6 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 		return nil, fmt.Errorf("canonical→anthropic: item.started: %w", err)
 	}
 
-	idx := s.blockIndex
-	s.blockIndex++
-
 	// Each Anthropic content block type requires different fields on the
 	// opening frame. Emitting the wrong shape (e.g. text:"" on tool_use)
 	// trips strict clients like Claude Code with `undefined.slice()` when
@@ -124,6 +121,8 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 	default:
 		return nil, nil
 	}
+	idx := s.blockIndex
+	s.blockIndex++
 	if s.blockIndexByCanonical == nil {
 		s.blockIndexByCanonical = make(map[int]int)
 	}

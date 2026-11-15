@@ -337,7 +337,6 @@ func TestFromCanonicalStream(t *testing.T) {
 }
 
 func TestFromCanonicalStream_SkippedItemLeavesBlockIndexesDense(t *testing.T) {
-	t.Skip("bug: an item with no Anthropic block still consumes a block index, leaving a gap on the wire")
 	got := translateAll(t, AnthropicTranslator{}.NewFromCanonicalStream(), frames(
 		v1.EventItemStarted, `{"item_id":"ws_0","item_type":"web_search_call","index":0}`,
 		v1.EventItemStarted, `{"item_id":"msg_1","item_type":"message","index":1}`,
