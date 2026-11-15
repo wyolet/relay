@@ -43,8 +43,14 @@ func TestCatalogFollowChecks(t *testing.T) {
 			Current  string `json:"current"`
 			Changed  *bool  `json:"changed"`
 		}
+		// The boot seed can still hold the seed lock after the marker lands; 503 is the documented "busy, retry" answer.
 		sync := func() (int, syncResult, []byte) {
-			code, body := r.do(http.MethodPost, "/api/catalog/sync", nil, r.adminToken)
+			var code int
+			var body []byte
+			waitFor(t, 30*time.Second, "sync not busy", func() bool {
+				code, body = r.do(http.MethodPost, "/api/catalog/sync", nil, r.adminToken)
+				return code != http.StatusServiceUnavailable
+			})
 			var res syncResult
 			_ = json.Unmarshal(body, &res)
 			return code, res, body
