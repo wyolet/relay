@@ -212,7 +212,6 @@ func TestToCanonicalStream_MessageStartWithoutIDGetsOne(t *testing.T) {
 
 // ParseResponse gives a block with no canonical item no output index; the stream must number items the same way.
 func TestToCanonicalStream_UnmodeledBlockTakesNoIndex(t *testing.T) {
-	t.Skip("bug: a content block of an unmodeled type consumes an output index on the stream but not in ParseResponse")
 	got := translateAll(t, AnthropicTranslator{}.NewToCanonicalStream(), frames(
 		"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"web_search_tool_result","tool_use_id":"s1","content":[]}}`,
 		"content_block_stop", wireBlockStop,

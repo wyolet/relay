@@ -49,6 +49,21 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 		return nil, nil
 	}
 
+	var itemType v1.ItemType
+	switch blockType {
+	case "text":
+		itemType = v1.ItemTypeMessage
+	case "tool_use":
+		itemType = v1.ItemTypeFunctionCall
+	case "thinking", "redacted_thinking":
+		itemType = v1.ItemTypeReasoning
+	default:
+		// canonical: unmodeled content blocks (tool results of hosted tools,
+		// future types) dropped — no canonical item type to start.
+		s.currentBlock = nil
+		return nil, nil
+	}
+
 	outputIndex := s.nextIndex
 	s.nextIndex++
 
@@ -67,21 +82,6 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	}
 
 	s.currentBlock = b
-
-	var itemType v1.ItemType
-	switch blockType {
-	case "text":
-		itemType = v1.ItemTypeMessage
-	case "tool_use":
-		itemType = v1.ItemTypeFunctionCall
-	case "thinking", "redacted_thinking":
-		itemType = v1.ItemTypeReasoning
-	default:
-		// canonical: unmodeled content blocks (tool results of hosted tools,
-		// future types) dropped — no canonical item type to start.
-		s.currentBlock = nil
-		return nil, nil
-	}
 
 	started := v1.ItemStartedEvent{
 		ItemID:   b.itemID,
