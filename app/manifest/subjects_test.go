@@ -24,7 +24,7 @@ apiVersion: relay.wyolet.dev/v1alpha3
 kind: Group
 metadata:
   name: data-science
-  owner: {kind: system}
+  owner: {kind: organization}
 spec:
   members: [alice, bob]
 ---
@@ -76,7 +76,7 @@ func TestRoundTrip_Subjects(t *testing.T) {
 	exported(t, "FromServiceAccount", wantSA, manifest.FromServiceAccount(sa, subjectsRev))
 
 	g := translated(t, "ToGroup", &group.Group{
-		Meta: meta.Metadata{Name: "data-science", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Meta: meta.Metadata{Name: "data-science", Owner: meta.Global},
 		Spec: group.Spec{MemberIDs: []string{aliceUUID, bobUUID}},
 	})(manifest.ToGroup(*docs[1].Group, subjectsResolver))
 	exported(t, "FromGroup", *docs[1].Group, manifest.FromGroup(g, subjectsRev))

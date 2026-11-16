@@ -74,7 +74,7 @@ func (r accessReviewer) owner(ctx context.Context, in reviewOwnerInput) (meta.Ow
 	}
 	notFound := huma.Error404NotFound(fmt.Sprintf("owner %s %q not found", in.Kind, ref))
 	switch kind {
-	case meta.OwnerSystem:
+	case meta.OwnerSystem, meta.OwnerOrganization:
 		return meta.Owner{Kind: kind}, nil
 	case meta.OwnerUser:
 		caller := actor.From(ctx)

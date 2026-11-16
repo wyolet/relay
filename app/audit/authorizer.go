@@ -82,7 +82,7 @@ func ScopeOf(snap *catalog.Snapshot, owner *meta.Owner) []string {
 	}
 	var out []string
 	for _, o := range snap.ScopeChain(owner) {
-		if o.Kind == meta.OwnerSystem || o.ID == "" {
+		if o.DeploymentWide() || o.ID == "" {
 			continue
 		}
 		out = append(out, string(o.Kind)+":"+o.ID)

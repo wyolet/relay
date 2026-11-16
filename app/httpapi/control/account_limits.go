@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // AccountLimits is the caller half of the ladder a lane climbs, with current usage against every limit.
@@ -45,8 +46,9 @@ type LimitsRung struct {
 
 // LimitsRateLimit is one linked rate limit with each rule's usage.
 type LimitsRateLimit struct {
-	RateLimitID string       `json:"rateLimitId" doc:"Rate limit id."`
-	Name        string       `json:"name"        doc:"Rate limit slug."`
+	RateLimitID string       `json:"rateLimitId,omitempty" doc:"Rate limit id; omitted when hidden."`
+	Name        string       `json:"name,omitempty"        doc:"Rate limit slug; omitted when hidden."`
+	Hidden      bool         `json:"hidden,omitempty"      doc:"An organization rate limit the caller may not see: its rules and counts apply to the caller's requests and are shown, its id and name are not."`
 	Models      []string     `json:"models"      doc:"The models the link applies to, in the policy's model grammar; empty applies it to every request."`
 	Shared      bool         `json:"shared"      doc:"True counts once for the rung's account, so used is what every lane under it spent together; false counts once per lane, so used is this lane's own."`
 	PerLane     bool         `json:"perLane"     doc:"True when the link counts per lane (shared false) and the account read is a team's or project's own: no single count exists, so the rules carry no used or remaining and the link is never tightest."`
@@ -65,8 +67,9 @@ type LimitsRule struct {
 
 // LimitsBudget is one linked budget with this period's spend.
 type LimitsBudget struct {
-	BudgetID     string        `json:"budgetId"     doc:"Budget id."`
-	Name         string        `json:"name"         doc:"Budget slug."`
+	BudgetID     string        `json:"budgetId,omitempty" doc:"Budget id; omitted when hidden."`
+	Name         string        `json:"name,omitempty"     doc:"Budget slug; omitted when hidden."`
+	Hidden       bool          `json:"hidden,omitempty"   doc:"An organization budget the caller may not see: its amount and spend apply to the caller's requests and are shown, its id and name are not."`
 	Shared       bool          `json:"shared"       doc:"True spends one budget for the rung's account, so spentUsd is every lane under it together; false gives each lane its own, so spentUsd is this lane's."`
 	PerLane      bool          `json:"perLane"      doc:"True when the budget is spent per lane (shared false) and the account read is a team's or project's own: no single spend exists, so spentUsd and remainingUsd are omitted and the budget is never tightest."`
 	AmountUSD    string        `json:"amountUsd"    doc:"Spend cap in USD per period, as a decimal string."`
@@ -80,7 +83,7 @@ type LimitsBudget struct {
 type LimitsTightest struct {
 	AccountID string  `json:"accountId" doc:"The account whose policy links the limit."`
 	Kind      string  `json:"kind"      enum:"rateLimit,budget" doc:"Whether the limit is a rate-limit rule or a budget."`
-	ID        string  `json:"id"        doc:"The rate limit's or the budget's id."`
+	ID        string  `json:"id,omitempty" doc:"The rate limit's or the budget's id; omitted when the caller may not see it."`
 	Remaining float64 `json:"remaining" doc:"What is left: in the rule's meter for a rate limit, in USD for a budget."`
 	Label     string  `json:"label"     doc:"A short sentence for display, such as \"$50 left: team cap\"."`
 }
@@ -207,17 +210,27 @@ func laneLimits(ctx context.Context, d Deps, v *engine.View, acc *account.Accoun
 			return nil, huma.Error503ServiceUnavailable("reading counts: " + err.Error())
 		}
 	}
+	// The limits apply to the caller's own requests, so an organization row they may not see still shows its numbers, never its name or id.
+	hidden := func(kind string, m meta.Metadata) bool {
+		return m.Owner.Kind == meta.OwnerOrganization && !visibleTo(ctx, d.Authz, kind, m.ID, m.Owner)
+	}
 	var pick tightest
 	at := 0
 	for _, r := range rungs {
 		rung := LimitsRung{Account: limitsAccount(r.Rung.Account), RateLimits: []LimitsRateLimit{}, Budgets: []LimitsBudget{}}
 		if ep := r.Rung.Policy; ep != nil {
 			rung.Policy = &BoundPolicy{ID: ep.Policy.Meta.ID, Name: ep.Policy.Meta.Name}
+			if hidden("policy", ep.Policy.Meta) {
+				rung.Policy = &BoundPolicy{Hidden: true}
+			}
 		}
 		kind := string(r.Rung.Account.DerivedKind())
 		for _, rl := range r.RateLimits {
 			l := rl.Link
 			row := LimitsRateLimit{RateLimitID: l.RateLimit.Meta.ID, Name: l.RateLimit.Meta.Name, Models: l.Models, Shared: l.Shared, PerLane: rl.PerLane, Rules: []LimitsRule{}}
+			if hidden("rate-limit", l.RateLimit.Meta) {
+				row.RateLimitID, row.Name, row.Hidden = "", "", true
+			}
 			if row.Models == nil {
 				row.Models = []string{}
 			}
@@ -233,7 +246,7 @@ func laneLimits(ctx context.Context, d Deps, v *engine.View, acc *account.Accoun
 				row.Rules = append(row.Rules, lr)
 				pick.offer(rd, func() LimitsTightest {
 					return LimitsTightest{AccountID: r.Rung.Account.Meta.ID, Kind: "rateLimit", ID: row.RateLimitID, Remaining: float64(rd.Remaining()),
-						Label: strconv.FormatInt(rd.Remaining(), 10) + " " + meterNoun(rule.Meter) + " left: " + kind + " " + row.Name}
+						Label: strconv.FormatInt(rd.Remaining(), 10) + " " + meterNoun(rule.Meter) + " left: " + kind + " " + labelName(row.Name, "rate limit")}
 				})
 			}
 			at += len(rl.Counters)
@@ -252,6 +265,9 @@ func laneLimits(ctx context.Context, d Deps, v *engine.View, acc *account.Accoun
 				BudgetID: b.Link.Budget.Meta.ID, Name: b.Link.Budget.Meta.Name, Shared: b.Link.Shared, PerLane: b.PerLane,
 				AmountUSD: spec.AmountUSD, Period: period, Mode: mode,
 			}
+			if hidden("budget", b.Link.Budget.Meta) {
+				row.BudgetID, row.Name, row.Hidden = "", "", true
+			}
 			if b.PerLane {
 				rung.Budgets = append(rung.Budgets, row)
 				continue
@@ -265,13 +281,21 @@ func laneLimits(ctx context.Context, d Deps, v *engine.View, acc *account.Accoun
 			}
 			pick.offer(rd, func() LimitsTightest {
 				return LimitsTightest{AccountID: r.Rung.Account.Meta.ID, Kind: "budget", ID: row.BudgetID, Remaining: float64(rd.Remaining()) / nanosPerUSD,
-					Label: "$" + usdLabel(rd.Remaining()) + " left: " + kind + " " + row.Name}
+					Label: "$" + usdLabel(rd.Remaining()) + " left: " + kind + " " + labelName(row.Name, "budget")}
 			})
 		}
 		out.Body.Rungs = append(out.Body.Rungs, rung)
 	}
 	out.Body.Tightest = pick.best
 	return out, nil
+}
+
+// labelName is a limit's name in a label, or what it is when the caller may not see its name.
+func labelName(name, what string) string {
+	if name == "" {
+		return what
+	}
+	return name
 }
 
 // tightest keeps the reading with the least left as a share of its cap; on a tie the earlier, outer one.

@@ -24,16 +24,23 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/modelref"
 )
 
-func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
+// guardPolicyModels checks a policy's links and model refs. Links the stored row holds under the same owner, or copied ones, skip the visibility check (refcheck.Checker.Held).
+func guardPolicyModels(d Deps, copied map[string]bool) mutationGuard[policy.Policy] {
 	return func(ctx context.Context, action string, existing, incoming *policy.Policy) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		if err := refs(d).Policy(ctx, incoming); err != nil {
+		c := refs(d)
+		c.Held = copied
+		if action == "update" && existing.Meta.Owner == incoming.Meta.Owner {
+			c.Held = refcheck.PolicyLinks(existing)
+		}
+		if err := c.Policy(ctx, incoming); err != nil {
 			return refErr(err)
 		}
 		if action == "update" && existing.Meta.Owner != incoming.Meta.Owner {

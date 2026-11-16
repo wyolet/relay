@@ -13,6 +13,9 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
+// deploymentScopes are the owner scopes of the deployment's own credentials, which every lane reaches last: the organization's, then the system's, which hold only a key whose move to the organization did not complete.
+var deploymentScopes = []string{ownerRef(meta.Global), ownerRef(meta.Owner{Kind: meta.OwnerSystem})}
+
 // readLane reads what the caller fold of acc needs: its rungs with their policies and linked pools, and what its scopes own when no rung links. A team's or project's own account reads the rungs above and including it with no lane under them, as a preview of a policy owned there does. over, when set, stands in for the policy bound to one rung's account. issue receives the issues a reconcile files. ok is false when the account heads no ladder: its holder or scope is gone, or it is no caller or provider account.
 func readLane[R *engine.Txn | *engine.View](r R, acc *account.Account, over *rungOverride, issue func(engine.Issue)) (rd callerReads, ok bool) {
 	subject := accountSubject(acc.Meta.ID)
@@ -25,7 +28,7 @@ func readLane[R *engine.Txn | *engine.View](r R, acc *account.Account, over *run
 		if !readHolder(r, &rd, acc) {
 			return rd, false
 		}
-		scopes = []string{ownerRef(acc.Meta.Owner), "system:"}
+		scopes = append([]string{ownerRef(acc.Meta.Owner)}, deploymentScopes...)
 	case account.KindMember, account.KindService, account.KindTeam, account.KindProject:
 		if h := acc.Spec.Holder; h != nil && !readHolder(r, &rd, acc) || !readScopes(r, &rd, acc, issue) {
 			return rd, false
@@ -33,7 +36,8 @@ func readLane[R *engine.Txn | *engine.View](r R, acc *account.Account, over *run
 		if p := rd.rungs[rungProject].rung.ScopeID; p != "" {
 			scopes = append(scopes, "project:"+p)
 		}
-		scopes = append(scopes, "team:"+rd.rungs[rungTeam].rung.ScopeID, "system:")
+		scopes = append(scopes, "team:"+rd.rungs[rungTeam].rung.ScopeID)
+		scopes = append(scopes, deploymentScopes...)
 	default:
 		return rd, false
 	}

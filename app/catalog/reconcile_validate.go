@@ -103,7 +103,7 @@ func validateRoleBindingInSnap(b *rolebinding.RoleBinding, s *Snapshot) error {
 }
 
 func validatePolicyBindingInSnap(b *policybinding.PolicyBinding, s *Snapshot) error {
-	if !s.ownerScopeExists(b.Meta.Owner) {
+	if !s.ownerScopeExists(b.Meta.Owner.AsGlobalScope()) {
 		return fmt.Errorf("policybinding %q: owner %s %q does not resolve", b.Meta.Name, b.Meta.Owner.Kind, b.Meta.Owner.ID)
 	}
 	if !s.policyResolvable(b.Spec.PolicyID) {

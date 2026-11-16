@@ -61,7 +61,15 @@ func (b *builder) planBindings(ctx context.Context, rbDocs []*manifest.RoleBindi
 		// Which accounts and policies a binding may name is a rule of the rows, not of the caller, so the seed and the CLI run it too.
 		Check: func() func(context.Context, *policybinding.PolicyBinding) error {
 			c := b.refs()
-			return func(ctx context.Context, pb *policybinding.PolicyBinding) error { return c.PolicyBinding(ctx, pb) }
+			stored := storedByID(b.rows.PolicyBindings, func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta })
+			return func(ctx context.Context, pb *policybinding.PolicyBinding) error {
+				c := c
+				// The policy the stored binding already uses, in the same scope, is kept rather than chosen.
+				if prev := stored[pb.Meta.ID]; prev != nil && prev.Meta.Owner == pb.Meta.Owner {
+					c.Held = map[string]bool{prev.Spec.PolicyID: true}
+				}
+				return c.PolicyBinding(ctx, pb)
+			}
 		}(),
 	}); err != nil {
 		return err

@@ -44,6 +44,7 @@ func TestValidate(t *testing.T) {
 	}{
 		{"user-owned, empty spec", func(*Policy) {}, nil},
 		{"system owner", owner(meta.OwnerSystem, ""), nil},
+		{"organization owner", owner(meta.OwnerOrganization, ""), nil},
 		{"team owner", owner(meta.OwnerTeam, "t-1"), nil},
 		{"project owner", owner(meta.OwnerProject, "p-1"), nil},
 		{"host owner: a tier preset", owner(meta.OwnerHost, "h-1"), nil},
@@ -54,8 +55,9 @@ func TestValidate(t *testing.T) {
 
 		{"missing name", func(p *Policy) { p.Meta.Name = "" }, []string{"Policy.Meta.Name required"}},
 		{"pool id is not a UUID", func(p *Policy) { p.Spec.PoolIDs = []string{"pool-a"} }, []string{"Policy.Spec.PoolIDs[0] uuid"}},
-		{"no owner", owner("", ""), []string{`policy "x": owner.kind required (user|system|host|team|project)`}},
-		{"provider owner", owner(meta.OwnerProvider, "prov-1"), []string{`policy "x": owner.kind required (user|system|host|team|project)`}},
+		{"no owner", owner("", ""), []string{`policy "x": owner.kind required (user|system|organization|host|team|project)`}},
+		{"provider owner", owner(meta.OwnerProvider, "prov-1"), []string{`policy "x": owner.kind required (user|system|organization|host|team|project)`}},
+		{"organization owner with an id", owner(meta.OwnerOrganization, "o-1"), []string{`policy "x": an organization owner carries no id`}},
 		{"host owner without its host", owner(meta.OwnerHost, ""), []string{`policy "x": owner.id is required for host-owned policy`}},
 		{"host owner hands out no keys", func(p *Policy) {
 			p.Meta.Owner, p.Spec.PoolIDs = meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}, []string{pool}

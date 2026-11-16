@@ -28,8 +28,8 @@ type reviewSubjectInput struct {
 }
 
 type reviewOwnerInput struct {
-	Kind string `json:"kind" enum:"system,user,team,project,host,provider" doc:"Owner kind."`
-	Name string `json:"name,omitempty" doc:"Owner slug or username. Omit for system."`
+	Kind string `json:"kind" enum:"system,organization,user,team,project,host,provider" doc:"Owner kind."`
+	Name string `json:"name,omitempty" doc:"Owner slug or username. Omit for system and organization."`
 	ID   string `json:"id,omitempty" doc:"Owner id; used instead of name when both are set."`
 }
 
@@ -81,7 +81,7 @@ type reviewedBinding struct {
 type accessReview struct {
 	Allowed          bool             `json:"allowed" doc:"Whether the subject may perform the action."`
 	Reason           string           `json:"reason" enum:"admin,rule,binding,credential,none" doc:"What decided. Only the first match is reported."`
-	Rule             string           `json:"rule,omitempty" doc:"The relay rule that decided: personal-row, catalog-read, shared-policy-read, system-role-read, scoped-list or parent-team-read."`
+	Rule             string           `json:"rule,omitempty" doc:"The relay rule that decided: organization-row (which only refuses), personal-row, catalog-read, shared-policy-read, system-role-read, scoped-list or parent-team-read."`
 	Binding          *reviewedBinding `json:"binding,omitempty" doc:"The role binding that granted the action."`
 	CredentialDenied bool             `json:"credentialDenied,omitempty" doc:"The subject holds the permission but the credential's limits refuse it."`
 	Chain            []namedRef       `json:"chain,omitempty" doc:"The resource's scope chain, most specific first, when the decision read it."`

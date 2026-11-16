@@ -67,4 +67,8 @@ func TestGovernedOwnerKind(t *testing.T) {
 	if got := m.GovernedOwnerKind(); got != OwnerUser {
 		t.Fatalf("detached row governed as %q, want user", got)
 	}
+	m.Owner = Owner{Kind: OwnerOrganization}
+	if got := m.GovernedOwnerKind(); got != OwnerOrganization {
+		t.Fatalf("detached organization row governed as %q, want organization", got)
+	}
 }

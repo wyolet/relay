@@ -98,9 +98,10 @@ type Metadata struct {
 
 // GovernedOwnerKind is the owner kind mutation governance judges the row by.
 // A row the catalog no longer ships is the operator's, so it is judged as
-// user-owned whatever its stored owner says.
+// user-owned, unless the organization owns it: that tier holds whatever mark
+// the row carries.
 func (m Metadata) GovernedOwnerKind() OwnerKind {
-	if m.CatalogDetachedAt != nil {
+	if m.CatalogDetachedAt != nil && m.Owner.Kind != OwnerOrganization {
 		return OwnerUser
 	}
 	return m.Owner.Kind
@@ -147,8 +148,22 @@ func NewID() string { return ids.New() }
 // Owner describes who created / manages a row. Kind=provider requires ID;
 // the other kinds leave ID empty.
 type Owner struct {
-	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,provider,host,user,team,project" doc:"Owning scope: system (the deployment), provider or host (catalog rows), user, team or project."`
-	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"   doc:"Id of the owning provider, host, user, team or project; empty for system. Defaults to the caller for user-owned rows."`
+	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,organization,provider,host,user,team,project" doc:"Owning scope: system (the catalog and the relay's own rows), organization (the deployment: its teams, groups, credentials and the rows its admins made; organization-owned policies, rate limits, budgets and pools are visible to admins only), provider or host (catalog rows), user, team or project."`
+	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"   doc:"Id of the owning provider, host, user, team or project; empty for system and organization. Defaults to the caller for user-owned rows."`
+}
+
+// Global is the scope every other scope sits in: a role binding there applies everywhere, and a row owned by it serves every scope.
+var Global = Owner{Kind: OwnerOrganization}
+
+// DeploymentWide reports whether the owner is the deployment as a whole, system or organization, rather than a tenant or a catalog tier.
+func (o Owner) DeploymentWide() bool { return o.Kind == OwnerSystem || o.Kind == OwnerOrganization }
+
+// AsGlobalScope reads system, the global scope's spelling before organization, as Global, so documents written before keep naming the global scope.
+func (o Owner) AsGlobalScope() Owner {
+	if o.Kind == OwnerSystem && o.ID == "" {
+		return Global
+	}
+	return o
 }
 
 // Tenant reports whether the owner is a user, team or project rather than
@@ -161,10 +176,10 @@ func (o Owner) Tenant() bool {
 	return false
 }
 
-// Holds reports whether a row owned by o may serve scope inner: the system's rows serve every scope, a scope's its own, a team's its projects. teamOf answers a project's team; ok is false when the project is unknown.
+// Holds reports whether a row owned by o may serve scope inner: the system's and the organization's rows serve every scope, a scope's its own, a team's its projects. teamOf answers a project's team; ok is false when the project is unknown.
 func (o Owner) Holds(inner Owner, teamOf func(projectID string) (teamID string, ok bool)) bool {
 	switch {
-	case o.Kind == OwnerSystem, o == inner:
+	case o.DeploymentWide(), o == inner:
 		return true
 	case o.Kind == OwnerTeam && inner.Kind == OwnerProject:
 		t, ok := teamOf(inner.ID)
@@ -185,10 +200,13 @@ type Icon struct {
 type OwnerKind string
 
 const (
-	OwnerSystem   OwnerKind = "system"
-	OwnerProvider OwnerKind = "provider"
-	OwnerHost     OwnerKind = "host"
-	OwnerUser     OwnerKind = "user"
-	OwnerTeam     OwnerKind = "team"
-	OwnerProject  OwnerKind = "project"
+	// OwnerSystem owns the catalog's deployment-wide rows and the relay's own (built-in roles and rate limits).
+	OwnerSystem OwnerKind = "system"
+	// OwnerOrganization is the deployment itself: the global scope, and the owner of the rows it holds rather than its catalog. Organization-owned rows are never catalog data. ID stays empty until a deployment holds more than one organization.
+	OwnerOrganization OwnerKind = "organization"
+	OwnerProvider     OwnerKind = "provider"
+	OwnerHost         OwnerKind = "host"
+	OwnerUser         OwnerKind = "user"
+	OwnerTeam         OwnerKind = "team"
+	OwnerProject      OwnerKind = "project"
 )

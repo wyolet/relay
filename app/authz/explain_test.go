@@ -55,7 +55,7 @@ func TestExplainReasons(t *testing.T) {
 		return authz.Resource{Kind: "key", ID: ids.New(), Owner: projectOwner(p)}
 	}
 	chainOf := func(p string) []rbac.Scope {
-		return []rbac.Scope{{Kind: "project", ID: p}, {Kind: "team", ID: teamID}, {Kind: "system"}}
+		return []rbac.Scope{{Kind: "project", ID: p}, {Kind: "team", ID: teamID}, {Kind: "organization"}}
 	}
 
 	tests := []struct {

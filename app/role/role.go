@@ -59,8 +59,8 @@ type Rule struct {
 	Verbs []string `json:"verbs" yaml:"verbs" validate:"required,min=1,dive,rbacverb" doc:"Verbs the rule grants on those kinds, such as list, get, create, update, delete, rotate; * grants every verb."`
 }
 
-// Role is a named rule set. Owner is system for the built-ins and user for
-// custom roles.
+// Role is a named rule set. Owner is system for the built-ins, and the
+// organization or a user for custom roles.
 type Role struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
@@ -76,15 +76,15 @@ type Spec struct {
 func (r *Role) IsEnabled() bool { return r.Spec.Enabled == nil || *r.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is system (built-in) or user (custom).
+//   - Owner.Kind is system (built-in), organization or user (custom).
 func (r *Role) Validate() error {
 	if err := meta.Validator.Struct(r); err != nil {
 		return err
 	}
 	switch r.Meta.Owner.Kind {
-	case meta.OwnerSystem, meta.OwnerUser:
+	case meta.OwnerSystem, meta.OwnerOrganization, meta.OwnerUser:
 	default:
-		return fmt.Errorf("role %q: owner.kind must be system or user, got %q", r.Meta.Name, r.Meta.Owner.Kind)
+		return fmt.Errorf("role %q: owner.kind must be system, organization or user, got %q", r.Meta.Name, r.Meta.Owner.Kind)
 	}
 	return nil
 }

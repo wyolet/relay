@@ -85,12 +85,38 @@ func refuseTenantOwner(singular string, o meta.Owner) error {
 	return huma.Error400BadRequest(fmt.Sprintf("%s is shared catalog data and cannot be owned by a %s; omit metadata.owner", singular, o.Kind))
 }
 
-// refuseNonSystemScopeOwner answers 400 for a team or group owned by anything
-// but system: they only ever name a shared scope. Roles stay authorable as
-// personal rows (license-gated).
-func refuseNonSystemScopeOwner(singular string, o meta.Owner) error {
-	if (singular == "team" || singular == "group") && o.Kind != meta.OwnerSystem {
-		return huma.Error400BadRequest(singular + " owner.kind must be system; omit metadata.owner")
+// readSystemAsGlobal reads a system owner as the organization on the kinds
+// whose system rows moved there (authz.SystemMeansOrganization); stored is the
+// owner of the row being written, empty on create.
+func readSystemAsGlobal(singular string, o *meta.Owner, stored meta.Owner) {
+	if o.Kind == meta.OwnerSystem && authz.SystemMeansOrganization(singular, stored) {
+		*o = meta.Global
+	}
+}
+
+// refuseNonGlobalScopeOwner answers 400 for a team or group owned by anything
+// but the organization: they only ever name a shared scope. Roles stay
+// authorable as personal rows (license-gated).
+func refuseNonGlobalScopeOwner(singular string, o meta.Owner) error {
+	if (singular == "team" || singular == "group") && o != meta.Global {
+		return huma.Error400BadRequest(singular + " owner.kind must be organization; omit metadata.owner")
+	}
+	return nil
+}
+
+// refuseOrganizationOwner answers 400 for an organization owner on a kind the organization owns no rows of, and 403 for a caller who is no admin (authz.Admin), under every authorization mode, on a kind whose organization rows are the admins' own.
+func refuseOrganizationOwner(ctx context.Context, a authz.Authorizer, singular string, o meta.Owner) error {
+	if o.Kind != meta.OwnerOrganization {
+		return nil
+	}
+	if !authz.OrganizationKind(singular) {
+		return huma.Error400BadRequest(singular + " cannot be owned by the organization")
+	}
+	if !authz.OrganizationAdminOnly(singular) {
+		return nil
+	}
+	if !authz.Admin(ctx, a) {
+		return huma.Error403Forbidden("an organization-owned " + singular + " requires an admin")
 	}
 	return nil
 }
@@ -330,12 +356,10 @@ func registerKind[T any](
 				}
 				m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
 			}
-			// system is reserved for seed paths, except where it is the kind's
-			// default (a personal Team, Group or Role would inherit whatever binds
-			// to its name), role-bindings, whose owner mirrors spec.scope, and
-			// policy-bindings, which a system owner lets reach every scope.
-			if m.Owner.Kind == meta.OwnerSystem && defaultOwnerKind != meta.OwnerSystem &&
-				singular != "role-binding" && singular != "policy-binding" {
+			// system is reserved for seed paths; where it names the global scope
+			// it is read as the organization.
+			readSystemAsGlobal(singular, &m.Owner, meta.Owner{})
+			if m.Owner.Kind == meta.OwnerSystem {
 				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 			}
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {
@@ -344,7 +368,10 @@ func registerKind[T any](
 			if err := refuseTenantOwner(singular, m.Owner); err != nil {
 				return nil, err
 			}
-			if err := refuseNonSystemScopeOwner(singular, m.Owner); err != nil {
+			if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
+				return nil, err
+			}
+			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
 				return nil, err
 			}
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
@@ -424,6 +451,7 @@ func registerKind[T any](
 		if mergeUpdate != nil {
 			mergeUpdate(existing, v)
 		}
+		readSystemAsGlobal(singular, &m.Owner, metaOf(existing).Owner)
 		// An omitted owner, or the stored kind without an id, keeps the stored
 		// owner: a body echoing {kind: user} must not chown a row to its editor.
 		if stored := metaOf(existing).Owner; m.Owner == (meta.Owner{}) || (m.Owner.Kind == stored.Kind && (m.Owner.ID == "" || m.Owner.ID == stored.ID)) {
@@ -432,11 +460,18 @@ func registerKind[T any](
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
 			}
-			if err := refuseNonSystemScopeOwner(singular, m.Owner); err != nil {
+			if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
+				return nil, err
+			}
+			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
 				return nil, err
 			}
 		}
 		m.CatalogDetachedAt = metaOf(existing).CatalogDetachedAt
+		// The organization's rows are never the catalog's, so one moved there sheds the detach mark.
+		if m.Owner.Kind == meta.OwnerOrganization {
+			m.CatalogDetachedAt = nil
+		}
 		if err := checks.valid(v); err != nil {
 			return nil, err
 		}

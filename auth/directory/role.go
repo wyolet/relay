@@ -31,7 +31,7 @@ func (r *Role) RBAC() rbac.Role { return rbac.Role{ID: r.Meta.ID, Rules: r.Spec.
 
 // validate checks the rules against the product's vocabulary; a nil vocabulary accepts any non-empty entry.
 func (r *Role) validate(kinds, verbs []string) error {
-	if err := validateMeta("role", &r.Meta, OwnerSystem, OwnerUser); err != nil {
+	if err := validateMeta("role", &r.Meta, OwnerSystem, Global.Kind, OwnerUser); err != nil {
 		return err
 	}
 	if len(r.Spec.Rules) == 0 {

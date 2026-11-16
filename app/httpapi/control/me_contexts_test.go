@@ -17,7 +17,7 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// A team admin gets the team and its projects as admin contexts; a developer reached through a group gets that project alone; a viewer gets nothing to create in; the admin token gets every scope and no personal one. Teams come first, then projects, each by slug.
+// An admin, by the admin token or a global binding of the built-in admin role, gets the organization first; a team admin gets the team and its projects as admin contexts; a developer reached through a group gets that project alone; a viewer gets nothing to create in; the admin token gets every scope and no personal one. Teams come first, then projects, each by slug.
 func TestMyContexts(t *testing.T) {
 	system := meta.Owner{Kind: meta.OwnerSystem}
 	roles, err := role.Builtins()
@@ -47,6 +47,7 @@ func TestMyContexts(t *testing.T) {
 			bind(role.BuiltinTeamAdmin, alphaScope, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: "u-alice"}),
 			bind("developer", meta.Owner{Kind: meta.OwnerProject, ID: api.Meta.ID}, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "eng"}),
 			bind("viewer", meta.Owner{Kind: meta.OwnerTeam, ID: teams[1].Meta.ID}, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: "u-dave"}),
+			bind(role.BuiltinAdmin, meta.Global, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: "u-gina"}),
 		},
 	}.Load(t)
 	az := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
@@ -55,6 +56,7 @@ func TestMyContexts(t *testing.T) {
 		"alice": {UserID: "u-alice", Username: "alice", Subjects: []string{"user:u-alice"}},
 		"bob":   {UserID: "u-bob", Username: "bob", Subjects: []string{"user:u-bob", "group:eng"}},
 		"dave":  {UserID: "u-dave", Username: "dave", Subjects: []string{"user:u-dave"}},
+		"gina":  {UserID: "u-gina", Username: "gina", Subjects: []string{"user:u-gina"}},
 		"token": {AdminToken: true},
 	}
 	// A user whose personal account is turned off: rows created there would serve nothing.
@@ -70,6 +72,7 @@ func TestMyContexts(t *testing.T) {
 	r := mount(Deps{Authz: az, Catalog: cat, PlanView: world.Load(t).Engine.View})
 
 	alpha, beta := teams[0].Meta.ID, teams[1].Meta.ID
+	organization := MyContext{Kind: "organization", Name: "organization", DisplayName: "Organization", Admin: true}
 	personal := func(id, name string) MyContext {
 		return MyContext{Kind: "personal", ID: id, Name: name, DisplayName: name, Admin: true}
 	}
@@ -78,7 +81,14 @@ func TestMyContexts(t *testing.T) {
 		"bob":   {personal("u-bob", "bob"), {Kind: "project", ID: api.Meta.ID, Name: "api", DisplayName: "api", TeamID: beta}},
 		"dave":  {personal("u-dave", "dave")},
 		"off":   {},
+		"gina": {
+			organization, personal("u-gina", "gina"),
+			{Kind: "team", ID: alpha, Name: "alpha", DisplayName: "Alpha", Admin: true}, {Kind: "team", ID: beta, Name: "beta", DisplayName: "beta", Admin: true},
+			{Kind: "project", ID: api.Meta.ID, Name: "api", DisplayName: "api", TeamID: beta, Admin: true}, {Kind: "project", ID: ops.Meta.ID, Name: "ops", DisplayName: "ops", TeamID: beta, Admin: true},
+			{Kind: "project", ID: web.Meta.ID, Name: "web", DisplayName: "web", TeamID: alpha, Admin: true},
+		},
 		"token": {
+			organization,
 			{Kind: "team", ID: alpha, Name: "alpha", DisplayName: "Alpha", Admin: true}, {Kind: "team", ID: beta, Name: "beta", DisplayName: "beta", Admin: true},
 			{Kind: "project", ID: api.Meta.ID, Name: "api", DisplayName: "api", TeamID: beta, Admin: true}, {Kind: "project", ID: ops.Meta.ID, Name: "ops", DisplayName: "ops", TeamID: beta, Admin: true},
 			{Kind: "project", ID: web.Meta.ID, Name: "web", DisplayName: "web", TeamID: alpha, Admin: true},

@@ -103,6 +103,17 @@ type Lookup struct {
 type Checker struct {
 	Authz authz.Authorizer
 	Rows  Lookup
+	// Held is the ids of the links a save keeps rather than makes: the ones
+	// the stored row already holds under the same owner, or a copy takes over
+	// from a source the caller reads. They skip the visibility check only, so
+	// a tenant can still save a row an admin linked to rows the tenant may not
+	// see; the owner rules still apply.
+	Held map[string]bool
+}
+
+// sees reports whether the caller may see a linked row, or keeps the link (Held).
+func (c Checker) sees(ctx context.Context, kind string, m meta.Metadata) bool {
+	return c.Held[m.ID] || Visible(ctx, c.Authz, kind, m.ID, m.Owner)
 }
 
 // Visible reports whether the caller may see the row; true when a doesn't
@@ -126,7 +137,7 @@ func RequireAdmin(ctx context.Context, a authz.Authorizer, what string) error {
 
 // StampOwnerID fills Owner.ID from the acting user on a user-owned row. A
 // caller that is no user (the admin token, a loader with no actor) creates
-// shared infrastructure, so an id-less user owner becomes system. A supplied
+// shared infrastructure, so an id-less user owner becomes the organization. A supplied
 // owner.id must be the caller's own; only the admin token may name someone else.
 func StampOwnerID(ctx context.Context, o *meta.Owner) error {
 	if o.Kind != meta.OwnerUser {
@@ -135,7 +146,7 @@ func StampOwnerID(ctx context.Context, o *meta.Owner) error {
 	a := actor.From(ctx)
 	switch {
 	case o.ID == "" && (a == nil || a.AdminToken):
-		*o = meta.Owner{Kind: meta.OwnerSystem}
+		*o = meta.Global
 	case o.ID == "":
 		o.ID = a.UserID
 	case a == nil || o.ID == a.UserID || a.AdminToken:
@@ -161,7 +172,7 @@ func sharedOwnerReaches(owner, refOwner meta.Owner) bool {
 	if refOwner.Kind != meta.OwnerProject {
 		return true
 	}
-	return owner.Kind == meta.OwnerSystem || (owner.Kind == meta.OwnerProject && owner.ID == refOwner.ID)
+	return owner.DeploymentWide() || (owner.Kind == meta.OwnerProject && owner.ID == refOwner.ID)
 }
 
 // catalogOwned reports a row the catalog tiers own. Its rate limits and
@@ -198,7 +209,7 @@ func (c Checker) PolicyRef(ctx context.Context, policyID string, refOwner meta.O
 	if p == nil {
 		return badRequest("policy %q does not exist", policyID)
 	}
-	if !Visible(ctx, c.Authz, "policy", p.Meta.ID, p.Meta.Owner) {
+	if !c.sees(ctx, "policy", p.Meta) {
 		return notVisible("policy", policyID)
 	}
 	// A host-owned policy is a menu of upstream limits for host keys, with no
@@ -233,7 +244,7 @@ func (c Checker) RateLimitRef(ctx context.Context, rateLimitID string, refOwner 
 
 // rateLimitUsable is the owner rule for one rate limit a policy owned by refOwner names; the catalog's rate limits are open to every scope.
 func (c Checker) rateLimitUsable(ctx context.Context, rl *ratelimit.RateLimit, refOwner meta.Owner) error {
-	if !Visible(ctx, c.Authz, "rate-limit", rl.Meta.ID, rl.Meta.Owner) {
+	if !c.sees(ctx, "rate-limit", rl.Meta) {
 		return notVisible("rate-limit", rl.Meta.ID)
 	}
 	if catalogOwned(rl.Meta.Owner) {
@@ -410,6 +421,21 @@ func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
 		}
 	}
 	return c.budgetRefs(ctx, p.BudgetIDs(), p.Meta.Owner)
+}
+
+// PolicyLinks is the ids of the pools, rate limits and budgets p links, for Checker.Held.
+func PolicyLinks(p *policy.Policy) map[string]bool {
+	out := map[string]bool{}
+	for _, id := range p.Spec.PoolIDs {
+		out[id] = true
+	}
+	for _, l := range p.Spec.RateLimits {
+		out[l.RateLimitID] = true
+	}
+	for _, id := range p.BudgetIDs() {
+		out[id] = true
+	}
+	return out
 }
 
 // Account checks the host a provider account is held at and, for a shared account, its real account and receiver. Caller accounts are made with their team, project, user, service account or membership, never written as new rows.

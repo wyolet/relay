@@ -32,15 +32,15 @@ type PersonalAccount struct {
 
 func (p *PersonalAccount) builtFrom() inputs { return p.in }
 
-// EffectivePersonalAccount is the first of: the user's own value; an enabled system group's, off winning over on and the lowest id deciding among equals; the deployment's setting. A nil setting is on.
+// EffectivePersonalAccount is the first of: the user's own value; an enabled organization group's, off winning over on and the lowest id deciding among equals; the deployment's setting. A nil setting is on.
 func EffectivePersonalAccount(userValue string, groups []*group.Group, setting *settings.Accounts) (on bool, source PersonalAccountSource, groupID string) {
 	if userValue != "" {
 		return userValue != settings.PersonalAccountsOff, PersonalAccountFromUser, ""
 	}
 	var onGroup, offGroup string
 	for _, g := range groups {
-		// Only system groups may carry a value; one on a user's group, written before that rule, says nothing.
-		if !g.IsEnabled() || g.Meta.Owner.Kind != meta.OwnerSystem {
+		// Only the organization's groups may carry a value; one on a user's group, written before that rule, says nothing.
+		if !g.IsEnabled() || !g.Meta.Owner.DeploymentWide() {
 			continue
 		}
 		switch g.Spec.PersonalAccount {

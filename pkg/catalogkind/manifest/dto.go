@@ -24,7 +24,7 @@ type WireMeta struct {
 // id-form for API clients that already hold a UUID; either field is
 // accepted on read, with ID taking precedence.
 type WireOwner struct {
-	Kind meta.OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,user,team,project,provider,host"`
+	Kind meta.OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,organization,user,team,project,provider,host"`
 	Name string         `json:"name,omitempty" yaml:"name,omitempty"`
 	ID   string         `json:"id,omitempty"   yaml:"id,omitempty"`
 }

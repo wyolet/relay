@@ -271,7 +271,7 @@ func hasCounter(cs []slotCounter, c slotCounter) bool {
 	return false
 }
 
-// OwnedCredentials is the credentials one owner scope holds ("user:<id>", "project:<id>", "team:<id>", "system:"), or one provider account holds ("account:<id>"), each as a pool of one in creation order: what a lane reaches when no caller rung links pools.
+// OwnedCredentials is the credentials one owner scope holds ("user:<id>", "project:<id>", "team:<id>", "organization:", "system:"), or one provider account holds ("account:<id>"), each as a pool of one in creation order: what a lane reaches when no caller rung links pools.
 type OwnedCredentials struct {
 	Pools []*PoolPlan
 	in    inputs

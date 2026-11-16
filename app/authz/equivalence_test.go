@@ -398,6 +398,10 @@ func TestScopeOfMatchesAuthorize(t *testing.T) {
 				kind := authz.Singular(plural)
 				for _, verb := range []string{"get", "list", "update", "delete", "read", "mint"} {
 					filter, err := authz.ScopeOf(ctx, current, verb, plural)
+					// A global grant on a kind organization rows exist in would also select them, which the organization rule refuses; the store filters row by row instead.
+					if errors.Is(err, rbac.ErrUnfilterable) && authz.OrganizationKind(kind) {
+						continue
+					}
 					if err != nil {
 						t.Fatalf("%s: ScopeOf(%s, %s): %v", ea.name, verb, plural, err)
 					}

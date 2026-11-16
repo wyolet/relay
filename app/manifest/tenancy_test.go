@@ -19,7 +19,7 @@ kind: Team
 metadata:
   name: platform
   displayName: Platform Engineering
-  owner: {kind: system}
+  owner: {kind: organization}
   annotations:
     wyolet.com/owner-email: platform@example.com
 spec: {}
@@ -51,7 +51,7 @@ func TestTeamAndProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToTeam: %v", err)
 	}
-	wantTeam := &team.Team{Meta: meta.Metadata{Name: "platform", DisplayName: "Platform Engineering", Owner: meta.Owner{Kind: meta.OwnerSystem},
+	wantTeam := &team.Team{Meta: meta.Metadata{Name: "platform", DisplayName: "Platform Engineering", Owner: meta.Global,
 		Annotations: map[string]string{"wyolet.com/owner-email": "platform@example.com"}}}
 	if diff := cmp.Diff(wantTeam, tm); diff != "" {
 		t.Errorf("ToTeam (-want +got):\n%s", diff)

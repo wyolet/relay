@@ -17,6 +17,7 @@ import (
 
 // RateLimit is a named rule set. Owners:
 //   - system: bundled, operator-immutable (e.g. inference-api, control-api).
+//   - organization: made by the deployment's admins, usable in every scope.
 //   - provider, host: upstream tiers; Owner.ID names the provider or host.
 //   - user, team, project: tenant-defined, usable in that scope and below.
 type RateLimit struct {
@@ -114,8 +115,8 @@ func (r *RateLimit) IsEnabled() bool { return r.Spec.Enabled == nil || *r.Spec.E
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the RateLimit-specific owner shape:
-//   - Owner.Kind is required (system, provider, host, user, team or project).
-//   - Owner.Kind=provider, host or team requires Owner.ID.
+//   - Owner.Kind is required (system, organization, provider, host, user, team or project).
+//   - Owner.Kind=provider, host or team requires Owner.ID; organization carries none.
 //
 // No two rules may share meter, strategy and window: that triple is a rule's counter identity (see ResolveWithScope).
 //
@@ -135,6 +136,10 @@ func (r *RateLimit) Validate() error {
 	}
 	switch r.Meta.Owner.Kind {
 	case meta.OwnerSystem, meta.OwnerUser:
+	case meta.OwnerOrganization:
+		if r.Meta.Owner.ID != "" {
+			return fmt.Errorf("ratelimit %q: an organization owner carries no id", r.Meta.Name)
+		}
 	case meta.OwnerProvider:
 		if r.Meta.Owner.ID == "" {
 			return fmt.Errorf("ratelimit %q: owner.id is required (provider id)", r.Meta.Name)
@@ -149,7 +154,7 @@ func (r *RateLimit) Validate() error {
 		}
 	case meta.OwnerProject:
 	default:
-		return fmt.Errorf("ratelimit %q: owner.kind required (system|provider|host|user|team|project)", r.Meta.Name)
+		return fmt.Errorf("ratelimit %q: owner.kind required (system|organization|provider|host|user|team|project)", r.Meta.Name)
 	}
 	return nil
 }

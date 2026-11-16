@@ -291,7 +291,7 @@ func TestBindingFilters(t *testing.T) {
 		filterCase{q: "scope_id=t1", want: []string{"alice-team"}},
 		filterCase{q: "role_id=r-dev", want: []string{"bob-project", "ml-global"}},
 		filterCase{q: "role_id=r-dev&enabled=true", want: []string{"bob-project"}},
-		filterCase{q: "scope_kind=user", refused: `scope_kind: invalid value "user" (allowed: system, team, project)`},
+		filterCase{q: "scope_kind=user", refused: `scope_kind: invalid value "user" (allowed: organization, system, team, project)`},
 		filterCase{q: "bogus=1", refused: "bogus: unknown filter field"},
 	)
 	checkFilter(t, policyBindingFilter, []*policybinding.PolicyBinding{

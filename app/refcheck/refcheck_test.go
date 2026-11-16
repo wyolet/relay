@@ -63,8 +63,8 @@ func TestStampOwnerID(t *testing.T) {
 	}{
 		{"not user-owned", as("u-1"), teamOne, teamOne, ""},
 		{"empty id takes the caller", as("u-1"), userOwner(""), userOwner("u-1"), ""},
-		{"empty id under the admin token is the system's", adminToken(), userOwner(""), system, ""},
-		{"empty id with no caller is the system's", context.Background(), userOwner(""), system, ""},
+		{"empty id under the admin token is the organization's", adminToken(), userOwner(""), meta.Global, ""},
+		{"empty id with no caller is the organization's", context.Background(), userOwner(""), meta.Global, ""},
 		{"the caller's own id", as("u-1"), userOwner("u-1"), userOwner("u-1"), ""},
 		{"someone else's id", as("u-1"), userOwner("u-2"), userOwner("u-2"), "owner.id must be empty or match the calling user"},
 		{"someone else's id, by the admin role", adminRole("u-1"), userOwner("u-2"), userOwner("u-2"), "owner.id must be empty or match the calling user"},
@@ -88,6 +88,7 @@ func TestSharedOwner(t *testing.T) {
 	}{
 		{"same project", projectOne, projectOne, ""},
 		{"system row", system, projectOne, ""},
+		{"organization row", meta.Owner{Kind: meta.OwnerOrganization}, projectOne, ""},
 		{"another project's row", projectTwo, projectOne, refusal},
 		{"a team's row", teamOne, projectOne, refusal},
 		{"a user's row", alice, projectOne, refusal},
@@ -109,6 +110,7 @@ func TestPolicyRefAndRateLimitRef(t *testing.T) {
 		"same-project":  projectOne,
 		"other-project": projectTwo,
 		"team":          teamOne,
+		"organization":  {Kind: meta.OwnerOrganization},
 		"hidden":        system,
 	} {
 		rls[id] = &ratelimit.RateLimit{Meta: meta.Metadata{ID: id, Name: id, Owner: o}}
@@ -126,10 +128,11 @@ func TestPolicyRefAndRateLimitRef(t *testing.T) {
 	scopes := map[string]meta.Owner{"user": {Kind: meta.OwnerUser, ID: "u-1"}, "team": teamOne, "project": projectOne}
 	const hostTier = `400: policy "host" is a host tier policy and cannot be bound`
 	for name, ref := range scopes {
-		for _, target := range []string{"system", "provider", "host", ""} {
+		// The organization's rows serve every scope, as the system's do.
+		for _, target := range []string{"system", "organization", "provider", "host", ""} {
 			wantRefused(t, name+" policy, "+target+" rate limit", c.RateLimitRef(ctx, target, ref), "")
 		}
-		for _, target := range []string{"system", "provider", ""} {
+		for _, target := range []string{"system", "organization", "provider", ""} {
 			wantRefused(t, name+" row, "+target+" policy", c.PolicyRef(ctx, target, ref), "")
 		}
 		wantRefused(t, name+" row, a host tier policy", c.PolicyRef(ctx, "host", ref), hostTier)
@@ -427,18 +430,19 @@ func TestRoleBinding(t *testing.T) {
 		{"a team that does not exist", as("u-1"), nil, "r-read", meta.Owner{Kind: meta.OwnerTeam, ID: "t-9"}, nil, `400: team "t-9" does not exist`},
 		{"a project that does not exist", as("u-1"), nil, "r-read", meta.Owner{Kind: meta.OwnerProject, ID: "p-9"}, nil, `400: project "p-9" does not exist`},
 		{"a project the binder cannot see", as("u-1"), hiding("p-1"), "r-read", projectOne, nil, `404: project "p-1" not found`},
-		{"the system scope", as("u-1"), nil, "r-read", system, []rolebinding.Subject{userSub("u-2")}, ""},
-		{"a user that does not exist", as("u-1"), nil, "r-read", system, []rolebinding.Subject{userSub("u-1"), userSub("u-gone")}, `400: user "u-gone" does not exist`},
-		{"a service account that does not exist", as("u-1"), nil, "r-read", system, []rolebinding.Subject{saSub("sa-gone")}, `400: service account "sa-gone" does not exist`},
-		{"the user lookup failing", as("u-1"), nil, "r-read", system, []rolebinding.Subject{userSub("u-broken")}, "500: store down"},
+		{"the global scope", as("u-1"), nil, "r-read", meta.Global, []rolebinding.Subject{userSub("u-2")}, ""},
+		{"the global scope spelled system", as("u-1"), nil, "r-read", system, []rolebinding.Subject{userSub("u-2")}, ""},
+		{"a user that does not exist", as("u-1"), nil, "r-read", meta.Global, []rolebinding.Subject{userSub("u-1"), userSub("u-gone")}, `400: user "u-gone" does not exist`},
+		{"a service account that does not exist", as("u-1"), nil, "r-read", meta.Global, []rolebinding.Subject{saSub("sa-gone")}, `400: service account "sa-gone" does not exist`},
+		{"the user lookup failing", as("u-1"), nil, "r-read", meta.Global, []rolebinding.Subject{userSub("u-broken")}, "500: store down"},
 	} {
 		c := rows.checker(tc.authz)
 		c.Rows.Role = func(_ context.Context, id string) *role.Role { return roles[id] }
 		c.Rows.ServiceAccount, c.Rows.MissingUsers = keyRows(nil).Rows.ServiceAccount, keyRows(nil).Rows.MissingUsers
 		rb := &rolebinding.RoleBinding{Meta: meta.Metadata{Owner: alice}, Spec: rolebinding.Spec{RoleID: tc.roleID, Scope: tc.scope, Subjects: tc.subjects}}
 		wantRefused(t, tc.name, c.RoleBinding(tc.ctx, rb), tc.want)
-		if rb.Meta.Owner != tc.scope {
-			t.Errorf("%s: owner %+v, want the scope %+v", tc.name, rb.Meta.Owner, tc.scope)
+		if want := tc.scope.AsGlobalScope(); rb.Meta.Owner != want {
+			t.Errorf("%s: owner %+v, want the scope %+v", tc.name, rb.Meta.Owner, want)
 		}
 	}
 }

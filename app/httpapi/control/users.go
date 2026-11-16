@@ -147,7 +147,7 @@ func registerUserUpdate(api huma.API, d Deps, protect huma.Middlewares) {
 
 // userResource is the resource every account route authorizes: an account belongs to the deployment, so it lives in the global scope. id is empty for the list.
 func userResource(id string) authz.Resource {
-	return authz.Resource{Kind: "user", ID: id, Owner: &meta.Owner{Kind: meta.OwnerSystem}}
+	return authz.Resource{Kind: "user", ID: id, Owner: &meta.Owner{Kind: meta.OwnerOrganization}}
 }
 
 // userFinder reads one account by id or by username.

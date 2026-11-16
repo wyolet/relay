@@ -71,7 +71,7 @@ func ReachOf(v *engine.View, accountID string, over *Override) *Reach {
 		}
 		cp := foldSystem(v, ro)
 		r := walkReach(cp, nil)
-		r.Dropped = droppedLinks(v, cp, ro.policy, meta.Owner{Kind: meta.OwnerSystem}, nil)
+		r.Dropped = droppedLinks(v, cp, ro.policy, meta.Global, nil)
 		return r
 	}
 	acc := engine.Get[account.Account](v, accountID)
@@ -98,11 +98,11 @@ func ReachOf(v *engine.View, accountID string, over *Override) *Reach {
 // ScopeHolds reports whether scope outer holds inner in v: the system holds everything, a scope itself, a team its projects.
 func ScopeHolds(v *engine.View, outer, inner meta.Owner) bool { return scopeHolds(v, outer, inner) }
 
-// OwnerAccount returns the account a policy owned by owner is previewed in: a team's or project's own account, a user's personal account. ok is false when owner is another kind or its account is not made yet; the system scope answers nil, true, as it has no account.
+// OwnerAccount returns the account a policy owned by owner is previewed in: a team's or project's own account, a user's personal account. ok is false when owner is another kind or its account is not made yet; the system and the organization answer nil, true, as they have no account.
 func OwnerAccount(v *engine.View, owner meta.Owner) (acc *account.Account, ok bool) {
 	var place string
 	switch owner.Kind {
-	case meta.OwnerSystem:
+	case meta.OwnerSystem, meta.OwnerOrganization:
 		return nil, true
 	case meta.OwnerTeam, meta.OwnerProject:
 		place = string(owner.Kind) + ":" + owner.ID
@@ -153,14 +153,14 @@ func foldFor[R *engine.Txn | *engine.View](r R, acc *account.Account, over *rung
 	return cp
 }
 
-// foldSystem folds a lane under over's policy alone, reaching by ownership only system-owned keys.
+// foldSystem folds a lane under over's policy alone, reaching by ownership only the deployment's own keys.
 func foldSystem[R *engine.Txn | *engine.View](r R, over *rungOverride) *CallerPlan {
 	rd := newCallerReads(nil)
 	lane := &rd.rungs[rungLane]
-	lane.rung.ScopeID = string(meta.OwnerSystem)
+	lane.rung.ScopeID = string(meta.Global.Kind)
 	applyOverride(r, lane, over, &rd.in)
-	readReach(r, &rd, nil, []string{"system:"})
-	cp := &CallerPlan{Lane: &account.Account{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerSystem}}}, budgetAt: -1, linkedAt: -1}
+	readReach(r, &rd, nil, deploymentScopes)
+	cp := &CallerPlan{Lane: &account.Account{Meta: meta.Metadata{Owner: meta.Global}}, budgetAt: -1, linkedAt: -1}
 	foldCaller(cp, rd)
 	return cp
 }

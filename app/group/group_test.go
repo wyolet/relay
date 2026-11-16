@@ -17,7 +17,7 @@ const (
 )
 
 func fix(name string) *Group {
-	return &Group{Meta: meta.Metadata{ID: alice, Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	return &Group{Meta: meta.Metadata{ID: alice, Name: name, Owner: meta.Global}}
 }
 
 func TestValidate(t *testing.T) {
@@ -26,17 +26,19 @@ func TestValidate(t *testing.T) {
 		edit func(g *Group)
 		want string
 	}{
-		{"system owner", func(*Group) {}, ""},
+		{"organization owner", func(*Group) {}, ""},
 		{"user owner", func(g *Group) { g.Meta.Owner.Kind = meta.OwnerUser }, ""},
 		{"members", func(g *Group) { g.Spec.MemberIDs = []string{alice, bob} }, ""},
-		{"personalAccount on a system group", func(g *Group) { g.Spec.PersonalAccount = "off" }, ""},
-		{"team owner", func(g *Group) { g.Meta.Owner.Kind = meta.OwnerTeam }, `group "data-science": owner.kind must be user or system, got "team"`},
-		{"no owner", func(g *Group) { g.Meta.Owner = meta.Owner{} }, `group "data-science": owner.kind must be user or system, got ""`},
+		{"personalAccount on an organization group", func(g *Group) { g.Spec.PersonalAccount = "off" }, ""},
+		{"system owner", func(g *Group) { g.Meta.Owner.Kind = meta.OwnerSystem }, ""},
+		{"personalAccount on a system group", func(g *Group) { g.Meta.Owner.Kind, g.Spec.PersonalAccount = meta.OwnerSystem, "off" }, ""},
+		{"team owner", func(g *Group) { g.Meta.Owner.Kind = meta.OwnerTeam }, `group "data-science": owner.kind must be user or organization, got "team"`},
+		{"no owner", func(g *Group) { g.Meta.Owner = meta.Owner{} }, `group "data-science": owner.kind must be user or organization, got ""`},
 		{"reserved system: name", func(g *Group) { g.Meta.Name = "system:authenticated" }, `group "system:authenticated": names starting with "system:" are reserved for built-in groups`},
 		{"duplicate member", func(g *Group) { g.Spec.MemberIDs = []string{alice, bob, alice} }, `group "data-science": duplicate member id "01a19bc3-0000-7000-8000-000000000001"`},
 		{"member id that is no uuid", func(g *Group) { g.Spec.MemberIDs = []string{alice, "bob"} }, "Key: 'Group.Spec.MemberIDs[1]' Error:Field validation for 'MemberIDs[1]' failed on the 'uuid' tag"},
 		{"personalAccount outside on and off", func(g *Group) { g.Spec.PersonalAccount = "maybe" }, "Key: 'Group.Spec.PersonalAccount' Error:Field validation for 'PersonalAccount' failed on the 'oneof' tag"},
-		{"personalAccount on a user's group", func(g *Group) { g.Meta.Owner.Kind, g.Spec.PersonalAccount = meta.OwnerUser, "on" }, `group "data-science": personalAccount is set only on a group the system owns; clear it before moving the group to a user, or set it on a system group`},
+		{"personalAccount on a user's group", func(g *Group) { g.Meta.Owner.Kind, g.Spec.PersonalAccount = meta.OwnerUser, "on" }, `group "data-science": personalAccount is set only on a group the organization owns; clear it before moving the group to a user, or set it on an organization group`},
 	} {
 		g := fix("data-science")
 		tc.edit(g)
@@ -102,6 +104,10 @@ func TestDirectoryRoundTrip(t *testing.T) {
 	}
 	if !back.ToDirectory().Spec.External.IsZero() {
 		t.Error("ToDirectory carried the source, so a write could hand a group to one")
+	}
+	row.Meta.Owner.Kind = directory.OwnerSystem
+	if got := FromDirectory(row).Meta.Owner; got != meta.Global {
+		t.Errorf("a system-owned row reads as owned by %+v, want the organization", got)
 	}
 
 	for name, tc := range map[string]struct {

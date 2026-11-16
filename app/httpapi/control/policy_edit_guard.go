@@ -39,9 +39,12 @@ type policyInUseBody struct {
 	BlockedBy *policy.EditBlockers `json:"blockedBy,omitempty" doc:"With policy_in_use: the accounts whose policy the caller may not set."`
 }
 
-// policyChecks are the checks the policies routes run, shared with POST /policies/{ref}/duplicate. An update also passes the edit guard, before the model refs are normalized.
-func policyChecks(d Deps) kindChecks[policy.Policy] {
-	models := guardPolicyModels(d)
+// policyChecks are the checks the policies routes run. An update also passes the edit guard, before the model refs are normalized.
+func policyChecks(d Deps) kindChecks[policy.Policy] { return policyChecksCopying(d, nil) }
+
+// policyChecksCopying is policyChecks for POST /policies/{ref}/duplicate: copied is the links taken over from the source, which pass as the source's own did.
+func policyChecksCopying(d Deps, copied map[string]bool) kindChecks[policy.Policy] {
+	models := guardPolicyModels(d, copied)
 	return kindChecks[policy.Policy]{
 		plural: "policies", singular: "policy", authz: d.Authz, gov: d.Catalog,
 		validate: func(p *policy.Policy) error { return p.Validate() },

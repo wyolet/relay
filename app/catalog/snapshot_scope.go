@@ -3,7 +3,7 @@ package catalog
 import "github.com/wyolet/relay/pkg/meta"
 
 // global is the outermost scope every chain ends in.
-var global = meta.Owner{Kind: meta.OwnerSystem}
+var global = meta.Global
 
 // ScopeChain returns the scopes a row with this owner lives in, most
 // specific first. A nil owner is a global resource (settings, list calls).

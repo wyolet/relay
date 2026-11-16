@@ -1,6 +1,7 @@
 package stored
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -135,6 +136,22 @@ func (s *Backend) Rescope(ctx context.Context, id, scope string) error {
 	}
 	if err := s.seal(ctx, ring, scope, id, plain); err != nil {
 		return fmt.Errorf("secret/stored: rescope %q: %w", id, err)
+	}
+	return s.verifySealed(ctx, ring, id, scope, plain)
+}
+
+// verifySealed decrypts the value just written at id under scope and compares it with plain, so the transaction moving it is rolled back rather than committed over a value that does not open.
+func (s *Backend) verifySealed(ctx context.Context, ring *keyring.Ring, id, scope string, plain []byte) error {
+	row, err := s.q.GetSecretValue(ctx, id)
+	if err != nil {
+		return fmt.Errorf("secret/stored: rescope %q: read back: %w", id, err)
+	}
+	got, _, err := openValue(ctx, ring, id, scope, row.Ciphertext, row.Nonce)
+	if err != nil {
+		return fmt.Errorf("secret/stored: rescope %q: the new value does not open: %w", id, err)
+	}
+	if !bytes.Equal(got, plain) {
+		return fmt.Errorf("secret/stored: rescope %q: the new value opens to different bytes", id)
 	}
 	return nil
 }

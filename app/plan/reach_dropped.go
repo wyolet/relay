@@ -178,6 +178,8 @@ func scopeName[R *engine.Txn | *engine.View](r R, o meta.Owner) string {
 	switch o.Kind {
 	case meta.OwnerSystem:
 		return "the system"
+	case meta.OwnerOrganization:
+		return "the organization"
 	case meta.OwnerTeam:
 		if t := engine.Get[team.Team](r, o.ID); t != nil {
 			return "team " + t.Meta.Name

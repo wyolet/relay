@@ -117,7 +117,7 @@ func TestIntegration_AccountsRoundTripAndDropOut(t *testing.T) {
 	}
 }
 
-// A binding's owner round-trips: a project, a team or the system. Deleting the owning team deletes its binding.
+// A binding's owner round-trips: a project, a team or the organization, which a system owner, its earlier name, reads back as. Deleting the owning team deletes its binding.
 func TestIntegration_OwnersRoundTrip(t *testing.T) {
 	f := setupBindings(t, "owners")
 	teamAcct := f.managed(t, account.ForTeam(f.team.Meta.ID, f.team.Meta.Name, ""))
@@ -137,7 +137,7 @@ func TestIntegration_OwnersRoundTrip(t *testing.T) {
 			t.Fatalf("upsert %s-owned: %v", owner.Kind, err)
 		}
 		got, err := f.store.Get(f.ctx, b.Meta.ID)
-		if err != nil || got == nil || got.Meta.Owner != owner {
+		if err != nil || got == nil || got.Meta.Owner != owner.AsGlobalScope() {
 			t.Fatalf("%s-owned read back as %+v (err %v)", owner.Kind, got, err)
 		}
 	}
@@ -149,7 +149,7 @@ func TestIntegration_OwnersRoundTrip(t *testing.T) {
 		t.Fatalf("list: %v", err)
 	}
 	for _, b := range all {
-		if b.Meta.Owner.Kind != meta.OwnerSystem {
+		if b.Meta.Owner != meta.Global {
 			t.Fatalf("binding %s outlived its team", b.Meta.Name)
 		}
 	}

@@ -75,8 +75,9 @@ func TestIntegration_ExportIncludeSystem(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("export = %d: %s", code, body)
 	}
-	if got := exportedPolicies(t, body); len(got) != 0 {
-		t.Fatalf("default export included non-tenant policies: %v", got)
+	// The admin token's policy is the organization's, exported like a tenant's; the catalog's rows wait for includeSystem.
+	if got := exportedPolicies(t, body); len(got) != 1 || got["ci-crud"] == nil {
+		t.Fatalf("default export policies = %v, want the organization's ci-crud alone", got)
 	}
 
 	code, body = st.adminDo(http.MethodGet, "/api/export?includeSystem=true", "")

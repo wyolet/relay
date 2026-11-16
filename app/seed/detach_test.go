@@ -51,9 +51,12 @@ func TestMarkRowsDetachesOnlyDroppedCatalogRows(t *testing.T) {
 	orphan := tierPolicy("orphan-tier", meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()})
 	tenant := tierPolicy("team-policy", meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()})
 	personal := tierPolicy("my-policy", meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()})
+	org := tierPolicy("org-policy", meta.Owner{Kind: meta.OwnerOrganization})
+	// The catalog ships no system policy: one is the operator's, never dropped.
+	operator := tierPolicy("operator-default", meta.Owner{Kind: meta.OwnerSystem})
 
 	res, written := markPolicies(t, o, []string{"acme-tier-1"},
-		shipped, dropped, droppedDirty, byoTier, orphan, tenant, personal)
+		shipped, dropped, droppedDirty, byoTier, orphan, tenant, personal, org, operator)
 
 	if res.Detached != 2 || len(written) != 2 || written[0] != "acme-tier-0" || written[1] != "acme-tier-legacy" {
 		t.Fatalf("detached %d, written %v; want the clean and the dirty dropped catalog tiers", res.Detached, written)
@@ -64,7 +67,7 @@ func TestMarkRowsDetachesOnlyDroppedCatalogRows(t *testing.T) {
 	if !droppedDirty.Meta.Dirty {
 		t.Fatal("marking cleared the dirty flag")
 	}
-	for _, p := range []*policy.Policy{shipped, byoTier, orphan, tenant, personal} {
+	for _, p := range []*policy.Policy{shipped, byoTier, orphan, tenant, personal, org, operator} {
 		if p.Meta.CatalogDetachedAt != nil {
 			t.Errorf("%s was marked", p.Meta.Name)
 		}
@@ -72,7 +75,7 @@ func TestMarkRowsDetachesOnlyDroppedCatalogRows(t *testing.T) {
 
 	// A second pass over the same tree changes nothing.
 	res, written = markPolicies(t, o, []string{"acme-tier-1"},
-		shipped, dropped, droppedDirty, byoTier, orphan, tenant, personal)
+		shipped, dropped, droppedDirty, byoTier, orphan, tenant, personal, org)
 	if res.Detached != 0 || res.Reattached != 0 || len(written) != 0 {
 		t.Fatalf("second pass: %+v, written %v; want no writes", res, written)
 	}
@@ -118,8 +121,13 @@ func TestOriginFromCatalog(t *testing.T) {
 		{"Pricing", meta.Owner{Kind: meta.OwnerHost, ID: host}, true},
 		{"RateLimit", meta.Owner{Kind: meta.OwnerHost, ID: host}, true},
 		{"RateLimit", meta.Owner{Kind: meta.OwnerSystem}, false},
+		{"Policy", meta.Owner{Kind: meta.OwnerSystem}, false},
+		{"Policy", meta.Owner{Kind: meta.OwnerHost, ID: host}, true},
 		{"Host", meta.Owner{}, false},
 		{"Policy", meta.Owner{Kind: meta.OwnerProject, ID: "p1"}, false},
+		// An organization row is the admins' own, whatever kind it is.
+		{"Policy", meta.Owner{Kind: meta.OwnerOrganization}, false},
+		{"RateLimit", meta.Owner{Kind: meta.OwnerOrganization}, false},
 	}
 	for _, c := range cases {
 		m := &meta.Metadata{Owner: c.owner}

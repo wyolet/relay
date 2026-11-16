@@ -17,8 +17,8 @@ import (
 
 // MyContext is one scope the caller may create rows in.
 type MyContext struct {
-	Kind        string `json:"kind"             enum:"personal,team,project" doc:"personal is the caller's own scope, where rows with an omitted owner land; team and project name a tenancy row."`
-	ID          string `json:"id"               doc:"The caller's user id for personal, else the team or project id. The owner a row created in this context takes: {kind: user, id} for personal, {kind: team|project, id} otherwise."`
+	Kind        string `json:"kind"             enum:"organization,personal,team,project" doc:"organization is the deployment-wide scope, listed for admins only; personal is the caller's own scope, where rows with an omitted owner land; team and project name a tenancy row."`
+	ID          string `json:"id"               doc:"Empty for organization, the caller's user id for personal, else the team or project id. The owner a row created in this context takes: {kind: organization} for organization, {kind: user, id} for personal, {kind: team|project, id} otherwise."`
 	Name        string `json:"name"             doc:"The caller's username for personal, else the team or project slug."`
 	DisplayName string `json:"displayName"      doc:"The team or project display name; the username for personal."`
 	TeamID      string `json:"teamId,omitempty" doc:"The project's team. Projects only."`
@@ -38,7 +38,7 @@ func registerMyContexts(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/me/contexts",
 		Summary:     "List the scopes the caller may create rows in",
-		Description: "The contexts the caller may act in: their personal scope first (left out while their personal account is turned off), then each team, then each project, each list by slug, where the caller may create at least one policy, pool, account, host key, budget, rate limit, policy binding, key, service account or role binding. Grants through groups and through a team-level role count, so a team admin is listed with the team's projects. The admin token is no user: it gets every team and project with admin true and no personal scope. Read from the in-memory catalog, so a write shows within about a second.",
+		Description: "The contexts the caller may act in: the organization first for an admin (the admin role, the admin token, or a global binding of the built-in admin role), then their personal scope (left out while their personal account is turned off), then each team, then each project, each list by slug, where the caller may create at least one policy, pool, account, host key, budget, rate limit, policy binding, key, service account or role binding. Grants through groups and through a team-level role count, so a team admin is listed with the team's projects. The admin token is no user: it gets every team and project with admin true and no personal scope. Read from the in-memory catalog, so a write shows within about a second.",
 		Tags:        []string{"accounts"},
 		Middlewares: protect,
 		Errors:      []int{401, 503},
@@ -69,6 +69,9 @@ type contextSource interface {
 // myContexts lists a's contexts; the personal one only while personalOn, since rows created there would serve nothing.
 func myContexts(ctx context.Context, az authz.Authorizer, src contextSource, a *actor.Actor, personalOn bool) []MyContext {
 	out := []MyContext{}
+	if authz.Admin(ctx, az) {
+		out = append(out, MyContext{Kind: string(meta.OwnerOrganization), Name: string(meta.OwnerOrganization), DisplayName: "Organization", Admin: true})
+	}
 	if !a.AdminToken && a.UserID != "" && personalOn {
 		out = append(out, MyContext{Kind: "personal", ID: a.UserID, Name: a.Username, DisplayName: a.Username, Admin: true})
 	}

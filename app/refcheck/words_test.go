@@ -125,6 +125,7 @@ func TestScopeTextNamesEveryOwnerKind(t *testing.T) {
 	}{
 		{c, system, "the system"},
 		{c, meta.Owner{}, "the system"},
+		{c, meta.Owner{Kind: meta.OwnerOrganization}, "the organization"},
 		{c, meta.Owner{Kind: meta.OwnerUser, ID: meID}, "your personal scope"},
 		{c, alice, "another user's personal scope"},
 		{c, teamOne, `team "Platform"`},

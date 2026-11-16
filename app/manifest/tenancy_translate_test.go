@@ -9,7 +9,7 @@ import (
 )
 
 // A manifest may not choose who owns a Team, Group or Role: those rows name a scope or a grant, and a user-owned one would hand its author every binding already made against that name.
-func TestTenancyKindsAreAlwaysSystemOwned(t *testing.T) {
+func TestTenancyKindsAreAlwaysTheOrganizations(t *testing.T) {
 	idx := MapResolver{Users: map[string]string{"mallory": "u-mallory"}}
 	md := WireMeta{Name: "x", Owner: WireOwner{Kind: meta.OwnerUser, Name: "mallory"}}
 	owners := map[string]meta.Owner{}
@@ -29,8 +29,8 @@ func TestTenancyKindsAreAlwaysSystemOwned(t *testing.T) {
 	}
 	owners["role"] = r.Meta.Owner
 	for kind, o := range owners {
-		if o != (meta.Owner{Kind: meta.OwnerSystem}) {
-			t.Errorf("%s owner = %+v, want system", kind, o)
+		if o != meta.Global {
+			t.Errorf("%s owner = %+v, want the organization", kind, o)
 		}
 	}
 }

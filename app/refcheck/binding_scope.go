@@ -27,7 +27,7 @@ func (c Checker) BindablePolicy(ctx context.Context, policyID string, scope meta
 }
 
 func (c Checker) policyBindable(ctx context.Context, p *policy.Policy, scope meta.Owner) error {
-	if !Visible(ctx, c.Authz, "policy", p.Meta.ID, p.Meta.Owner) {
+	if !c.sees(ctx, "policy", p.Meta) {
 		return notVisible("policy", p.Meta.ID)
 	}
 	switch {

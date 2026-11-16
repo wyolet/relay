@@ -60,13 +60,13 @@ func TestAuthKindsParseTheSameUnderEitherAPIVersion(t *testing.T) {
 		Users: map[string]string{"alice": aliceUUID}, Roles: map[string]string{"developer": roleUUID},
 	}
 	on, off := true, false
-	system, inTeam := meta.Owner{Kind: meta.OwnerSystem}, meta.Owner{Kind: meta.OwnerTeam, ID: teamUUID}
+	org, inTeam := meta.Global, meta.Owner{Kind: meta.OwnerTeam, ID: teamUUID}
 	want := []any{
-		&team.Team{Meta: meta.Metadata{Name: "platform", Owner: system, Labels: map[string]string{"env": "prod"}}, Spec: team.Spec{Enabled: &on}},
+		&team.Team{Meta: meta.Metadata{Name: "platform", Owner: org, Labels: map[string]string{"env": "prod"}}, Spec: team.Spec{Enabled: &on}},
 		&project.Project{Meta: meta.Metadata{Name: "ml-search", Owner: inTeam, Annotations: map[string]string{"note": "x"}}, Spec: project.Spec{TeamID: teamUUID}},
 		&serviceaccount.ServiceAccount{Meta: meta.Metadata{Name: "search-indexer", Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectUUID}}, Spec: serviceaccount.Spec{ProjectID: projectUUID, Enabled: &off}},
-		&group.Group{Meta: meta.Metadata{Name: "eng", Owner: system}, Spec: group.Spec{MemberIDs: []string{aliceUUID}}},
-		&role.Role{Meta: meta.Metadata{Name: "developer", Owner: system}, Spec: role.Spec{Rules: []role.Rule{{Kinds: []string{"keys"}, Verbs: []string{"get", "list"}}}}},
+		&group.Group{Meta: meta.Metadata{Name: "eng", Owner: org}, Spec: group.Spec{MemberIDs: []string{aliceUUID}}},
+		&role.Role{Meta: meta.Metadata{Name: "developer", Owner: org}, Spec: role.Spec{Rules: []role.Rule{{Kinds: []string{"keys"}, Verbs: []string{"get", "list"}}}}},
 		&rolebinding.RoleBinding{Meta: meta.Metadata{Name: "devs", Owner: inTeam}, Spec: rolebinding.Spec{RoleID: roleUUID, Scope: inTeam, Subjects: []rolebinding.Subject{
 			{Kind: rolebinding.SubjectGroup, Name: "eng"}, {Kind: rolebinding.SubjectUser, ID: aliceUUID},
 		}}},
@@ -164,9 +164,9 @@ func TestAuthKindsRenderInRelayForm(t *testing.T) {
 	exported(t, "FromServiceAccount", wantSA, manifest.FromServiceAccount(sa, rev))
 
 	tm := translate(t, docs[0], idx).(*team.Team)
-	// The document's own owner is ignored: a team is the system's.
+	// The document's own owner is ignored: a team is the organization's.
 	wantTeam := *docs[0].Team
-	wantTeam.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerSystem}
+	wantTeam.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerOrganization}
 	exported(t, "FromTeam", wantTeam, manifest.FromTeam(tm, rev))
 
 	p := translate(t, docs[1], idx).(*project.Project)

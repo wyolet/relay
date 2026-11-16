@@ -42,11 +42,11 @@ func TestSCIMWritesAreAuditedAsTheClient(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/scim/v2/Users", nil))
 	em.Close()
 
-	system := meta.Owner{Kind: meta.OwnerSystem}
+	org := meta.Global
 	event := func(action, status, kind, id, name string, fields ...string) audit.Event {
 		return audit.Event{
 			Actor: audit.Actor{Kind: audit.ActorSCIMClient, Name: "entra"}, Action: action,
-			Resource: audit.Resource{Kind: kind, ID: id, Name: name, Owner: &system},
+			Resource: audit.Resource{Kind: kind, ID: id, Name: name, Owner: &org},
 			Outcome:  audit.Outcome{Status: status, Code: http.StatusOK}, Request: audit.Request{Method: http.MethodPatch, Path: "/scim/v2/Users/u-1"},
 			Change: &audit.Change{Fields: fields},
 		}

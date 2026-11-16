@@ -114,6 +114,8 @@ var scopeActors = map[string]*actor.Actor{
 	"bob":   {UserID: "u-bob", Username: "bob"},
 	"root":  {UserID: "u-root", Username: "root", Roles: []string{user.RoleAdmin}},
 	"token": {AdminToken: true, Username: "admin-token"},
+	// granted holds no admin role on its session; a role binding may make it one.
+	"granted": {UserID: "u-granted", Username: "granted", Subjects: appcatalog.UserSubjects("u-granted", nil, nil)},
 }
 
 // testAPI is a router whose requests run as the actor X-Test-Actor names, with the relay error envelope installed.
@@ -427,7 +429,7 @@ func TestCRUDGovernanceSectionDecidesCatalogRows(t *testing.T) {
 // Create stamps the id, derives a free slug and settles the owner before anything is authorized; a refused body stores nothing.
 func TestCRUDCreate(t *testing.T) {
 	const reserved = "owner.kind=system is reserved for seed; omit owner.kind on create"
-	system, alice := meta.Owner{Kind: meta.OwnerSystem}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
+	org, alice := meta.Global, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
 	rbmeta := func(b *rolebinding.RoleBinding) *meta.Metadata { return &b.Meta }
 	roleBindings := newMemStore(rbmeta)
 	things := newMemStore(thingMeta, &scopedThing{Meta: meta.Metadata{ID: aliceID, Name: "my-limit", Owner: alice}})
@@ -440,9 +442,9 @@ func TestCRUDCreate(t *testing.T) {
 
 	h, api := testAPI(t, scopeActors)
 	mountKind[scopedThing](api, "rate-limits", "rate-limit", things, testRBAC(), thingMeta, nil, meta.OwnerUser, nil, noSettings{})
-	mountKind[team.Team](api, "teams", "team", teams, testRBAC(), teams.metaOf, (*team.Team).Validate, meta.OwnerSystem, nil, noSettings{})
-	mountKind[group.Group](api, "groups", "group", groups, testRBAC(), groups.metaOf, (*group.Group).Validate, meta.OwnerSystem, nil, noSettings{})
-	mountKind[role.Role](api, "roles", "role", roles, testRBAC(), roles.metaOf, (*role.Role).Validate, meta.OwnerSystem, nil, noSettings{})
+	mountKind[team.Team](api, "teams", "team", teams, testRBAC(), teams.metaOf, (*team.Team).Validate, meta.OwnerOrganization, nil, noSettings{})
+	mountKind[group.Group](api, "groups", "group", groups, testRBAC(), groups.metaOf, (*group.Group).Validate, meta.OwnerOrganization, nil, noSettings{})
+	mountKind[role.Role](api, "roles", "role", roles, testRBAC(), roles.metaOf, (*role.Role).Validate, meta.OwnerOrganization, nil, noSettings{})
 	mountKind[rolebinding.RoleBinding](api, "role-bindings", "role-binding", roleBindings, testRBAC(), rbmeta,
 		func(b *rolebinding.RoleBinding) error { b.StampOwner(); return b.Validate() }, "", nil, noSettings{})
 
@@ -451,6 +453,8 @@ func TestCRUDCreate(t *testing.T) {
 		personal    = `{"metadata":{"name":"eng","displayName":"Eng","owner":{"kind":"user"}},"spec":{}}`
 		customRole  = `{"metadata":{"name":"release-manager","displayName":"RM"},"spec":{"rules":[{"kinds":["keys"],"verbs":["get"]}]}}`
 		globalGrant = `{"metadata":{"name":"ops-admin","owner":{"kind":"system"}},"spec":{"roleId":"00000000-0000-7000-8000-000000000001","scope":{"kind":"system"},"subjects":[{"kind":"user","id":"00000000-0000-7000-8000-000000000002"}]}}`
+		systemTeam  = `{"metadata":{"name":"ops","owner":{"kind":"system"}},"spec":{}}`
+		systemRole  = `{"metadata":{"name":"ops-role","owner":{"kind":"system"}},"spec":{"rules":[{"kinds":["keys"],"verbs":["get"]}]}}`
 	)
 	for _, tc := range []struct {
 		name, who, path, body string
@@ -463,27 +467,30 @@ func TestCRUDCreate(t *testing.T) {
 		{"a truthful owner id is kept", "alice", "/rate-limits", `{"metadata":{"name":"mine2","owner":{"kind":"user","id":"u-alice"}}}`, 201, "", "mine2", alice},
 		{"another user's id is refused", "alice", "/rate-limits", `{"metadata":{"name":"theirs","owner":{"kind":"user","id":"u-bob"}}}`, 400, "owner.id must be empty or match the calling user", "", meta.Owner{}},
 		{"the admin token may name any user", "token", "/rate-limits", `{"metadata":{"name":"for-bob","owner":{"kind":"user","id":"u-bob"}}}`, 201, "", "for-bob", meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}},
-		{"the admin token names no user, so its row is the system's", "token", "/rate-limits", `{"metadata":{"name":"ci-row"}}`, 201, "", "ci-row", system},
+		{"the admin token names no user, so its row is the organization's", "token", "/rate-limits", `{"metadata":{"name":"ci-row"}}`, 201, "", "ci-row", org},
 		{"an empty name is derived from displayName", "alice", "/rate-limits", `{"metadata":{"name":"","displayName":"Burst Cap!"}}`, 201, "", "burst-cap", alice},
 		{"a derived slug steps past a taken one", "alice", "/rate-limits", `{"metadata":{"name":"","displayName":"My Limit"}}`, 201, "", "my-limit-2", alice},
 		{"no name at all falls back to the kind", "alice", "/rate-limits", `{"metadata":{"name":""}}`, 201, "", "rate-limit", alice},
-		{"system is reserved on a personal kind", "root", "/rate-limits", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, 400, reserved, "", meta.Owner{}},
+		// A body from before the organization owner: system names it.
+		{"system on a moved kind is the organization", "root", "/rate-limits", `{"metadata":{"name":"sys","owner":{"kind":"system"}}}`, 201, "", "sys", meta.Global},
 		{"a catalog owner needs a grant", "alice", "/rate-limits", `{"metadata":{"name":"shared","owner":{"kind":"host","id":"h-1"}}}`, 403, "forbidden", "", meta.Owner{}},
 		{"an admin creates a catalog-owned row", "root", "/rate-limits", `{"metadata":{"name":"shared","owner":{"kind":"host","id":"h-1"}}}`, 201, "", "shared", meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}},
 
-		// Team, Group and Role default to the system, so the personal-row rule never carries a plain user through.
+		// Team, Group and Role default to the organization, so the personal-row rule never carries a plain user through.
 		{"a user creates no team", "alice", "/teams", tenant, 403, "forbidden", "", meta.Owner{}},
 		{"a user creates no group", "alice", "/groups", tenant, 403, "forbidden", "", meta.Owner{}},
 		{"a user creates no role", "alice", "/roles", customRole, 403, "forbidden", "", meta.Owner{}},
-		{"an admin's team is the system's", "root", "/teams", tenant, 201, "", "eng", system},
-		{"an admin's group is the system's", "root", "/groups", tenant, 201, "", "eng", system},
-		{"an admin's role is the system's", "root", "/roles", customRole, 201, "", "release-manager", system},
-		{"a team takes no personal owner", "alice", "/teams", personal, 400, "team owner.kind must be system; omit metadata.owner", "", meta.Owner{}},
-		{"a team takes no personal owner from an admin", "root", "/teams", personal, 400, "team owner.kind must be system; omit metadata.owner", "", meta.Owner{}},
-		{"a group takes no personal owner", "alice", "/groups", personal, 400, "group owner.kind must be system; omit metadata.owner", "", meta.Owner{}},
-		{"a group takes no personal owner from an admin", "root", "/groups", personal, 400, "group owner.kind must be system; omit metadata.owner", "", meta.Owner{}},
-		// The global scope is spelled {kind: system}, and a role binding's owner mirrors its scope.
-		{"a global role binding is not a reserved owner", "root", "/role-bindings", globalGrant, 201, "", "ops-admin", system},
+		{"an admin's team is the organization's", "root", "/teams", tenant, 201, "", "eng", org},
+		{"an admin's group is the organization's", "root", "/groups", tenant, 201, "", "eng", org},
+		{"an admin's role is the organization's", "root", "/roles", customRole, 201, "", "release-manager", org},
+		{"a team written as the system's is the organization's", "root", "/teams", systemTeam, 201, "", "ops", org},
+		{"a custom role is not the system's", "root", "/roles", systemRole, 400, reserved, "", meta.Owner{}},
+		{"a team takes no personal owner", "alice", "/teams", personal, 400, "team owner.kind must be organization; omit metadata.owner", "", meta.Owner{}},
+		{"a team takes no personal owner from an admin", "root", "/teams", personal, 400, "team owner.kind must be organization; omit metadata.owner", "", meta.Owner{}},
+		{"a group takes no personal owner", "alice", "/groups", personal, 400, "group owner.kind must be organization; omit metadata.owner", "", meta.Owner{}},
+		{"a group takes no personal owner from an admin", "root", "/groups", personal, 400, "group owner.kind must be organization; omit metadata.owner", "", meta.Owner{}},
+		// A role binding's owner mirrors its scope; the global scope written {kind: system} is the organization.
+		{"a global role binding is not a reserved owner", "root", "/role-bindings", globalGrant, 201, "", "ops-admin", org},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := stored()
@@ -602,7 +609,7 @@ func TestCRUDStoreWriteErrors(t *testing.T) {
 			seed := &group.Group{Meta: meta.Metadata{ID: id, Name: "ops", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 			store := failingStore{newMemStore(gmeta, seed), tc.err}
 			h, api := testAPI(t, scopeActors)
-			mountKind[group.Group](api, "groups", "group", store, testRBAC(), gmeta, (*group.Group).Validate, meta.OwnerSystem, nil, noSettings{})
+			mountKind[group.Group](api, "groups", "group", store, testRBAC(), gmeta, (*group.Group).Validate, meta.OwnerOrganization, nil, noSettings{})
 
 			wantAPIError(t, scopeReq(t, h, "root", "PUT", "/groups/by-id/"+id, `{"metadata":{"name":"ops","displayName":"Ops 2"},"spec":{}}`), tc.put, tc.putCode, tc.putMsg)
 			wantAPIError(t, scopeReq(t, h, "root", "DELETE", "/groups/by-id/"+id, ""), tc.del, tc.delCode, tc.delMsg)
@@ -664,7 +671,7 @@ func newSharedCatalogHarness(t *testing.T) (http.Handler, *actor.Actor) {
 	rlmeta := func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta }
 	mountKind[ratelimit.RateLimit](api, "rate-limits", "rate-limit", newMemStore(rlmeta), rbac, rlmeta, (*ratelimit.RateLimit).Validate, meta.OwnerUser, nil, noSettings{})
 	polmeta := func(p *policy.Policy) *meta.Metadata { return &p.Meta }
-	mountKind[policy.Policy](api, "policies", "policy", newMemStore(polmeta), rbac, polmeta, (*policy.Policy).Validate, meta.OwnerUser, guardPolicyModels(d), noSettings{})
+	mountKind[policy.Policy](api, "policies", "policy", newMemStore(polmeta), rbac, polmeta, (*policy.Policy).Validate, meta.OwnerUser, guardPolicyModels(d, nil), noSettings{})
 	return r, nobody
 }
 

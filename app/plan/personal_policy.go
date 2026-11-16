@@ -80,7 +80,7 @@ type rbacRows struct {
 
 // ScopeChainFor resolves from the owner alone: the plans ask only about rows that do not define a scope.
 func (r *rbacRows) ScopeChainFor(_, _ string, o *meta.Owner) []meta.Owner {
-	global := meta.Owner{Kind: meta.OwnerSystem}
+	global := meta.Global
 	if o == nil {
 		return []meta.Owner{global}
 	}

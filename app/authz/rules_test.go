@@ -216,4 +216,82 @@ func TestKindNames(t *testing.T) {
 			t.Errorf("SharedCatalogKind(%q) = %v, want %v", k, got, shared[k])
 		}
 	}
+
+	adminOnly := map[string]bool{"policy": true, "rate-limit": true, "budget": true, "pool": true}
+	organization := map[string]bool{"host-key": true, "account": true, "team": true, "group": true, "role": true, "role-binding": true, "policy-binding": true}
+	for k := range adminOnly {
+		organization[k] = true
+	}
+	for _, kind := range role.Kinds {
+		k := authz.Singular(kind)
+		if got := authz.OrganizationKind(k); got != organization[k] {
+			t.Errorf("OrganizationKind(%q) = %v, want %v", k, got, organization[k])
+		}
+		if got := authz.OrganizationAdminOnly(k); got != adminOnly[k] {
+			t.Errorf("OrganizationAdminOnly(%q) = %v, want %v", k, got, adminOnly[k])
+		}
+	}
+}
+
+// The organization's policies, rate limits, budgets and pools are an admin's alone: no binding reaches them, not even a global one.
+func TestOrganizationRows(t *testing.T) {
+	cat := newFixture(t)
+	r := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	org := &meta.Owner{Kind: meta.OwnerOrganization}
+	strangerID := ids.New()
+	globalEditor := actorOf(daveID, subjectsOf(daveID))
+	teamAdmin := actorOf(aliceID, subjectsOf(aliceID))
+	refused := map[string]*actor.Actor{
+		"global catalog editor": globalEditor,
+		"team admin":            teamAdmin,
+		"no binding":            actorOf(strangerID, subjectsOf(strangerID)),
+	}
+	admitted := map[string]*actor.Actor{
+		"admin role":  actorOf(ids.New(), nil, user.RoleAdmin),
+		"admin token": {AdminToken: true},
+	}
+	for _, kind := range []string{"rate-limits", "policies", "budgets", "pools"} {
+		for _, verb := range []string{"get", "list", "create", "update", "delete"} {
+			res := authz.Resource{Kind: authz.Singular(kind), ID: ids.New(), Owner: org}
+			for name, a := range refused {
+				x, err := r.Explain(t.Context(), a, kind+"."+verb, res)
+				if err != nil || x.Allowed || x.Rule != "organization-row" {
+					t.Errorf("%s: %s.%s explained %+v (%v), want refused by organization-row", name, kind, verb, x, err)
+				}
+				if err := r.Authorize(ctxOf(a), kind+"."+verb, res); err != authz.ErrForbidden {
+					t.Errorf("%s: %s.%s = %v, want forbidden", name, kind, verb, err)
+				}
+			}
+			for name, a := range admitted {
+				if err := r.Authorize(ctxOf(a), kind+"."+verb, res); err != nil {
+					t.Errorf("%s: %s.%s = %v, want allowed", name, kind, verb, err)
+				}
+			}
+		}
+	}
+	if err := r.Authorize(ctxOf(globalEditor), "rate-limits.update", authz.Resource{Kind: "rate-limit", ID: ids.New(), Owner: &globalScope}); err != nil {
+		t.Fatalf("global editor on a system rate limit = %v, want allowed", err)
+	}
+	// The organization's other rows are decided by the bindings, as system rows were: a team viewer reads its organization-owned team, and custom roles read for everyone.
+	carol := actorOf(carolID, subjectsOf(carolID))
+	if err := r.Authorize(ctxOf(carol), "teams.get", authz.Resource{Kind: "team", ID: t1ID, Owner: org}); err != nil {
+		t.Fatalf("team viewer on its organization-owned team = %v, want allowed", err)
+	}
+	if err := r.Authorize(ctxOf(carol), "host-keys.get", authz.Resource{Kind: "host-key", ID: ids.New(), Owner: org}); err != authz.ErrForbidden {
+		t.Fatalf("team viewer on an organization host key = %v, want forbidden", err)
+	}
+	if err := r.Authorize(ctxOf(refused["no binding"]), "roles.get", authz.Resource{Kind: "role", ID: ids.New(), Owner: org}); err != nil {
+		t.Fatalf("signed-in caller on an organization role = %v, want allowed", err)
+	}
+
+	// A filter cannot take back what a global grant selects, so ScopeOf declines there and answers everywhere else.
+	if _, err := authz.ScopeOf(ctxOf(globalEditor), r, "get", "rate-limits"); !errors.Is(err, rbac.ErrUnfilterable) {
+		t.Fatalf("ScopeOf for a global grant on rate-limits = %v, want ErrUnfilterable", err)
+	}
+	if _, err := authz.ScopeOf(ctxOf(globalEditor), r, "get", "models"); err != nil {
+		t.Fatalf("ScopeOf on a kind with no organization rows = %v", err)
+	}
+	if _, err := authz.ScopeOf(ctxOf(teamAdmin), r, "get", "rate-limits"); err != nil {
+		t.Fatalf("ScopeOf without a global grant = %v", err)
+	}
 }

@@ -20,12 +20,13 @@ func (g *Group) ToDirectory() *directory.Group {
 	return d
 }
 
-// FromDirectory is a directory row as a Group.
+// FromDirectory is a directory row as a Group. A group written as system-owned reads as the organization's.
 func FromDirectory(r *directory.Group) *Group {
 	g := &Group{
 		Meta: meta.FromDirectory(r.Meta),
 		Spec: Spec{MemberIDs: r.Spec.MemberIDs, Enabled: r.Spec.Enabled},
 	}
+	g.Meta.Owner = g.Meta.Owner.AsGlobalScope()
 	if raw, ok := r.Spec.Attributes[PersonalAccountAttribute]; ok {
 		_ = json.Unmarshal(raw, &g.Spec.PersonalAccount)
 	}

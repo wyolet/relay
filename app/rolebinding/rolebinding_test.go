@@ -51,8 +51,23 @@ func TestIsEnabled(t *testing.T) {
 	}
 }
 
+// A system scope is the global scope's earlier name: every read and write stamps it as the organization, and the owner follows.
+func TestStampOwnerReadsSystemAsGlobal(t *testing.T) {
+	for _, tc := range []struct{ scope, want meta.Owner }{
+		{meta.Owner{Kind: meta.OwnerSystem}, meta.Global},
+		{meta.Global, meta.Global},
+		{meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, meta.Owner{Kind: meta.OwnerTeam, ID: teamID}},
+		{meta.Owner{Kind: meta.OwnerSystem, ID: teamID}, meta.Owner{Kind: meta.OwnerSystem, ID: teamID}},
+	} {
+		b := fix(tc.scope)
+		if b.Spec.Scope != tc.want || b.Meta.Owner != tc.want {
+			t.Errorf("scope %+v: stamped scope %+v owner %+v, want %+v", tc.scope, b.Spec.Scope, b.Meta.Owner, tc.want)
+		}
+	}
+}
+
 func TestValidate(t *testing.T) {
-	system := meta.Owner{Kind: meta.OwnerSystem}
+	system := meta.Global
 	team := meta.Owner{Kind: meta.OwnerTeam, ID: teamID}
 	group := Subject{Kind: SubjectGroup, Name: "platform-eng"}
 	user := Subject{Kind: SubjectUser, ID: userID}
@@ -70,11 +85,12 @@ func TestValidate(t *testing.T) {
 		{"team scope, user subject", fix(team, user), ""},
 		{"project scope, mixed subjects", fix(meta.Owner{Kind: meta.OwnerProject, ID: teamID}, user, group, Subject{Kind: SubjectServiceAccount, ID: teamID}), ""},
 		{"a user and a service account of one id", fix(system, user, Subject{Kind: SubjectServiceAccount, ID: userID}), ""},
-		{"global scope with an id", fix(meta.Owner{Kind: meta.OwnerSystem, ID: teamID}, group), `rolebinding "platform-admins": global scope carries no id`},
+		{"global scope with an id", fix(meta.Owner{Kind: meta.OwnerOrganization, ID: teamID}, group), `rolebinding "platform-admins": global scope carries no id`},
+		{"system scope with an id", fix(meta.Owner{Kind: meta.OwnerSystem, ID: teamID}, group), `rolebinding "platform-admins": scope.kind must be organization, team, or project, got "system"`},
 		{"team scope without an id", fix(meta.Owner{Kind: meta.OwnerTeam}, group), `rolebinding "platform-admins": scope.kind "team" requires an id`},
 		{"project scope without an id", fix(meta.Owner{Kind: meta.OwnerProject}, group), `rolebinding "platform-admins": scope.kind "project" requires an id`},
-		{"user scope kind", fix(meta.Owner{Kind: meta.OwnerUser, ID: userID}, group), `rolebinding "platform-admins": scope.kind must be system, team, or project, got "user"`},
-		{"host scope kind", fix(meta.Owner{Kind: meta.OwnerHost, ID: userID}, group), `rolebinding "platform-admins": scope.kind must be system, team, or project, got "host"`},
+		{"user scope kind", fix(meta.Owner{Kind: meta.OwnerUser, ID: userID}, group), `rolebinding "platform-admins": scope.kind must be organization, team, or project, got "user"`},
+		{"host scope kind", fix(meta.Owner{Kind: meta.OwnerHost, ID: userID}, group), `rolebinding "platform-admins": scope.kind must be organization, team, or project, got "host"`},
 		{"no scope", fix(meta.Owner{}, group), "Key: 'RoleBinding.Spec.Scope' Error:Field validation for 'Scope' failed on the 'required' tag"},
 		{"owner id drifted from scope", edited(func(b *RoleBinding) { b.Meta.Owner.ID = userID }), `rolebinding "platform-admins": owner team/01a19bc3-0000-7000-8000-000000000002 does not mirror scope team/01a19bc3-0000-7000-8000-000000000001`},
 		{"owner kind drifted from scope", edited(func(b *RoleBinding) { b.Meta.Owner.Kind = meta.OwnerProject }), `rolebinding "platform-admins": owner project/01a19bc3-0000-7000-8000-000000000001 does not mirror scope team/01a19bc3-0000-7000-8000-000000000001`},

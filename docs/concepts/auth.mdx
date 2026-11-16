@@ -153,7 +153,7 @@ Under `single`, OIDC with `registration: open` makes every user your identity pr
 ### The model
 
 - A **Role** is a set of `(kinds, verbs)` rules. It carries no scope.
-- A **RoleBinding** grants one role to subjects (users, groups or service accounts) at one **scope**: a project, a team, or global (`{kind: system}`).
+- A **RoleBinding** grants one role to subjects (users, groups or service accounts) at one **scope**: a project, a team, or global (`{kind: organization}`; `{kind: system}`, its earlier name, is read as it).
 - Every resource has a **scope chain**: a project-owned row lives in `[project, team, global]`, a team-owned row in `[team, global]`, and catalog and personal rows in `[global]`.
 - A binding at scope *S* grants its role on every resource whose chain contains *S*. A team binding covers every project in the team, current and future; a project binding never reaches a sibling project.
 

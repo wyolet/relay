@@ -10,12 +10,13 @@ import (
 
 // The owner tier decides: a system row is an admin's (unless it is a Team,
 // Group or Role, which are system-owned only because nobody owns them
-// personally), a tenant's row is the tenant's whatever the section says, and
+// personally), an organization row likewise, a tenant's row is the tenant's whatever the section says, and
 // a catalog-managed row follows its governance section, which binds an admin too.
 func TestGoverns(t *testing.T) {
 	const (
 		allowed     = ""
 		systemOwned = "system"
+		orgOwned    = "organization"
 		sectionOff  = "section"
 	)
 	locked := map[string]any{SectionGovernancePolicy: &Governance{}}
@@ -42,6 +43,15 @@ func TestGoverns(t *testing.T) {
 		{"system group: delete", OpDelete, "group", "system", false, nil, allowed},
 		{"system role: delete", OpDelete, "role", "system", false, nil, allowed},
 
+		{"organization policy: edit", OpEdit, "policy", "organization", false, open, orgOwned},
+		{"organization budget: delete", OpDelete, "budget", "organization", false, nil, orgOwned},
+		// Teams, groups and custom roles are the organization's because nobody owns them personally.
+		{"organization team: edit", OpEdit, "team", "organization", false, nil, allowed},
+		{"organization role: delete", OpDelete, "role", "organization", false, nil, allowed},
+		{"organization host key: edit", OpEdit, "host-key", "organization", false, nil, orgOwned},
+		{"organization policy: admin edits under a locked section", OpEdit, "policy", "organization", true, locked, allowed},
+		{"organization pool: admin deletes", OpDelete, "pool", "organization", true, nil, allowed},
+
 		{"user policy: delete", OpDelete, "policy", "user", false, locked, allowed},
 		{"user key: edit", OpEdit, "key", "user", false, nil, allowed},
 		{"team project: delete", OpDelete, "project", "team", false, locked, allowed},
@@ -63,6 +73,9 @@ func TestGoverns(t *testing.T) {
 			case systemOwned:
 				want = &MutationError{Op: tc.op, Kind: tc.kind, OwnerKind: tc.ownerKind,
 					Reason: tc.kind + " is system-owned: only an admin may " + string(tc.op) + " it"}
+			case orgOwned:
+				want = &MutationError{Op: tc.op, Kind: tc.kind, OwnerKind: tc.ownerKind,
+					Reason: tc.kind + " is owned by the organization: only an admin may " + string(tc.op) + " it"}
 			case sectionOff:
 				want = &MutationError{Op: tc.op, Kind: tc.kind, OwnerKind: tc.ownerKind,
 					Reason: string(tc.op) + " of " + tc.kind + " is disabled on this relay; enable it via the governance:" + tc.kind + " settings section"}

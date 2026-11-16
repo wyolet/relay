@@ -41,9 +41,9 @@ func loadCandidates(ctx context.Context, tables map[string]table, ov Overlays) (
 
 // markNamedModels records on each model candidate the operator's policies
 // naming it exactly in spec.models ("provider/model", with or without a
-// host). A policy counts when a user, team or project owns it, or when it was
-// edited. A clean catalog policy doesn't: the release that dropped the model
-// updates it.
+// host). A policy counts when a user, team, project or the organization owns
+// it, or when it was edited. A clean catalog policy doesn't: the release that
+// dropped the model updates it.
 func markNamedModels(ctx context.Context, s Stores, cands []*candidate) error {
 	var models []*candidate
 	for _, c := range cands {
@@ -69,7 +69,7 @@ func markNamedModels(ctx context.Context, s Stores, cands []*candidate) error {
 	type modelKey struct{ provider, model string }
 	named := map[modelKey][]Ref{}
 	for _, p := range policies {
-		if !p.Meta.Owner.Tenant() && !p.Meta.Dirty {
+		if !p.Meta.Owner.Tenant() && p.Meta.Owner.Kind != meta.OwnerOrganization && !p.Meta.Dirty {
 			continue
 		}
 		for _, raw := range p.Spec.Models {

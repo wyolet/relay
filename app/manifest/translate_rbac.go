@@ -13,7 +13,7 @@ import (
 // Role / RoleBinding / PolicyBinding
 // ---------------------------------------------------------------------------
 
-// ToRole translates through the auth module, which makes every role system-owned: a role is a rule set anyone may be bound to, so ownership is relay's, not the manifest author's.
+// ToRole translates through the auth module, which makes every role the organization's: a role is a rule set anyone may be bound to, so ownership is relay's, not the manifest author's.
 func ToRole(d RoleDTO, idx Resolver) (*role.Role, error) {
 	row, err := AuthManifests.ToRole(roleDoc(d), authRefs{idx})
 	if err != nil {
@@ -51,6 +51,7 @@ func FromRoleBinding(b *rolebinding.RoleBinding, rev ReverseResolver) RoleBindin
 // ToPolicyBinding resolves the owner, the policy and the accounts by name.
 func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBinding, error) {
 	m := d.Metadata.ToMeta()
+	m.Owner = m.Owner.AsGlobalScope()
 	resolveScopeOwner(&m.Owner, idx)
 	policyID, ok := idx.PolicyID(d.Spec.Policy)
 	if !ok {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/auth/rbac"
 )
 
 // productRows are rows as the product writes them today: the same documents the golden tests pin, inserted by hand.
@@ -15,7 +16,7 @@ const productRows = `
 INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled)
 VALUES ('u-1', 'ada', 'ada@example.com', NULL, 'https://idp.example.com|sub-1', '{admin}', false);
 INSERT INTO teams (id, name, display_name, metadata, spec)
-VALUES ('t-1', 'core', 'Core', '{"description":"the core team","owner":{"kind":"system"},"labels":{"tier":"gold"},"annotations":{"note":"seeded"},"dirty":true}',
+VALUES ('t-1', 'core', 'Core', '{"description":"the core team","owner":{"kind":"organization"},"labels":{"tier":"gold"},"annotations":{"note":"seeded"},"dirty":true}',
         '{"enabled":false,"budget":{"amount":"10.00","period":"month"}}');
 INSERT INTO projects (id, name, display_name, team_id, metadata, spec)
 VALUES ('p-1', 'api', 'API', 't-1', '{"owner":{"kind":"team","id":"t-1"}}',
@@ -26,11 +27,11 @@ INSERT INTO groups (id, name, display_name, metadata, spec)
 VALUES ('g-1', 'ops', 'Ops', '{"owner":{"kind":"user","id":"u-1"}}', '{"enabled":false}');
 INSERT INTO group_members (group_id, user_id, position) VALUES ('g-1', 'u-1', 0);
 INSERT INTO roles (id, name, display_name, metadata, spec)
-VALUES ('r-1', 'reader', 'Reader', '{"owner":{"kind":"system"}}', '{"rules":[{"kinds":["documents"],"verbs":["get","list"]}]}');
+VALUES ('r-1', 'reader', 'Reader', '{"owner":{"kind":"organization"}}', '{"rules":[{"kinds":["documents"],"verbs":["get","list"]}]}');
 INSERT INTO role_bindings (id, name, display_name, role_id, scope_kind, scope_id, metadata, spec)
 VALUES ('b-1', 'readers', 'Readers', 'r-1', 'project', 'p-1', '{"owner":{"kind":"project","id":"p-1"}}',
         '{"roleId":"","scope":{},"subjects":null,"enabled":false}'),
-       ('b-2', 'everyone', 'Everyone', 'r-1', 'system', NULL, '{"owner":{"kind":"system"}}', '{"roleId":"","scope":{},"subjects":null}');
+       ('b-2', 'everyone', 'Everyone', 'r-1', 'organization', NULL, '{"owner":{"kind":"organization"}}', '{"roleId":"","scope":{},"subjects":null}');
 INSERT INTO role_binding_subjects (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
 VALUES ('b-1', 'user', 'u-1', NULL, 'u-1', NULL, 0),
        ('b-1', 'serviceaccount', 'sa-1', NULL, NULL, 'sa-1', 1),
@@ -109,7 +110,8 @@ func TestProductRowsRoundTrip(t *testing.T) {
 	})
 	rewrite(t, s.Roles, nil)
 	rewrite(t, s.RoleBindings, func(x *directory.RoleBinding) {
-		if x.Meta.ID == "b-2" && (x.Spec.Scope != directory.Global || x.Spec.Subjects[0] != directory.AllAuthenticated) {
+		// The product names its global scope organization.
+		if x.Meta.ID == "b-2" && (x.Spec.Scope != (rbac.Scope{Kind: "organization"}) || x.Spec.Subjects[0] != directory.AllAuthenticated) {
 			t.Fatalf("global binding read as %+v", x)
 		}
 		if x.Meta.ID == "b-1" && len(x.Spec.Subjects) != 3 {

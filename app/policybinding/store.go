@@ -93,10 +93,10 @@ func (s *Store) Holding(ctx context.Context, accountID string) (*PolicyBinding, 
 
 // Upsert writes the binding and its accounts in one transaction.
 func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
-	switch b.Meta.Owner.Kind {
-	case meta.OwnerSystem, meta.OwnerTeam, meta.OwnerProject, meta.OwnerUser:
+	switch b.Meta.Owner.AsGlobalScope().Kind {
+	case meta.OwnerOrganization, meta.OwnerTeam, meta.OwnerProject, meta.OwnerUser:
 	default:
-		return fmt.Errorf("policybinding.Upsert: owner.kind must be system, team, project or user, got %q", b.Meta.Owner.Kind)
+		return fmt.Errorf("policybinding.Upsert: owner.kind must be organization, team, project or user, got %q", b.Meta.Owner.Kind)
 	}
 	params, err := toUpsertParams(b)
 	if err != nil {
@@ -164,7 +164,7 @@ func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
 	case r.UserID.Valid:
 		md.Owner = meta.Owner{Kind: meta.OwnerUser, ID: r.UserID.String}
 	default:
-		md.Owner = meta.Owner{Kind: meta.OwnerSystem}
+		md.Owner = meta.Global
 	}
 	return &PolicyBinding{Meta: md, Spec: sp}, nil
 }

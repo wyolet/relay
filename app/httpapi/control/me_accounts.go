@@ -47,8 +47,9 @@ type AccountScope struct {
 
 // BoundPolicy names the policy bound to an account.
 type BoundPolicy struct {
-	ID   string `json:"id"   doc:"Policy id."`
-	Name string `json:"name" doc:"Policy slug."`
+	ID     string `json:"id,omitempty"     doc:"Policy id; omitted when hidden."`
+	Name   string `json:"name,omitempty"   doc:"Policy slug; omitted when hidden."`
+	Hidden bool   `json:"hidden,omitempty" doc:"An organization policy the caller may not see: only that one is bound is shown."`
 }
 
 // AccountKey names a relay key without its secret.
@@ -84,7 +85,10 @@ func registerMyAccounts(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, err
 		}
-		return &myAccountsOut{Body: myAccounts(v, a.UserID)}, nil
+		hidden := func(m meta.Metadata) bool {
+			return m.Owner.Kind == meta.OwnerOrganization && !visibleTo(ctx, d.Authz, "policy", m.ID, m.Owner)
+		}
+		return &myAccountsOut{Body: myAccounts(v, a.UserID, hidden)}, nil
 	})
 }
 
@@ -98,8 +102,8 @@ func planView(d Deps) (*engine.View, error) {
 	return nil, huma.Error503ServiceUnavailable("plans are not loaded yet")
 }
 
-// myAccounts lists userID's accounts in v: personal first, then member accounts and provider accounts, each by name.
-func myAccounts(v *engine.View, userID string) []MyAccount {
+// myAccounts lists userID's accounts in v: personal first, then member accounts and provider accounts, each by name. A bound policy hidden reports is shown as bound, without its id and name.
+func myAccounts(v *engine.View, userID string, hidden func(meta.Metadata) bool) []MyAccount {
 	mine := meta.Owner{Kind: meta.OwnerUser, ID: userID}
 	keys := map[string][]AccountKey{}
 	for k := range engine.All[key.Key](v) {
@@ -137,6 +141,9 @@ func myAccounts(v *engine.View, userID string) []MyAccount {
 		}
 		if p := plan.AccountPolicy(v, a.Meta.ID); p != nil {
 			row.Policy = &BoundPolicy{ID: p.Meta.ID, Name: p.Meta.Name}
+			if hidden(p.Meta) {
+				row.Policy = &BoundPolicy{Hidden: true}
+			}
 		}
 		out = append(out, row)
 	}

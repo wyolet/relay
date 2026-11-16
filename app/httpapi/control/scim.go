@@ -140,7 +140,7 @@ func collectSCIMWrite(ctx context.Context, w scim.Write) {
 	case "disable", "enable":
 		action, fields = "update", []string{"disabled"}
 	}
-	owner := meta.Owner{Kind: meta.OwnerSystem}
+	owner := meta.Global
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.client = w.Client
