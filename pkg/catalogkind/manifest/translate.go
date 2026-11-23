@@ -33,6 +33,7 @@ func ToHost(d HostDTO, _ Resolver) (*host.Host, error) {
 		Spec: host.Spec{
 			BaseURL:             d.Spec.BaseURL,
 			Path:                d.Spec.Path,
+			Paths:               d.Spec.Paths,
 			Backend:             d.Spec.Backend,
 			NoAuth:              d.Spec.NoAuth,
 			PricingStrategies:   d.Spec.PricingStrategies,

@@ -25,8 +25,10 @@ type Host struct {
 	Name    string `json:"name"`
 	BaseURL string `json:"baseURL,omitempty"`
 	// Path overrides the adapter's default request path, with relay's host semantics: nil keeps the default, a set value is used verbatim, and "" means BaseURL is the complete endpoint.
-	Path   *string   `json:"path,omitempty"`
-	Models []Binding `json:"models"`
+	Path *string `json:"path,omitempty"`
+	// Paths overrides Path per adapter name, for a host that serves several wire shapes at different locations.
+	Paths  map[string]string `json:"paths,omitempty"`
+	Models []Binding         `json:"models"`
 
 	DisplayName   string `json:"displayName,omitempty"`
 	Description   string `json:"description,omitempty"`
@@ -35,6 +37,18 @@ type Host struct {
 	ConsoleURL    string `json:"consoleURL,omitempty"`
 	StatusPageURL string `json:"statusPageURL,omitempty"`
 	Icon          string `json:"icon,omitempty"`
+}
+
+// PathFor returns the request path override for adapter: its Paths entry, else Path. nil keeps the adapter's default path.
+func (h Host) PathFor(adapter string) *string {
+	if p, ok := h.Paths[adapter]; ok {
+		return &p
+	}
+	if h.Path == nil {
+		return nil
+	}
+	p := *h.Path
+	return &p
 }
 
 // ModelInfo is the rich per-model metadata, keyed by MetadataName (the snapshot

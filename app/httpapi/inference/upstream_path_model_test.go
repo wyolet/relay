@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 )
 
 // pathModelRegistry pairs an OpenAI CC inbound with an upstream shape that puts the model in the URL path, as cmd/relay registers it.
@@ -57,5 +58,41 @@ func TestDispatch_WildcardAliasModelStaysOnePathSegment(t *testing.T) {
 	}
 	if path, _ := last(); path != "/v1beta/models/gem-v-2%2F..%2F..%2F..%2Fv1beta%2Ffiles%3FpageSize=3&z=:generateContent" {
 		t.Errorf("upstream path = %q, want the model as one escaped segment", path)
+	}
+}
+
+func TestDispatch_HostPathPerShape(t *testing.T) {
+	const geminiReply = `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1}}`
+	const openaiReply = `{"id":"x","object":"chat.completion","model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
+	paths := map[adapters.Name]string{adapters.OpenAI: "/v1beta/openai/chat/completions"}
+	for _, tc := range []struct {
+		name    string
+		binding adapters.Name
+		reply   string
+		want    string
+	}{
+		{"listed shape", adapters.OpenAI, openaiReply, "/v1beta/openai/chat/completions"},
+		{"unlisted shape", adapters.Gemini, geminiReply, "/v1beta/models/test-model:generateContent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upURL, last := answeringUpstream(t, "application/json", tc.reply)
+			cat, pr := buildDispatchCatalog(t, "pathshape", tc.binding)
+			setHostSpec(t, cat, host.Spec{BaseURL: upURL, Paths: paths})
+			d := buildRunnableDeps(t, cat)
+			useSpecs(&d, pathModelRegistry())
+
+			w := dispatch(d, pr, DispatchInput{
+				Inbound:   adapters.OpenAI,
+				Body:      []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`),
+				ModelName: "test-model",
+			})
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", w.Code, w.Body)
+			}
+			if path, _ := last(); path != tc.want {
+				t.Errorf("upstream path = %q, want %q", path, tc.want)
+			}
+		})
 	}
 }

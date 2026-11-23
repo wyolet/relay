@@ -23,7 +23,7 @@ type Entry struct {
 	Info catalog.ModelInfo
 }
 
-// Endpoint is the adapter name, base URL and request path to call: the route's overrides, else the binding's adapter and the host's base URL and path. path "" means the adapter's default path. It is always "" when the route sets url, since the host's path describes the catalog host's layout, not that server's. A host whose catalog path is an explicit "" (its base URL is the complete endpoint) also yields ""; Host.Path tells the two apart.
+// Endpoint is the adapter name, base URL and request path to call: the route's overrides, else the binding's adapter and the host's base URL and path. path "" means the adapter's default path. It is always "" when the route sets url, since the host's path describes the catalog host's layout, not that server's. A host whose catalog path is an explicit "" (its base URL is the complete endpoint) also yields ""; Host.PathFor tells the two apart.
 func (e Entry) Endpoint() (adapter, baseURL, path string) {
 	adapter, baseURL = e.Route.Adapter, e.Route.URL
 	if adapter == "" {
@@ -31,8 +31,8 @@ func (e Entry) Endpoint() (adapter, baseURL, path string) {
 	}
 	if baseURL == "" {
 		baseURL = e.Host.BaseURL
-		if e.Host.Path != nil {
-			path = *e.Host.Path
+		if p := e.Host.PathFor(adapter); p != nil {
+			path = *p
 		}
 	}
 	return adapter, baseURL, path

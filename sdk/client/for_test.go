@@ -137,20 +137,23 @@ func TestForFrom_HostPath(t *testing.T) {
 		adapter  string
 		baseURL  string
 		hostPath *string
+		paths    map[string]string
 		opts     []TargetOption
 		want     string
 	}{
-		{"responses default", "openai_responses", url, nil, nil, "/v1/responses"},
-		{"host path verbatim", "openai_responses", url, ptr("/backend/responses"), nil, "/backend/responses"},
-		{"empty host path appends nothing", "openai", url + "/deploy/chat", ptr(""), nil, "/deploy/chat"},
-		{"host path beats the adapter's path function", "gemini", url, ptr("/custom"), nil, "/custom"},
-		{"base URL override drops the host path", "openai", "http://unused.example", ptr("/custom"), []TargetOption{WithBaseURL(url)}, "/v1/chat/completions"},
-		{"WithPath beats the host path", "openai", url, ptr("/custom"), []TargetOption{WithClient(WithPath("/explicit"))}, "/explicit"},
-		{"path function uses the upstream name", "gemini", url, nil, nil, "/v1beta/models/upstream-name:generateContent"},
+		{"responses default", "openai_responses", url, nil, nil, nil, "/v1/responses"},
+		{"host path verbatim", "openai_responses", url, ptr("/backend/responses"), nil, nil, "/backend/responses"},
+		{"empty host path appends nothing", "openai", url + "/deploy/chat", ptr(""), nil, nil, "/deploy/chat"},
+		{"host path beats the adapter's path function", "gemini", url, ptr("/custom"), nil, nil, "/custom"},
+		{"base URL override drops the host path", "openai", "http://unused.example", ptr("/custom"), nil, []TargetOption{WithBaseURL(url)}, "/v1/chat/completions"},
+		{"WithPath beats the host path", "openai", url, ptr("/custom"), nil, []TargetOption{WithClient(WithPath("/explicit"))}, "/explicit"},
+		{"path for the binding's adapter", "openai", url, nil, map[string]string{"openai": "/v1beta/openai/chat/completions"}, nil, "/v1beta/openai/chat/completions"},
+		{"path for another adapter is ignored", "gemini", url, nil, map[string]string{"openai": "/v1beta/openai/chat/completions"}, nil, "/v1beta/models/upstream-name:generateContent"},
+		{"path function uses the upstream name", "gemini", url, nil, nil, nil, "/v1beta/models/upstream-name:generateContent"},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cat, err := catalog.Index(&catalog.Catalog{Hosts: []catalog.Host{{Name: "h", BaseURL: tc.baseURL, Path: tc.hostPath, Models: []catalog.Binding{
+			cat, err := catalog.Index(&catalog.Catalog{Hosts: []catalog.Host{{Name: "h", BaseURL: tc.baseURL, Path: tc.hostPath, Paths: tc.paths, Models: []catalog.Binding{
 				{MetadataName: "m", Adapter: tc.adapter, Name: "upstream-name"},
 			}}}})
 			if err != nil {

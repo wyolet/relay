@@ -35,6 +35,7 @@ func TestProxyUpstreamPath(t *testing.T) {
 		{"shape's native path", spec, &apphost.Host{}, "/v1/responses"},
 		{"no host", spec, nil, "/v1/responses"},
 		{"host path", spec, &apphost.Host{Spec: apphost.Spec{Path: &own}}, own},
+		{"host path for the shape", (&adapter.Spec{Name: "openai_responses", DefaultPath: "/v1/responses"}).Build(), &apphost.Host{Spec: apphost.Spec{Path: &empty, Paths: map[adapters.Name]string{"openai_responses": own}}}, own},
 		{"empty host path", spec, &apphost.Host{Spec: apphost.Spec{Path: &empty}}, ""},
 		{"unknown shape", nil, &apphost.Host{}, "/openai/v1/responses"},
 		{"shape without a native path", &adapter.Spec{}, nil, "/openai/v1/responses"},
