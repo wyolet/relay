@@ -208,3 +208,17 @@ func TestReleaseRejectsUnsafeTag(t *testing.T) {
 		t.Fatalf("hits = %d, want only the index", rs.total())
 	}
 }
+
+func TestIconURL(t *testing.T) {
+	for _, c := range []struct{ version, icon, want string }{
+		{"v0.2.11", "/provider/claude.png", DefaultDownloadURL + "/v0.2.11/icons/claude.png"},
+		{"v0.2.11", "", ""},
+		{"v0.2.11", "/", ""},
+		{"relay-catalog@v1alpha3", "/provider/claude.png", ""},
+		{"", "/provider/claude.png", ""},
+	} {
+		if got := IconURL(c.version, c.icon); got != c.want {
+			t.Errorf("IconURL(%q, %q) = %q, want %q", c.version, c.icon, got, c.want)
+		}
+	}
+}

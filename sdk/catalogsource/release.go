@@ -11,7 +11,9 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -241,6 +243,18 @@ func (r *releaseSource) getIfNoneMatch(ctx context.Context, url string, limit in
 		return nil, "", false, fmt.Errorf("%s: larger than %d bytes", url, limit)
 	}
 	return body, resp.Header.Get("ETag"), false, nil
+}
+
+// IconURL is where the catalog server serves the file an icon path names
+// ("/provider/<file>", as on a Host, a ProviderInfo or a ModelInfo) for the
+// catalog release version. It is "" when version is not a release tag or
+// icon names no file.
+func IconURL(version, icon string) string {
+	tag, file := releaseTag(version), path.Base(icon)
+	if tag == "" || icon == "" || file == "/" || file == "." {
+		return ""
+	}
+	return DefaultDownloadURL + "/" + tag + "/icons/" + url.PathEscape(file)
 }
 
 // checkTag keeps a tag, which may come from the fetched index, a single path segment in URLs and the cache.
