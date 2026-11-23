@@ -15,10 +15,10 @@ func TestCatalogGraph(t *testing.T) {
 	r, api := testAPI(t, scopeActors)
 	registerCatalogGraph(api, Deps{Catalog: resolveCatalog().Load(t)}, nil)
 	openai := []graphBinding{{HostID: "H1", Adapter: "openai"}}
-	gpt35 := graphModel{ID: "M1", Name: "gpt-3-5", ProviderID: "P1", Pointer: "gpt-3-5-snap"}
-	gpt4o := graphModel{ID: "M2", Name: "gpt-4o", DisplayName: "GPT-4o", ProviderID: "P1", Featured: true, Capabilities: model.Capabilities{Tools: true},
+	gpt35 := graphModel{ID: "M1", Name: "gpt-3-5", ProviderID: "P1", IconPath: "icons/openai.svg", Pointer: "gpt-3-5-snap"}
+	gpt4o := graphModel{ID: "M2", Name: "gpt-4o", DisplayName: "GPT-4o", ProviderID: "P1", IconPath: "icons/gpt.svg", Featured: true, Capabilities: model.Capabilities{Tools: true},
 		ContextWindowTotal: 128000, ContextWindowInput: 100000, Pointer: "gpt-4o-snap", Bindings: append(openai[:1:1], graphBinding{HostID: "H2", Adapter: "openai"})}
-	legacy := graphModel{ID: "M3", Name: "legacy", ProviderID: "P1", Deprecated: "deprecated", Pointer: "legacy-snap", Bindings: openai}
+	legacy := graphModel{ID: "M3", Name: "legacy", ProviderID: "P1", IconPath: "icons/openai.svg", Deprecated: "deprecated", Pointer: "legacy-snap", Bindings: openai}
 
 	for _, tc := range []struct {
 		name, query string

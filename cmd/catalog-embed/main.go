@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/catalogkind/embed"
+	"github.com/wyolet/relay/pkg/catalogkind/families"
 	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 )
 
@@ -59,6 +60,16 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load %s: %v\n", dir, err)
 		os.Exit(2)
+	}
+	fams, err := families.LoadTree(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "families: %v\n", err)
+		os.Exit(2)
+	}
+	for _, d := range docs {
+		if d.Model != nil {
+			fams.FillModelIcon(d.Model)
+		}
 	}
 
 	cat, err := embed.Compose(docs, at)
