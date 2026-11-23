@@ -33,6 +33,12 @@
         "path": {
           "type": "string"
         },
+        "paths": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
         "pricingStrategies": {
           "items": {
             "type": "string"

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/manifest"
@@ -41,6 +42,7 @@ func Flatten(snap Source, at time.Time, keep func(*model.Model, *binding.Binding
 			Name:          h.Meta.Name,
 			BaseURL:       h.Spec.BaseURL,
 			Path:          h.Spec.Path,
+			Paths:         adapterPaths(h.Spec.Paths),
 			DisplayName:   h.Meta.DisplayName,
 			Description:   h.Meta.Description,
 			HomepageURL:   h.Spec.HomepageURL,
@@ -218,4 +220,15 @@ func ratesFrom(p *pricing.Pricing) []sdkcatalog.Rate {
 		}
 	}
 	return rates
+}
+
+func adapterPaths(in map[adapters.Name]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for shape, p := range in {
+		out[string(shape)] = p
+	}
+	return out
 }

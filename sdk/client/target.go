@@ -29,11 +29,7 @@ func targetFromBinding(b catalog.Binding, h catalog.Host) (Target, error) {
 	if !ok {
 		return Target{}, fmt.Errorf("relay client: unknown adapter %q", b.Adapter)
 	}
-	var hostPath *string
-	if h.Path != nil {
-		p := *h.Path
-		hostPath = &p
-	}
+	hostPath := h.PathFor(b.Adapter)
 	return Target{
 		baseURL:  strings.TrimRight(h.BaseURL, "/"),
 		hostPath: hostPath,

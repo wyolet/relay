@@ -47,6 +47,7 @@ func FromHost(h *host.Host, _ ReverseResolver) HostDTO {
 		Spec: HostSpec{
 			BaseURL:             h.Spec.BaseURL,
 			Path:                h.Spec.Path,
+			Paths:               h.Spec.Paths,
 			Backend:             h.Spec.Backend,
 			NoAuth:              h.Spec.NoAuth,
 			PricingStrategies:   h.Spec.PricingStrategies,

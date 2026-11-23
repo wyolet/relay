@@ -82,9 +82,11 @@ type HostSpec struct {
 	BaseURL string `json:"baseURL" yaml:"baseURL"`
 	// Path overrides the adapter's shape-default upstream path. Verbatim when
 	// set; explicit "" appends nothing; absent keeps the shape default.
-	Path    *string           `json:"path,omitempty"        yaml:"path,omitempty"`
-	Backend map[string]string `json:"backend,omitempty"     yaml:"backend,omitempty"`
-	NoAuth  bool              `json:"noAuth,omitempty"      yaml:"noAuth,omitempty"`
+	Path *string `json:"path,omitempty"        yaml:"path,omitempty"`
+	// Paths overrides Path per adapter name.
+	Paths   map[adapters.Name]string `json:"paths,omitempty"   yaml:"paths,omitempty"`
+	Backend map[string]string        `json:"backend,omitempty"     yaml:"backend,omitempty"`
+	NoAuth  bool                     `json:"noAuth,omitempty"      yaml:"noAuth,omitempty"`
 	// PricingStrategies is the host's menu of offered billing modes
 	// (api | sub). Empty defaults to ["api"].
 	PricingStrategies []string `json:"pricingStrategies,omitempty" yaml:"pricingStrategies,omitempty"`

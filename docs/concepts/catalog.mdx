@@ -81,7 +81,7 @@ The base URL is the server root; the binding's shape adds the path (`/v1/chat/co
 
 A `noAuth` host needs no host key, and Relay sends no auth header to it. Because no host key gates it, a caller reaches it only through a pool at that host linked by a caller policy; the pool needs no keys. See [Keyless hosts](/concepts/key-pooling#keyless-hosts).
 
-For any other OpenAI-compatible server, create your own `Host` with its `baseURL` (and `noAuth: true` if it takes no key), the `Model` rows, and a `HostBinding` per model with `adapter: openai`, through the control API or [`relay apply`](/concepts/gitops). If the server expects a request key under another name than the shape uses, declare it in `spec.requestParamRenames`; see [Renamed parameters](/reference/inference-api#renamed-parameters).
+For any other OpenAI-compatible server, create your own `Host` with its `baseURL` (and `noAuth: true` if it takes no key), the `Model` rows, and a `HostBinding` per model with `adapter: openai`, through the control API or [`relay apply`](/concepts/gitops). If the server serves several wire shapes at different locations under one `baseURL`, give each its path in `spec.paths`, keyed by adapter name; a shape not listed uses `spec.path`, else the shape's default. If the server expects a request key under another name than the shape uses, declare it in `spec.requestParamRenames`; see [Renamed parameters](/reference/inference-api#renamed-parameters).
 
 ## System rate limits
 

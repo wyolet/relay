@@ -34,6 +34,7 @@ var catalogDocs = map[string]map[string]string{
 		"name":          "Host slug.",
 		"baseURL":       "Upstream root URL; left out for callers, who call through relay.",
 		"path":          "Upstream path override; left out for callers.",
+		"paths":         "Upstream path override per adapter; left out for callers.",
 		"models":        "The host's bindings the caller can route to.",
 		"displayName":   "Display name.",
 		"description":   "Description.",

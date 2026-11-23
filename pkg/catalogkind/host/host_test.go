@@ -131,3 +131,30 @@ func TestSpecDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestPathFor(t *testing.T) {
+	own, compat := "/own", "/v1beta/openai/chat/completions"
+	both := Spec{Path: &own, Paths: map[adapters.Name]string{adapters.OpenAI: compat, adapters.Anthropic: ""}}
+	for _, tc := range []struct {
+		name  string
+		spec  Spec
+		shape adapters.Name
+		want  *string
+	}{
+		{"listed shape", both, adapters.OpenAI, &compat},
+		{"listed as the whole endpoint", both, adapters.Anthropic, new(string)},
+		{"unlisted shape uses path", both, adapters.Gemini, &own},
+		{"no override", Spec{}, adapters.Gemini, nil},
+	} {
+		if diff := cmp.Diff(tc.want, tc.spec.PathFor(tc.shape)); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", tc.name, diff)
+		}
+	}
+}
+
+func TestValidate_PathsNeedAnAdapterName(t *testing.T) {
+	h := &Host{Meta: meta.Metadata{Name: "h"}, Spec: Spec{Paths: map[adapters.Name]string{"": "/x"}}}
+	if err := h.Validate(); err == nil {
+		t.Fatal("a paths entry without an adapter name was accepted")
+	}
+}

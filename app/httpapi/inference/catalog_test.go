@@ -70,7 +70,7 @@ func catalogRouteFixture(t *testing.T, grants ...string) (*catalog.Catalog, *Pri
 		Hosts: []*host.Host{
 			{
 				Meta: meta.Metadata{ID: alphaID, Name: "alpha-host", DisplayName: "Alpha", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-				Spec: host.Spec{BaseURL: "http://alpha.internal:8000", Path: &path, ConsoleURL: "https://console.alpha.example", DocsURL: "https://docs.alpha.example"},
+				Spec: host.Spec{BaseURL: "http://alpha.internal:8000", Path: &path, Paths: map[adapters.Name]string{adapters.OpenAI: "/compat"}, ConsoleURL: "https://console.alpha.example", DocsURL: "https://docs.alpha.example"},
 			},
 			{
 				Meta: meta.Metadata{ID: betaID, Name: "beta-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
@@ -244,7 +244,7 @@ func TestCatalog_CarriesProductLineAndStripsUpstreamFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, h := range raw.Hosts {
-		for _, field := range []string{"baseURL", "path", "consoleURL"} {
+		for _, field := range []string{"baseURL", "path", "paths", "consoleURL"} {
 			if _, ok := h[field]; ok {
 				t.Errorf("host %s carries %q", h["name"], field)
 			}

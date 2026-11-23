@@ -43,7 +43,7 @@ import (
 // that encode them in the URL path — Gemini's generateContent vs
 // streamGenerateContent — need them to build the upstream URL.
 type Adapter interface {
-	// hostPath is the host's upstream-path override (Host.Spec.Path): used
+	// hostPath is the host's upstream-path override (Host.Spec.PathFor): used
 	// verbatim when non-nil (explicit "" appends nothing to baseURL); nil
 	// keeps the adapter's shape default.
 	Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
@@ -83,7 +83,7 @@ type Request struct {
 
 	// HopBody, when set, returns the body to send to hop: Body itself unless the hop's host rewrites a body in BodyShape, plus the top-level keys the rewrite dropped. It must not modify Body. Run calls it on the first attempt at each hop, so a failover sends each host its own form.
 	HopBody func(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []string)
-	// BodyShape is the wire shape Body is in, handed to HopBody.
+	// BodyShape is the wire shape Body is in, handed to HopBody. It also picks each hop's upstream path (Host.Spec.PathFor).
 	BodyShape adapters.Name
 
 	ModelName string
