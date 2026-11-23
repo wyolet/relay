@@ -23,6 +23,8 @@ Providers own their models; hosts own their bindings, pricing and tier policies.
 
 Because the data lives in its own repo, provider, model and pricing updates ship on their own schedule: you can move to a newer catalog without upgrading Relay.
 
+Logos travel with the data. A host, provider or model names its icon as a path, `/provider/<file>`, and the file is in the release's `data/icons/`. Seeding a release copies its icons into Postgres, and the control listener serves them at that path, so the admin UI loads every logo from its own Relay.
+
 ## Naming a model in a request
 
 The `model` field of an inference request resolves against the catalog. These forms are accepted:

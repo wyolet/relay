@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/apply"
+	"github.com/wyolet/relay/app/catalogicon"
 	"github.com/wyolet/relay/app/manifest"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/pkg/catalogkind/families"
@@ -150,6 +151,14 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.DetachDropped {
 		if err := detachDropped(ctx, stores, plan, time.Now().UTC(), res); err != nil {
 			return nil, fmt.Errorf("seed: detach dropped rows: %w", err)
+		}
+	}
+	// Only a catalog tree carries icons; a tree without the directory keeps the stored set.
+	if icons, found, err := catalogicon.ReadDir(opts.YAMLDir); err != nil {
+		return nil, fmt.Errorf("seed: read icons: %w", err)
+	} else if found {
+		if err := catalogicon.NewStore(opts.Pool).Replace(ctx, icons); err != nil {
+			return nil, fmt.Errorf("seed: store icons: %w", err)
 		}
 	}
 	return res, nil

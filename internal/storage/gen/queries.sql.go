@@ -201,6 +201,15 @@ func (q *Queries) DeleteBudget(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteCatalogIconsExcept = `-- name: DeleteCatalogIconsExcept :exec
+DELETE FROM catalog_icons WHERE NOT (name = ANY($1::text[]))
+`
+
+func (q *Queries) DeleteCatalogIconsExcept(ctx context.Context, names []string) error {
+	_, err := q.db.Exec(ctx, deleteCatalogIconsExcept, names)
+	return err
+}
+
 const deleteHost = `-- name: DeleteHost :exec
 DELETE FROM hosts WHERE id = $1
 `
@@ -624,6 +633,22 @@ func (q *Queries) GetBudget(ctx context.Context, id string) (Budget, error) {
 		&i.UpdatedAt,
 		&i.ResourceVersion,
 	)
+	return i, err
+}
+
+const getCatalogIcon = `-- name: GetCatalogIcon :one
+SELECT body, sha256 FROM catalog_icons WHERE name = $1
+`
+
+type GetCatalogIconRow struct {
+	Body   []byte `db:"body" json:"body"`
+	Sha256 string `db:"sha256" json:"sha256"`
+}
+
+func (q *Queries) GetCatalogIcon(ctx context.Context, name string) (GetCatalogIconRow, error) {
+	row := q.db.QueryRow(ctx, getCatalogIcon, name)
+	var i GetCatalogIconRow
+	err := row.Scan(&i.Body, &i.Sha256)
 	return i, err
 }
 
@@ -3566,6 +3591,23 @@ func (q *Queries) UpsertBudget(ctx context.Context, arg UpsertBudgetParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const upsertCatalogIcon = `-- name: UpsertCatalogIcon :exec
+INSERT INTO catalog_icons (name, body, sha256) VALUES ($1, $2, $3)
+ON CONFLICT (name) DO UPDATE SET body = EXCLUDED.body, sha256 = EXCLUDED.sha256, updated_at = now()
+WHERE catalog_icons.sha256 IS DISTINCT FROM EXCLUDED.sha256
+`
+
+type UpsertCatalogIconParams struct {
+	Name   string `db:"name" json:"name"`
+	Body   []byte `db:"body" json:"body"`
+	Sha256 string `db:"sha256" json:"sha256"`
+}
+
+func (q *Queries) UpsertCatalogIcon(ctx context.Context, arg UpsertCatalogIconParams) error {
+	_, err := q.db.Exec(ctx, upsertCatalogIcon, arg.Name, arg.Body, arg.Sha256)
+	return err
 }
 
 const upsertHost = `-- name: UpsertHost :execrows

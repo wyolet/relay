@@ -89,6 +89,13 @@ type Budget struct {
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
+type CatalogIcon struct {
+	Name      string             `db:"name" json:"name"`
+	Body      []byte             `db:"body" json:"body"`
+	Sha256    string             `db:"sha256" json:"sha256"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Group struct {
 	ID              string             `db:"id" json:"id"`
 	Name            string             `db:"name" json:"name"`
