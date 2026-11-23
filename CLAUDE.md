@@ -127,7 +127,7 @@ pkg/                       — server-internal shared libs (NOT the SDK)
                              parser (LoadDir), To<Kind> translations
     embed/                 — catalog kinds → SDK catalog document
     archive/               — release tarball extraction (seed + server)
-    families/              — families.yaml loader shared by curation + import
+    families/              — families.yaml loader: family allowlist and family icons
                              Nothing under catalogkind/ imports app/ or
                              internal/, tests included (make lint-rules).
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation

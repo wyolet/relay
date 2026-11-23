@@ -11,8 +11,8 @@
 //	catalog-validate --list
 //	catalog-validate --write-featured [--featured <path>] <dir>
 //
-// families.yaml and featured.yaml default to the catalog repo root, one level
-// above dir. A missing featured.yaml skips the featured check.
+// families.yaml defaults to dir's own; featured.yaml to the catalog repo root,
+// one level above dir. A missing featured.yaml skips the featured check.
 //
 // Exit codes:
 //
@@ -49,7 +49,7 @@ func main() {
 	flag.Var(&skip, "skip", "with --curation, suppress a named curation rule (repeatable)")
 	flag.BoolVar(&list, "list", false, "print the curation rule registry and exit")
 	flag.BoolVar(&writeFeatured, "write-featured", false, "regenerate featured.yaml from Model featured labels and exit")
-	flag.StringVar(&familiesPath, "families", "", "families.yaml path (default <dir>/../families.yaml)")
+	flag.StringVar(&familiesPath, "families", "", "families.yaml path (default <dir>/families.yaml)")
 	flag.StringVar(&featuredPath, "featured", "", "featured.yaml path (default <dir>/../featured.yaml)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: catalog-validate [--strict] [--curation [--skip <name>...] [--families <path>] [--featured <path>]] <dir>")
@@ -69,7 +69,7 @@ func main() {
 	}
 	dir := flag.Arg(0)
 	if familiesPath == "" {
-		familiesPath = filepath.Join(dir, "..", "families.yaml")
+		familiesPath = filepath.Join(dir, families.FileName)
 	}
 	if featuredPath == "" {
 		featuredPath = filepath.Join(dir, "..", "featured.yaml")

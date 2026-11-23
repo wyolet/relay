@@ -188,7 +188,7 @@ func (o Owner) Holds(inner Owner, teamOf func(projectID string) (teamID string, 
 	return false
 }
 
-// Icon describes a visual asset for a catalog entity (Provider, Host).
+// Icon describes a visual asset for a catalog entity (Provider, Host, Model).
 // Path is relative — typically "/provider/anthropic.svg" — and the
 // frontend prefixes its own asset-base URL at render time. Relay does
 // not serve the asset; this field is operator metadata.

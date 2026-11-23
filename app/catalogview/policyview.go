@@ -114,7 +114,7 @@ func (s *Service) PolicyModels(ctx context.Context, ref string) (PolicyRef, []Po
 		rows = append(rows, PolicyBindingRow{
 			Provider:         providerRefOf(gb.prov),
 			Host:             hostRefOf(gb.host),
-			Model:            modelRefOf(gb.model),
+			Model:            idx.modelRef(gb.model),
 			Binding:          bindingViewOf(gb.binding),
 			MatchedBy:        gb.matchedBy,
 			Limits:           limits,
@@ -210,7 +210,7 @@ func (s *Service) PolicyModelExclusions(ctx context.Context, ref string) (Policy
 		if granted {
 			continue
 		}
-		out = append(out, PolicyModelExclusion{Model: modelRefOf(m), Reason: reason})
+		out = append(out, PolicyModelExclusion{Model: idx.modelRef(m), Reason: reason})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Model.Name < out[j].Model.Name })
 	return policyRefOf(p, idx), out, nil

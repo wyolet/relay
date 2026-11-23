@@ -65,6 +65,8 @@ type ModelInfo struct {
 	Tags                 []string `json:"tags,omitempty"`
 	Documentation        string   `json:"documentation,omitempty"`
 	ProviderModelPageURL string   `json:"providerModelPageURL,omitempty"`
+	// Icon is the model's logo, or its provider's when the model has none.
+	Icon string `json:"icon,omitempty"`
 }
 
 // ProviderInfo is the rich per-provider (model author) metadata, keyed by Name.

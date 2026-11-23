@@ -263,7 +263,7 @@ func hostRefOf(h *host.Host) HostRef {
 	}
 	return ref
 }
-func modelRefOf(m *model.Model) ModelRef {
+func (idx *index) modelRef(m *model.Model) ModelRef {
 	ref := ModelRef{
 		ID:                 m.Meta.ID,
 		Name:               m.Meta.Name,
@@ -271,6 +271,15 @@ func modelRefOf(m *model.Model) ModelRef {
 		Capabilities:       enabledCaps(m.Spec.Capabilities),
 		ContextWindowTotal: m.Spec.ContextWindowTotal,
 		ContextWindowInput: m.Spec.ContextWindowInput,
+	}
+	icon := m.Spec.Icon
+	if icon == nil || icon.Path == "" {
+		if p, ok := idx.providerByID[m.Meta.Owner.ID]; ok {
+			icon = p.Spec.Icon
+		}
+	}
+	if icon != nil && icon.Path != "" {
+		ref.Icon = &IconView{Path: icon.Path}
 	}
 	if d := m.Spec.Deprecation; d != nil {
 		ref.Deprecation = &DeprecationView{Status: string(d.Status), SunsetDate: d.SunsetDate, Replacement: d.Replacement}

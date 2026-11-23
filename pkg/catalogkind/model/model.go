@@ -36,6 +36,8 @@ type Spec struct {
 	// ProductLine is the vendor's named tier or variant inside Family (opus, flash-lite); never a version or size. Allowed values are checked by the catalog validator, not here.
 	ProductLine string `json:"productLine,omitempty" yaml:"productLine,omitempty" doc:"The vendor's named variant inside the family, such as opus or flash-lite; never a version or size."`
 	Version     string `json:"version,omitempty"     yaml:"version,omitempty"     doc:"Version label inside the product line."`
+	// Icon is the model's own logo. A catalog tree fills it from the model's family when the model sets none; readers fall back to the provider's.
+	Icon *meta.Icon `json:"icon,omitempty" yaml:"icon,omitempty" doc:"Logo of the model, when it has one apart from its provider's."`
 
 	Capabilities Capabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty" doc:"What the model supports."`
 	Modalities   Modalities   `json:"modalities,omitempty"   yaml:"modalities,omitempty"   doc:"Input and output modalities."`

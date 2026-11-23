@@ -95,6 +95,7 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 			Family:               m.Spec.Family,
 			ProductLine:          m.Spec.ProductLine,
 			Version:              m.Spec.Version,
+			Icon:                 m.Spec.Icon,
 			Capabilities:         m.Spec.Capabilities,
 			Modalities:           m.Spec.Modalities,
 			ContextWindowInput:   m.Spec.ContextWindowInput,

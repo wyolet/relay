@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/wyolet/relay/pkg/catalogkind/manifest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestLoadLineNames(t *testing.T) {
@@ -52,5 +55,49 @@ func TestLoadErrors(t *testing.T) {
 	}
 	if _, err := Load(bad); err == nil || errors.As(err, &pe) {
 		t.Fatalf("bad yaml: err = %v, want a parse error", err)
+	}
+}
+
+func TestLoadTree_NoFamiliesFile(t *testing.T) {
+	f, err := LoadTree(t.TempDir())
+	if err != nil || len(f.Families) != 0 {
+		t.Fatalf("families = %+v, err = %v", f, err)
+	}
+}
+
+func TestFillModelIcon(t *testing.T) {
+	dir := t.TempDir()
+	body := "families:\n" +
+		"    - name: claude\n" +
+		"      icon:\n" +
+		"        path: /provider/claude.png\n" +
+		"    - name: gpt\n"
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := LoadTree(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, family, own, want string
+	}{
+		{"family icon", "claude", "", "/provider/claude.png"},
+		{"own icon wins", "claude", "/provider/own.png", "/provider/own.png"},
+		{"family without icon", "gpt", "", ""},
+		{"unlisted family", "llama", "", ""},
+	} {
+		m := &manifest.ModelDTO{Spec: manifest.ModelSpec{Family: tc.family}}
+		if tc.own != "" {
+			m.Spec.Icon = &meta.Icon{Path: tc.own}
+		}
+		f.FillModelIcon(m)
+		got := ""
+		if m.Spec.Icon != nil {
+			got = m.Spec.Icon.Path
+		}
+		if got != tc.want {
+			t.Errorf("%s: icon %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

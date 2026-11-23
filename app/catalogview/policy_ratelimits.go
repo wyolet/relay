@@ -61,7 +61,7 @@ func (s *Service) PolicyRateLimits(ctx context.Context, ref string) (PolicyRef, 
 	}
 	for id, m := range uncapped {
 		if !capped[id] {
-			view.Unthrottled = append(view.Unthrottled, UnthrottledModel{Model: modelRefOf(m)})
+			view.Unthrottled = append(view.Unthrottled, UnthrottledModel{Model: idx.modelRef(m)})
 		}
 	}
 	sort.Slice(view.Unthrottled, func(i, j int) bool { return view.Unthrottled[i].Model.Name < view.Unthrottled[j].Model.Name })

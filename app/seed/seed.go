@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/manifest"
 	appsecret "github.com/wyolet/relay/app/secret"
+	"github.com/wyolet/relay/pkg/catalogkind/families"
 )
 
 // Options configures a seed run.
@@ -101,6 +102,15 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	docs, err := manifest.LoadDir(opts.YAMLDir)
 	if err != nil {
 		return nil, fmt.Errorf("seed: load yaml: %w", err)
+	}
+	fams, err := families.LoadTree(opts.YAMLDir)
+	if err != nil {
+		return nil, fmt.Errorf("seed: families: %w", err)
+	}
+	for _, d := range docs {
+		if d.Model != nil {
+			fams.FillModelIcon(d.Model)
+		}
 	}
 	docs, settingDocs, refused := splitSeedDocs(docs, opts.CatalogKindsOnly)
 	// A Setting in a seeded tree is not applied here and would otherwise

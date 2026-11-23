@@ -72,6 +72,7 @@ var catalogDocs = map[string]map[string]string{
 		"tags":                 "Free-form tags.",
 		"documentation":        "Link to the model's documentation.",
 		"providerModelPageURL": "The provider's page for the model.",
+		"icon":                 "Icon asset path: the model's, or its provider's when the model has none.",
 	},
 	"ProviderInfo": {
 		"name":          "Provider slug.",

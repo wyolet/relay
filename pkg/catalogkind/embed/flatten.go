@@ -124,7 +124,13 @@ func Flatten(snap Source, at time.Time, keep func(*model.Model, *binding.Binding
 				continue
 			}
 			seen[sn.Name] = true
-			out.Models = append(out.Models, modelInfoFrom(m, sn, provSlug))
+			info := modelInfoFrom(m, sn, provSlug)
+			if info.Icon == "" {
+				if p, ok := snap.Provider(m.Meta.Owner.ID); ok {
+					info.Icon = iconPath(p.Spec.Icon)
+				}
+			}
+			out.Models = append(out.Models, info)
 			if m.Meta.Owner.ID != "" {
 				providerIDs[m.Meta.Owner.ID] = true
 			}
@@ -184,6 +190,7 @@ func modelInfoFrom(m *model.Model, sn *model.Snapshot, provSlug string) sdkcatal
 		Tags:                 m.Spec.Tags,
 		Documentation:        m.Spec.Documentation,
 		ProviderModelPageURL: m.Spec.ProviderModelPageURL,
+		Icon:                 iconPath(m.Spec.Icon),
 	}
 }
 

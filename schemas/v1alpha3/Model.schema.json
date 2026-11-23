@@ -147,6 +147,16 @@
       },
       "type": "object"
     },
+    "Icon": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Asset path relative to the UI's asset base, such as /provider/anthropic.svg.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Modalities": {
       "additionalProperties": false,
       "properties": {
@@ -214,6 +224,9 @@
         },
         "family": {
           "type": "string"
+        },
+        "icon": {
+          "$ref": "#/$defs/Icon"
         },
         "knowledgeCutoff": {
           "type": "string"
