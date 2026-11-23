@@ -37,13 +37,14 @@ func resolveCatalog() catalogtest.Catalog {
 	gpt35, gpt4o, legacy, old := mdl("M1", "gpt-3-5", "P1"), mdl("M2", "gpt-4o", "P1"), mdl("M3", "legacy", "P1"), mdl("M4", "old", "P2")
 	gpt4o.Meta.DisplayName, gpt4o.Meta.Labels = "GPT-4o", map[string]string{"featured": "true", "tier": "flagship"}
 	gpt4o.Spec.ContextWindowTotal, gpt4o.Spec.ContextWindowInput, gpt4o.Spec.Capabilities.Tools = 128000, 100000, true
+	gpt4o.Spec.Icon = &meta.Icon{Path: "icons/gpt.svg"}
 	legacy.Spec.DeprecationDate = "2025-01-01"
 	old.Spec.Enabled = &off
 	disabledBinding := bind("B1", "M1", "H1")
 	disabledBinding.Spec.Enabled = &off
 	return catalogtest.Catalog{
 		Providers: []*provider.Provider{
-			{Meta: meta.Metadata{ID: "P1", Name: "openai", DisplayName: "OpenAI", Owner: sys}},
+			{Meta: meta.Metadata{ID: "P1", Name: "openai", DisplayName: "OpenAI", Owner: sys}, Spec: provider.Spec{Icon: &meta.Icon{Path: "icons/openai.svg"}}},
 			{Meta: meta.Metadata{ID: "P2", Name: "acme", Owner: sys}},
 		},
 		Hosts: []*host.Host{
