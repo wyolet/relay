@@ -17,7 +17,7 @@
 // Usage:
 //
 //	modelsdev-import -out ../relay-catalog/data
-//	modelsdev-import -source-file /tmp/md.json -hosts anthropic,openai -families ../relay-catalog/families.yaml -out -
+//	modelsdev-import -source-file /tmp/md.json -hosts anthropic,openai -families ../relay-catalog/data/families.yaml -out -
 
 // Command modelsdev-import converts the models.dev dataset into relay-catalog YAML.
 package main
@@ -57,7 +57,7 @@ func main() {
 	draft := fs.Bool("draft", true, "Route all output under drafts/ for human review before promotion.")
 	additive := fs.Bool("additive", true, "Skip models whose name already exists in the target catalog (never touch curated/imported entries).")
 	draftAllProviders := fs.Bool("draft-all", false, "Draft EVERY models.dev provider (not just -hosts). -hosts then only defines the supported-hosts manifest.")
-	familiesPath := fs.String("families", "", `Catalog families.yaml allowlist (default <out>/../families.yaml; required with -out -).`)
+	familiesPath := fs.String("families", "", `Catalog families.yaml allowlist (default <out>/families.yaml; required with -out -).`)
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
@@ -67,7 +67,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "modelsdev-import: -families is required with -out -")
 			os.Exit(2)
 		}
-		*familiesPath = filepath.Join(*out, "..", "families.yaml")
+		*familiesPath = filepath.Join(*out, "families.yaml")
 	}
 	families, err := loadFamilies(*familiesPath)
 	if err != nil {

@@ -7,7 +7,8 @@
 // itself is fetched, checked against its sum, and served. The channel index
 // is derived from the tags, never copied, so it can't name a tag whose files
 // aren't published and verified. The same Build steps produce the files the
-// release publishes, so CI and the server share one builder.
+// release publishes, so CI and the server share one builder. A release's
+// icons are served one by one out of its verified data tarball.
 //
 // A tag whose tree has an mcp/ directory also has an MCP template tarball,
 // verified the same way and indexed in a separate /mcp/index.yaml under the

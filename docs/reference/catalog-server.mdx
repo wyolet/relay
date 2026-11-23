@@ -16,8 +16,10 @@ Relay defaults to the public server at `https://catalog.wyolet.com`. The example
 | `/releases/<tag>/relay-catalog-data-<tag>.tar.gz` | The release's `data/` tree, which Relay seeds from. | As above. |
 | `/releases/<tag>/mcp-catalog-data-<tag>.tar.gz` | The release's `mcp/` tree of MCP server templates; see [MCP templates](#mcp-templates). | As above. |
 | `/releases/<tag>/<file>.sha256` | The sum file published with the release on GitHub, byte for byte. | As above. |
+| `/releases/<tag>/icons/<file>` | One icon of the release: the file an `icon` path `/provider/<file>` names, read out of the release's verified `data/` tree. Served with `Access-Control-Allow-Origin: *`. | As above. |
 | `/mcp/index.yaml` | The channel index of the MCP template tarballs. | As `/index.yaml`. |
 | `/channels/<channel>/latest/<file>` | `302` to `/releases/<tag>/<file>` for the channel's latest tag. `<file>` is `catalog.json.gz`, `relay-catalog-data.tar.gz` or `mcp-catalog-data.tar.gz`, optionally with `.sha256`; the last resolves through `/mcp/index.yaml`. For curl and people; clients read the index. | `public, max-age=60` |
+| `/channels/<channel>/latest/icons/<file>` | `302` to `/releases/<tag>/icons/<file>` for the channel's latest tag. | `public, max-age=60` |
 | `/livez`, `/readyz`, `/metrics` | Health and Prometheus metrics; see [Running catalog-server](#running-catalog-server). | none |
 | `POST /v1/webhooks`, `POST /hooks/github` | Release webhook registration and the repository push hook; see [Release webhooks](#release-webhooks). | none |
 

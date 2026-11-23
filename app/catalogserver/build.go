@@ -20,6 +20,7 @@ import (
 
 	catalogarchive "github.com/wyolet/relay/pkg/catalogkind/archive"
 	"github.com/wyolet/relay/pkg/catalogkind/embed"
+	"github.com/wyolet/relay/pkg/catalogkind/families"
 	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
@@ -67,6 +68,15 @@ func BuildCatalog(archive []byte, generatedAt time.Time, version string) ([]byte
 	docs, err := manifest.LoadDir(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("load: %w", err)
+	}
+	fams, err := families.LoadTree(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("families: %w", err)
+	}
+	for _, d := range docs {
+		if d.Model != nil {
+			fams.FillModelIcon(d.Model)
+		}
 	}
 	cat, err := embed.Compose(docs, generatedAt)
 	if err != nil {

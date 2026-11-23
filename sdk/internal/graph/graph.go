@@ -58,6 +58,7 @@ func Build(ic *catalog.IndexedCatalog) *Graph {
 			Family:          mi.Family,
 			ProductLine:     mi.ProductLine,
 			Version:         mi.Version,
+			Icon:            mi.Icon,
 			Capabilities:    Capabilities(mi.Capabilities),
 			Modalities:      Modalities(mi.Modalities),
 			ContextWindow:   ContextWindow{Input: mi.ContextWindowInput, Output: mi.ContextWindowOutput, Total: mi.ContextWindowTotal},

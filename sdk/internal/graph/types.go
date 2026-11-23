@@ -93,6 +93,7 @@ type Model struct {
 	Family      string `json:"family,omitempty"`
 	ProductLine string `json:"productLine,omitempty"`
 	Version     string `json:"version,omitempty"`
+	Icon        string `json:"icon,omitempty"`
 
 	Capabilities  Capabilities  `json:"capabilities,omitempty"`
 	Modalities    Modalities    `json:"modalities,omitempty"`

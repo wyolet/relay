@@ -188,10 +188,10 @@ func (o Owner) Holds(inner Owner, teamOf func(projectID string) (teamID string, 
 	return false
 }
 
-// Icon describes a visual asset for a catalog entity (Provider, Host).
-// Path is relative — typically "/provider/anthropic.svg" — and the
-// frontend prefixes its own asset-base URL at render time. Relay does
-// not serve the asset; this field is operator metadata.
+// Icon describes a visual asset for a catalog entity (Provider, Host, Model).
+// Path is relative — typically "/provider/anthropic.png" — and names a file
+// in the catalog release's icons directory. The control listener serves the
+// seeded catalog's file at that path.
 type Icon struct {
 	Path string `json:"path,omitempty" yaml:"path,omitempty" doc:"Asset path relative to the UI's asset base, such as /provider/anthropic.svg."`
 }

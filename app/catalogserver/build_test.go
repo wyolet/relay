@@ -56,6 +56,52 @@ func TestBuild_DataTreeWithoutDraftsAndCatalogOfIt(t *testing.T) {
 	}
 }
 
+func TestBuildCatalog_ModelIcon(t *testing.T) {
+	modelIcon := func(tree map[string]string) string {
+		t.Helper()
+		src := newSourceRepo(t)
+		src.commit(tree, oldCommit)
+		src.tag("v0.1.0", true)
+		repo := Repo{Dir: src.dir}
+		commit, at, err := repo.Commit(context.Background(), "v0.1.0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := must(BuildData(context.Background(), repo, commit))(t)
+		var cat struct {
+			Models []struct {
+				Icon string `json:"icon"`
+			} `json:"models"`
+		}
+		if err := json.Unmarshal(gunzip(t, must(BuildCatalog(data, at, "v0.1.0"))(t)), &cat); err != nil || len(cat.Models) != 1 {
+			t.Fatalf("catalog models %+v, err %v", cat.Models, err)
+		}
+		return cat.Models[0].Icon
+	}
+	withIcons := func(family, own string) map[string]string {
+		tree := catalogTree(fixtureAPIVersion, "Rocket")
+		tree["data/providers/acme/provider.yaml"] += "  icon:\n    path: /provider/acme.png\n"
+		tree["data/providers/acme/models/rocket.yaml"] += "  family: rocket\n" + own
+		tree["data/families.yaml"] = "families:\n  - name: rocket\n" + family
+		return tree
+	}
+	const familyIcon = "    icon:\n      path: /provider/rocket.png\n"
+	const ownIcon = "  icon:\n    path: /provider/rocket-1.png\n"
+	for _, tc := range []struct {
+		name string
+		tree map[string]string
+		want string
+	}{
+		{"the model's own", withIcons(familyIcon, ownIcon), "/provider/rocket-1.png"},
+		{"its family's", withIcons(familyIcon, ""), "/provider/rocket.png"},
+		{"its provider's", withIcons("", ""), "/provider/acme.png"},
+	} {
+		if got := modelIcon(tc.tree); got != tc.want {
+			t.Errorf("%s: icon %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestParseSumFile(t *testing.T) {
 	const sum = "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
 	if got := string(SumFile(CatalogAsset, []byte("x"))); got != sum+"  catalog.json.gz\n" {

@@ -56,6 +56,7 @@ type graphModel struct {
 	Name               string             `json:"name"                         doc:"Model slug."`
 	DisplayName        string             `json:"displayName,omitempty"        doc:"Display name."`
 	ProviderID         string             `json:"providerId"                   doc:"Id of the model's provider."`
+	IconPath           string             `json:"iconPath,omitempty"           doc:"Icon asset path: the model's, or its provider's when the model has none."`
 	Featured           bool               `json:"featured,omitempty"           doc:"The catalog marks the model as featured."`
 	Deprecated         string             `json:"deprecated,omitempty"         doc:"Deprecation status, when not active."`
 	Capabilities       model.Capabilities `json:"capabilities,omitempty"       doc:"What the model supports."`
@@ -164,6 +165,11 @@ func graphModels(idx *resolveIndex, includeDeprecated bool, sel map[string]strin
 			ContextWindowInput: m.Spec.ContextWindowInput,
 			Pointer:            m.PointerUpstream(),
 			Bindings:           []graphBinding{},
+		}
+		if m.Spec.Icon != nil && m.Spec.Icon.Path != "" {
+			gm.IconPath = m.Spec.Icon.Path
+		} else if p, ok := idx.providersByID[m.Meta.Owner.ID]; ok && p.Spec.Icon != nil {
+			gm.IconPath = p.Spec.Icon.Path
 		}
 		for _, hb := range idx.snap.BindingsForModel(m.Meta.ID) {
 			if !hb.IsEnabled() {

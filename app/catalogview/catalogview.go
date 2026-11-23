@@ -132,6 +132,7 @@ type ModelRef struct {
 	ContextWindowTotal int              `json:"contextWindowTotal,omitempty" doc:"Context window in tokens."`
 	ContextWindowInput int              `json:"contextWindowInput,omitempty" doc:"Published input cap in tokens."`
 	Deprecation        *DeprecationView `json:"deprecation,omitempty"        doc:"Lifecycle state; absent means active."`
+	Icon               *IconView        `json:"icon,omitempty"               doc:"The model's icon, or its provider's when the model has none."`
 }
 type ProviderRef struct {
 	ID          string `json:"id"                    doc:"Provider id."`
@@ -225,7 +226,7 @@ func (s *Service) ModelHosts(ctx context.Context, ref string) (ModelRef, []Model
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Host.Name < rows[j].Host.Name })
-	return modelRefOf(m), rows, nil
+	return idx.modelRef(m), rows, nil
 }
 
 // ModelPricing returns the model's pricing per host, flat (host inline).
@@ -247,7 +248,7 @@ func (s *Service) ModelPricing(ctx context.Context, ref string) (ModelRef, []Mod
 		rows = append(rows, ModelPriceRow{Host: hostRefOf(h), ID: pv.ID, Name: pv.Name, Currency: pv.Currency, Rates: pv.Rates})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Host.Name < rows[j].Host.Name })
-	return modelRefOf(m), rows, nil
+	return idx.modelRef(m), rows, nil
 }
 
 // ModelPolicies returns the policies that grant this model, flat: on a host
@@ -281,7 +282,7 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
-	return modelRefOf(m), rows, nil
+	return idx.modelRef(m), rows, nil
 }
 
 // HostModelRow — one model served by a host, with its binding + pricing.
@@ -315,7 +316,7 @@ func (s *Service) HostModels(ctx context.Context, ref string) (HostRef, []HostMo
 			if !ok {
 				continue
 			}
-			rows = append(rows, HostModelRow{Model: modelRefOf(m), Binding: bindingViewOf(b), Pricing: idx.pricingFor(b)})
+			rows = append(rows, HostModelRow{Model: idx.modelRef(m), Binding: bindingViewOf(b), Pricing: idx.pricingFor(b)})
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Model.Name < rows[j].Model.Name })

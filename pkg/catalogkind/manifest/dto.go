@@ -113,6 +113,8 @@ type ModelSpec struct {
 	ProductLine string `json:"productLine,omitempty" yaml:"productLine,omitempty"`
 	Version     string `json:"version,omitempty"     yaml:"version,omitempty"`
 
+	Icon *meta.Icon `json:"icon,omitempty" yaml:"icon,omitempty"`
+
 	Capabilities model.Capabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
 	Modalities   model.Modalities   `json:"modalities,omitempty"   yaml:"modalities,omitempty"`
 

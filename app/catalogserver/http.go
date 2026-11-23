@@ -26,7 +26,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /index.yaml", s.serveIndex)
 	mux.HandleFunc("GET /mcp/index.yaml", s.serveMCPIndex)
 	mux.HandleFunc("GET /releases/{tag}/{file}", s.serveRelease)
+	mux.HandleFunc("GET /releases/{tag}/icons/{file}", s.serveReleaseIcon)
 	mux.HandleFunc("GET /channels/{channel}/latest/{file}", s.serveChannelLatest)
+	mux.HandleFunc("GET /channels/{channel}/latest/icons/{file}", s.serveChannelLatestIcon)
 	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
@@ -79,12 +81,7 @@ func (s *Server) serveRelease(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Another replica may already index a tag this one hasn't fetched yet:
-	// catch up before answering rather than 404 a file the index names.
-	sumFile, catchUp := s.publishedSum(tag, a)
-	if sumFile == nil && catchUp && s.awaitSync(r.Context()) {
-		sumFile, _ = s.publishedSum(tag, a)
-	}
+	sumFile := s.awaitPublishedSum(r, tag, a)
 	if sumFile == nil {
 		notFoundUncached(w, r)
 		return
@@ -93,6 +90,25 @@ func (s *Server) serveRelease(w http.ResponseWriter, r *http.Request) {
 		serveBytes(w, r, sumFile, "text/plain; charset=utf-8", immutableCache, `"`+sha256Hex(sumFile)+`"`)
 		return
 	}
+	if data, ok := s.verifiedFile(w, r, tag, a); ok {
+		serveBytes(w, r, data, "application/gzip", immutableCache, `"`+sha256Hex(data)+`"`)
+	}
+}
+
+// awaitPublishedSum is the published sum file of a tag's asset, or nil.
+// Another replica may already index a tag this one hasn't fetched yet, so it
+// catches up before answering rather than 404 a file the index names.
+func (s *Server) awaitPublishedSum(r *http.Request, tag string, a asset) []byte {
+	sumFile, catchUp := s.publishedSum(tag, a)
+	if sumFile == nil && catchUp && s.awaitSync(r.Context()) {
+		sumFile, _ = s.publishedSum(tag, a)
+	}
+	return sumFile
+}
+
+// verifiedFile returns the verified bytes of a tag's asset, or answers the
+// request itself and reports false.
+func (s *Server) verifiedFile(w http.ResponseWriter, r *http.Request, tag string, a asset) ([]byte, bool) {
 	data, err := s.file(r.Context(), tag, a)
 	switch {
 	case errors.Is(err, errNotPublished):
@@ -101,8 +117,52 @@ func (s *Server) serveRelease(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "file unavailable", http.StatusServiceUnavailable)
 	default:
-		serveBytes(w, r, data, "application/gzip", immutableCache, `"`+sha256Hex(data)+`"`)
+		return data, true
 	}
+	return nil, false
+}
+
+// serveReleaseIcon serves one icon out of a tag's verified data tarball, so
+// an icon is never served from a tree the release doesn't publish.
+func (s *Server) serveReleaseIcon(w http.ResponseWriter, r *http.Request) {
+	tag, file := r.PathValue("tag"), r.PathValue("file")
+	contentType, ok := iconContentType(file)
+	if !isReleaseTag(tag) || !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if s.awaitPublishedSum(r, tag, assetData) == nil {
+		notFoundUncached(w, r)
+		return
+	}
+	data, ok := s.verifiedFile(w, r, tag, assetData)
+	if !ok {
+		return
+	}
+	icon, err := archiveIcon(data, file)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
+	// An SVG opened as a document can run script; none is allowed.
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+	h.Set("Access-Control-Allow-Origin", "*")
+	serveBytes(w, r, icon, contentType, immutableCache, `"`+sha256Hex(icon)+`"`)
+}
+
+func (s *Server) serveChannelLatestIcon(w http.ResponseWriter, r *http.Request) {
+	channel, file := r.PathValue("channel"), r.PathValue("file")
+	s.mu.RLock()
+	tag := s.latest[channel]
+	s.mu.RUnlock()
+	if _, ok := iconContentType(file); tag == "" || !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", shortCache)
+	http.Redirect(w, r, "/releases/"+tag+"/icons/"+file, http.StatusFound)
 }
 
 func (s *Server) serveChannelLatest(w http.ResponseWriter, r *http.Request) {

@@ -8,6 +8,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // viewed fails the test unless a projection returned exactly the wanted
@@ -69,6 +70,32 @@ func TestModelHosts(t *testing.T) {
 	viewed(t, "priced hosts only", wantModel, []ModelPriceRow{
 		{Host: hostRef("azure"), ID: "pricing:azure-all", Name: "azure-all", Currency: "USD", Rates: sheetView("", 3).Rates},
 	})(svc.ModelPricing(ctx, "gpt-4o"))
+}
+
+func TestModelRef_IconFallsBackToProvider(t *testing.T) {
+	ctx := context.Background()
+	branded := provOf("openai")
+	branded.Spec.Icon = &meta.Icon{Path: "/provider/openai.png"}
+	own := modelOf("gpt-4o")
+	own.Spec.Icon = &meta.Icon{Path: "/provider/gpt.png"}
+
+	for _, tc := range []struct {
+		name string
+		svc  *Service
+		want *IconView
+	}{
+		{"the model's own", newService(branded, own), &IconView{Path: "/provider/gpt.png"}},
+		{"its provider's", newService(branded, modelOf("gpt-4o")), &IconView{Path: "/provider/openai.png"}},
+		{"none", newService(provOf("openai"), modelOf("gpt-4o")), nil},
+	} {
+		ref, _, err := tc.svc.ModelHosts(ctx, "gpt-4o")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if diff := cmp.Diff(tc.want, ref.Icon); diff != "" {
+			t.Errorf("%s icon (-want +got):\n%s", tc.name, diff)
+		}
+	}
 }
 
 func TestModelPolicies(t *testing.T) {

@@ -90,6 +90,7 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 		Family:               d.Spec.Family,
 		ProductLine:          d.Spec.ProductLine,
 		Version:              d.Spec.Version,
+		Icon:                 d.Spec.Icon,
 		Capabilities:         d.Spec.Capabilities,
 		Modalities:           d.Spec.Modalities,
 		ContextWindowInput:   d.Spec.ContextWindowInput,
