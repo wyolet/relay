@@ -56,6 +56,8 @@ app/                       — the application: domain + composition + handlers
   catalogserver/           — serves catalog releases from a git mirror of the
                              catalog repo (cmd/catalog-server); imports only
                              pkg/ and sdk/ (make lint-rules)
+  catalogicon/             — the seeded catalog release's icon files, kept in
+                             Postgres and served at /provider/<file>
   catalogstore/            — Postgres stores for the pkg/catalogkind kinds
                              (ProviderStore, HostStore, …, PolicyStore)
   {hostkey,key}/           — credential entities. Each: domain types,

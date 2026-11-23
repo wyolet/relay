@@ -818,3 +818,14 @@ DELETE FROM policy_budgets WHERE policy_id = $1;
 
 -- name: InsertPolicyBudget :exec
 INSERT INTO policy_budgets (policy_id, budget_id, position, shared) VALUES ($1, $2, $3, $4);
+
+-- name: GetCatalogIcon :one
+SELECT body, sha256 FROM catalog_icons WHERE name = $1;
+
+-- name: UpsertCatalogIcon :exec
+INSERT INTO catalog_icons (name, body, sha256) VALUES ($1, $2, $3)
+ON CONFLICT (name) DO UPDATE SET body = EXCLUDED.body, sha256 = EXCLUDED.sha256, updated_at = now()
+WHERE catalog_icons.sha256 IS DISTINCT FROM EXCLUDED.sha256;
+
+-- name: DeleteCatalogIconsExcept :exec
+DELETE FROM catalog_icons WHERE NOT (name = ANY(sqlc.arg(names)::text[]));

@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalogicon"
 	"github.com/wyolet/relay/app/catalogprune"
 	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/httpapi/control"
@@ -115,10 +116,20 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	// The embedded SPA is the fallback for unclaimed paths, but never
 	// under /api: a UI calling a renamed endpoint must get a JSON 404 it
 	// can parse. Mounted only when a dist was baked in and not disabled.
+	unclaimed := http.NotFoundHandler()
 	if !cfg.UIDisable && relayweb.Present() {
-		ctrlRouter.NotFound(relayweb.Handler(cfg.Runtime.ControlAPIURL, cfg.Runtime.InferenceAPIURL, cfg.Runtime.SentryDSN).ServeHTTP)
+		unclaimed = relayweb.Handler(cfg.Runtime.ControlAPIURL, cfg.Runtime.InferenceAPIURL, cfg.Runtime.SentryDSN)
+		ctrlRouter.NotFound(unclaimed.ServeHTTP)
 		slog.Debug("relay control: serving embedded UI")
 	}
+	// The seeded catalog's icons come first, then the bundled tree's for a catalog seeded before icons were stored, then whatever the UI bundles.
+	iconReaders := []control.CatalogIconReader{catalogicon.NewStore(st.Pool()).Get}
+	if cfg.CatalogDir != "" {
+		iconReaders = append(iconReaders, func(_ context.Context, name string) (catalogicon.Icon, error) {
+			return catalogicon.ReadFile(cfg.CatalogDir, name)
+		})
+	}
+	ctrlRouter.Get(control.CatalogIconPattern, control.CatalogIconHandler(unclaimed, iconReaders...))
 	ctrlSrv := &http.Server{
 		Addr:              cfg.ControlAddr(),
 		Handler:           ctrlRouter,
