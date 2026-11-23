@@ -127,7 +127,8 @@ ENTRYPOINT ["/relay"]
 # against managed PG.
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS standalone
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
-RUN apk add --no-cache postgresql16 postgresql16-client tzdata \
+# libxml2 floor: CVE-2026-86144. A cached layer otherwise keeps the version it was built with.
+RUN apk add --no-cache postgresql16 postgresql16-client tzdata 'libxml2>=2.13.9-r3' \
     && mkdir -p /var/lib/postgresql/data /run/postgresql \
     && chown -R postgres:postgres /var/lib/postgresql /run/postgresql
 COPY --from=builder /relay /relay
