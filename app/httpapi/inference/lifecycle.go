@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -215,12 +216,15 @@ func (d Deps) refusalCatalog(ctx context.Context) *appcatalog.Snapshot {
 	return nil
 }
 
-// stampRefusedModel names on lc the catalog model a refused request asked for, as routing would have on success, so its row says which model was refused. A name no model answers keeps only the requested string; an alias naming several takes the first, the one routing tries first.
+// stampRefusedModel names on lc the catalog model a refused request asked for, as routing would have on success, so its row says which model was refused. A host pin that resolves to nothing, as a snapshot pinned where its model is not served does, names the model its unpinned name resolves to. A name no model answers keeps only the requested string; an alias naming several takes the first, the one routing tries first.
 func stampRefusedModel(lc *lifecycle.Context, snap *appcatalog.Snapshot) {
 	if snap == nil || lc.RequestedModel == "" || lc.ModelID != "" {
 		return
 	}
 	res := snap.ResolveModelRef(lc.RequestedModel)
+	if name, _, pinned := strings.Cut(lc.RequestedModel, "@"); len(res.Models) == 0 && pinned {
+		res = snap.ResolveModelRef(name)
+	}
 	if len(res.Models) == 0 {
 		return
 	}

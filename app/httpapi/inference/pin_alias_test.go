@@ -16,13 +16,14 @@ import (
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
-// refusedRow is what a refused request's row says.
+// refusedRow is what a refused request's row says: the answer, and the model it names.
 type refusedRow struct {
-	Status int
-	Kind   string
+	Status          int
+	Kind            string
+	Model, Provider string
 }
 
-// A pin of a snapshot name at a host its model is not served at answers model_not_found, whether written as "@host" or sent as X-WR-Upstream-Host, and never routes to another model that declares the snapshot name as an alias.
+// A pin of a snapshot name at a host its model is not served at answers model_not_found, whether written as "@host" or sent as X-WR-Upstream-Host, and never routes to another model that declares the snapshot name as an alias; the row still names the snapshot's model.
 func TestDispatch_UnservedPinNeverRoutesThroughAnotherModelsAlias(t *testing.T) {
 	upURL, calls := hopUpstream(t, http.StatusOK, `{"answer":true}`)
 	var w plantest.World
@@ -46,7 +47,7 @@ func TestDispatch_UnservedPinNeverRoutesThroughAnotherModelsAlias(t *testing.T) 
 	rows := make(chan refusedRow, 4)
 	reg := lifecycle.New()
 	reg.RegisterHook(lifecycle.HookFunc{HookName: "row", Fn: func(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
-		rows <- refusedRow{ev.Status, ev.ErrorKind}
+		rows <- refusedRow{ev.Status, ev.ErrorKind, lc.ModelName, lc.ProviderName}
 		return nil, nil
 	}})
 	d.Lifecycle = reg
@@ -71,7 +72,7 @@ func TestDispatch_UnservedPinNeverRoutesThroughAnotherModelsAlias(t *testing.T) 
 			case <-time.After(5 * time.Second):
 				t.Fatal("no usage row")
 			}
-			if diff := cmp.Diff(refusedRow{Status: http.StatusNotFound, Kind: "model_not_found"}, got); diff != "" {
+			if diff := cmp.Diff(refusedRow{Status: http.StatusNotFound, Kind: "model_not_found", Model: "m1", Provider: "acme"}, got); diff != "" {
 				t.Errorf("row (-want +got):\n%s\nresponse %d %s", diff, rec.Code, rec.Body)
 			}
 			if rec.Code != http.StatusNotFound {
