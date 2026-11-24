@@ -236,6 +236,29 @@ func TestCheck_ConfirmsRefusalsOnAFreshBaseline(t *testing.T) {
 	}
 }
 
+// Find answers the new warnings from the build the check makes anyway: one build when nothing refuses, and a warning the view already has is not new.
+func TestCheck_FindsNewWarningsInOneBuild(t *testing.T) {
+	b := newBasic()
+	old := b.w.pool(b.hostA)
+	old.Spec.AccountIDs = []string{b.acctB.Meta.ID}
+	h := b.w.start(t)
+	c := NewCheck(false, time.Minute)
+	var builds atomic.Int32
+	c.build = func(src Sources) (*engine.View, error) {
+		builds.Add(1)
+		return scratchView(src)
+	}
+	elsewhere := &pool.Pool{Meta: md("pool-"+seq(), system), Spec: pool.Spec{HostID: b.hostA.Meta.ID, AccountIDs: []string{b.acctB.Meta.ID}}}
+	got, err := c.Find(t.Context(), h.e.View(), nil, []any{elsewhere})
+	if err != nil || builds.Load() != 1 {
+		t.Fatalf("%v, %d builds, want 1", err, builds.Load())
+	}
+	want := Findings{Warnings: []engine.Issue{{Severity: engine.SeverityWarning, Code: IssueHostMismatch, Source: engine.Ref{Kind: KindPool, ID: elsewhere.Meta.ID}, Target: engine.Ref{Kind: KindAccount, ID: b.acctB.Meta.ID}, Field: "spec.accountIds[0]"}}}
+	if diff := cmp.Diff(want, got, ignoreMessage); diff != "" {
+		t.Errorf("findings (-want +got):\n%s", diff)
+	}
+}
+
 // No controller writes to the input rows the scratch build shares with the live view.
 func TestCheck_LeavesInputRowsAsTheyWere(t *testing.T) {
 	b := newBasic()

@@ -80,20 +80,27 @@ type Writer struct {
 
 // Run takes the check slot (plan.Check.Hold) before its transaction begins and frees it once the transaction ended, so one write is open at a time and a writer that waits holds no connection; one that waits past the bound answers plan.ErrCheckTimeout. It expands, creates each row in order, checks the rows against the plans and commits; a dry run does all of it but the commit. It returns the rows as created, also on a dry run. A refused row is a *RowError, a body that expands to nothing a *BodyError, rows the plans refuse an *IssuesError; nothing is written on any error. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created.
 func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, error) {
+	rows, _, err := w.RunWithWarnings(ctx, expand, create, dryRun)
+	return rows, err
+}
+
+// RunWithWarnings is Run that also answers the warnings the plan check found new on the rows created (as their source or target), from the same build; they refuse nothing.
+func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, []engine.Issue, error) {
 	if w.Check == nil || w.View == nil {
-		return nil, ErrNoPlans
+		return nil, nil, ErrNoPlans
 	}
 	live := w.View()
 	if live == nil || live.Gen() == 0 {
-		return nil, ErrNoPlans
+		return nil, nil, ErrNoPlans
 	}
 	ctx, release, err := w.Check.Hold(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer release()
 	ctx, read := withReads(ctx)
 	var rows []Row
+	var warnings []engine.Issue
 	err = w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
 		var err error
 		if rows, err = expand(ctx, tx); err != nil {
@@ -108,12 +115,17 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 		for _, r := range rows {
 			ours[r.Meta.ID] = true
 		}
-		issues, err := w.Check.NewIssues(ctx, live, read.except(ours), Values(rows))
+		found, err := w.Check.Find(ctx, live, read.except(ours), Values(rows))
 		if err != nil {
 			return err
 		}
-		if len(issues) > 0 {
-			return &IssuesError{Rows: rows, Issues: issues}
+		if len(found.Errors) > 0 {
+			return &IssuesError{Rows: rows, Issues: found.Errors}
+		}
+		for _, i := range found.Warnings {
+			if ours[i.Source.ID] || ours[i.Target.ID] {
+				warnings = append(warnings, i)
+			}
 		}
 		if dryRun {
 			return errDryRun
@@ -121,12 +133,12 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 		return nil
 	})
 	if errors.Is(err, errDryRun) {
-		return rows, nil
+		return rows, warnings, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return rows, nil
+	return rows, warnings, nil
 }
 
 // Values is the rows' values, in order.

@@ -94,12 +94,23 @@ func (h *hold) built() {
 
 // NewIssues lays read, then proposed, over live's input rows (each a pointer to an input row such as *account.Account; a later row with an id already laid replaces it), runs every controller on the result, and returns what the result refuses that the baseline does not: errors filed (warnings left out), and lanes the proposed rows make or bind that the result refuses as a whole (refusedLanes). read is what the database holds now of rows the caller read, which live may not have seen yet; a read row of no input kind is left out. The baseline is live when every read row is the one live holds, else live with read laid over it, built the same way, so a row live has not seen yet neither hides nor causes a refusal; and before answering a refusal against live, the baseline is built the same way as the result, so a difference between live, built change by change, and a build of the same rows at once refuses nothing. Two issues are the same when their severity, code, source, target and field are. It takes the slot as Hold does unless ctx already holds it; a build that outlives the bound, or a ctx that ends first, answers ErrCheckTimeout or ctx's error while the build runs on, holding the slot, to its end.
 func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed []any) ([]engine.Issue, error) {
+	f, err := c.Find(ctx, live, read, proposed)
+	return f.Errors, err
+}
+
+// Findings is what a check found against its baseline: Errors refuse the rows (NewIssues); Warnings are the warnings the result has that the baseline does not, which refuse nothing.
+type Findings struct {
+	Errors, Warnings []engine.Issue
+}
+
+// Find is NewIssues that also answers the new warnings, taken from the same builds.
+func (c *Check) Find(ctx context.Context, live *engine.View, read, proposed []any) (Findings, error) {
 	if live == nil {
-		return nil, errors.New("plan: no published view to check against")
+		return Findings{}, errors.New("plan: no published view to check against")
 	}
 	full, stale, err := layered(live, read, proposed)
 	if err != nil {
-		return nil, err
+		return Findings{}, err
 	}
 	full.RBAC = c.rbac
 	base, _, _ := layered(live, read, nil)
@@ -108,14 +119,14 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 	if h == nil {
 		held, release, err := c.Hold(ctx)
 		if err != nil {
-			return nil, err
+			return Findings{}, err
 		}
 		defer release()
 		h = held.Value(heldKey{c}).(*hold)
 	}
 	type result struct {
-		issues []engine.Issue
-		err    error
+		found Findings
+		err   error
 	}
 	done := make(chan result, 1)
 	h.mu.Lock()
@@ -135,23 +146,26 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 				return
 			}
 		}
-		found := refusedBy(before, after, proposed)
+		afterIssues := after.AllIssues()
+		beforeIssues := before.AllIssues()
+		found := refusedBy(before, after, beforeIssues, afterIssues, proposed)
 		if len(found) > 0 && !stale {
 			// The live view was built change by change; a refusal must hold against the same rows built at once.
 			if before, err = c.build(base); err != nil {
 				done <- result{err: err}
 				return
 			}
-			found = refusedBy(before, after, proposed)
+			beforeIssues = before.AllIssues()
+			found = refusedBy(before, after, beforeIssues, afterIssues, proposed)
 		}
-		done <- result{issues: found}
+		done <- result{found: Findings{Errors: found, Warnings: newWarnings(beforeIssues, afterIssues)}}
 	}()
 	bound := time.NewTimer(c.timeout)
 	defer bound.Stop()
 	var stopped error
 	select {
 	case r := <-done:
-		return r.issues, r.err
+		return r.found, r.err
 	case <-bound.C:
 		stopped = ErrCheckTimeout
 	case <-ctx.Done():
@@ -161,19 +175,34 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 	if !h.building {
 		h.mu.Unlock()
 		r := <-done
-		return r.issues, r.err
+		return r.found, r.err
 	}
 	h.abandoned = true
 	if stopped == ErrCheckTimeout {
 		c.overrun.Store(true)
 	}
 	h.mu.Unlock()
-	return nil, stopped
+	return Findings{}, stopped
 }
 
-// refusedBy is what after refuses that before does not: the errors filed on after alone, and a refusal of each lane the proposed rows make or bind (refusedLanes).
-func refusedBy(before, after *engine.View, proposed []any) []engine.Issue {
-	return append(newIssues(before.AllIssues(), after.AllIssues()), refusedLanes(before, after, proposed)...)
+// newWarnings returns the warnings of after that before does not have.
+func newWarnings(before, after []engine.Issue) []engine.Issue {
+	had := make(map[issueKey]bool, len(before))
+	for _, i := range before {
+		had[keyOfIssue(i)] = true
+	}
+	var out []engine.Issue
+	for _, i := range after {
+		if i.Severity == engine.SeverityWarning && !had[keyOfIssue(i)] {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// refusedBy is what after refuses that before does not: the errors filed on after alone (their issues given), and a refusal of each lane the proposed rows make or bind (refusedLanes).
+func refusedBy(before, after *engine.View, beforeIssues, afterIssues []engine.Issue, proposed []any) []engine.Issue {
+	return append(newIssues(beforeIssues, afterIssues), refusedLanes(before, after, proposed)...)
 }
 
 // refusedLanes files an error for each lane the proposed rows make (a caller account) or bind (an account of a proposed policy binding) whose caller plan in after refuses every request (CallerPlan.Refused: policy_disabled, duplicate_binding, subject_disabled, account_closed, personal_account_off), unless before refuses it with the same code. No plan files these: a lane refused as a whole is a state, not an error of one row. The issue sits on the binding that binds the lane when one is proposed, else on the lane.

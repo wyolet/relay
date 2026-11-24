@@ -263,11 +263,12 @@ The policy links the `poolIds` first, in the order given, then the pools made, i
   "policy": { "id": "…", "name": "ci-bot" },
   "pools": [{ "id": "…", "name": "ci-bot-at-openai" }],
   "shares": [{ "id": "…", "name": "alice-openai-for-web" }],
-  "key": { "id": "…", "name": "ci-bot-key", "plaintext": "sk-wr-…" }
+  "key": { "id": "…", "name": "ci-bot-key", "plaintext": "sk-wr-…" },
+  "warnings": []
 }
 ```
 
-`created` lists the rows in write order. A dry run answers `200` with the same body, ids included (they are minted before the write) and `plaintext` left out. Each row passes what its own create call passes, with the same answers: the grant for its kind and owner, the row's rules and cross-row checks, and name minting with a `-2` suffix while a name is taken. Each row made is audited as its own create. A repeated request makes a second set.
+`created` lists the rows in write order. `warnings` lists the plan warnings the rows would raise that are not there now, on the rows the request makes (as the row carrying the warning or the row it names), in the shape of the `issues` of a `422` below; for example `model_ref_blocked` on the policy for a model a policy above it excludes. Warnings refuse nothing; the list is `[]` when there are none. A dry run answers `200` with the same body, ids and warnings included (ids are minted before the write) and `plaintext` left out. Each row passes what its own create call passes, with the same answers: the grant for its kind and owner, the row's rules and cross-row checks, and name minting with a `-2` suffix while a name is taken. Each row made is audited as its own create. A repeated request makes a second set.
 
 Nothing is written on any refusal. A refusal of one row carries `pointer`, the JSON pointer of the part of the body it came from:
 

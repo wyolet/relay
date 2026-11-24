@@ -162,6 +162,9 @@ func TestPseudoKinds_FlagGatesTheRoutes(t *testing.T) {
 				if got := enumOf(t, doc, "AgentOwner", "kind"); !slices.Equal(got, kinds) {
 					t.Errorf("owner kinds = %v, want those a service account takes, %v", got, kinds)
 				}
+				if _, ok := schemaProps(t, doc, "PseudoAgentCreated")["warnings"]; !ok {
+					t.Error("PseudoAgentCreated lacks warnings")
+				}
 				for _, code := range []string{"200", "201"} {
 					if ref := responseRef(op, code); ref != "#/components/schemas/PseudoAgentCreated" {
 						t.Errorf("%s answers %q, want PseudoAgentCreated", code, ref)
