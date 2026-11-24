@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -31,6 +34,33 @@ func decodeServiceAccount(t *testing.T, body []byte) serviceaccount.ServiceAccou
 		t.Fatalf("decode %s: %v", body, err)
 	}
 	return sa
+}
+
+// refusingStore is a store whose delete the directory's foreign keys refuse, as a team delete is when a service account of the team appeared after the references scan.
+type refusingStore struct{ *memStore[scopedThing] }
+
+func (refusingStore) Delete(context.Context, string) error {
+	return fmt.Errorf("delete team: %w: Key (id) is still referenced from table \"service_accounts\"", directory.ErrInvalid)
+}
+
+// A delete the store refuses for a row the references scan missed answers with the scan's 409, not a 404 carrying the store's text.
+func TestDeleteRefusedByTheStoreAnswersInUse(t *testing.T) {
+	row := &scopedThing{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}}
+	scans := 0
+	inUse := func(_ context.Context, kind, _, name string) (*droppedLinks, error) {
+		if scans++; scans == 1 {
+			return nil, nil
+		}
+		return nil, &resourceInUseError{APIError: httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: "resource_in_use",
+			Message: kind + " " + name + " is referenced by 1 row(s); see blockers"}, HTTPStatus: http.StatusConflict},
+			Blockers: []blockerGroup{{Kind: "service-account", Field: "metadata.owner.id", Count: 1}}}
+	}
+	r, api := testAPI(t, scopeActors)
+	store := refusingStore{newMemStore(thingMeta, row)}
+	registerKind[scopedThing](api, "things", "thing", store, authz.AlwaysAllowAuthenticated{}, thingMeta, nil, meta.OwnerUser,
+		listScanResolver[scopedThing](store, thingMeta), nil, nil, nil, inUse, nil, noSettings{}, false, nil, nil, nil)
+	wantAPIError(t, scopeReq(t, r, "alice", http.MethodDelete, "/things/by-id/"+row.Meta.ID, ""), http.StatusConflict, "resource_in_use",
+		"thing platform is referenced by 1 row(s); see blockers")
 }
 
 // A create names the owner in metadata.owner, a project or a team; one that names only spec.projectId is owned by that project, as before team owners existed.

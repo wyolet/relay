@@ -24,6 +24,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/pkg/filter"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
@@ -554,6 +555,12 @@ func registerKind[T any](
 			var se huma.StatusError
 			if errors.As(err, &se) {
 				return nil, err
+			}
+			// The directory's foreign keys refused it: a row the scan above missed references it now, and the scan answers with that row.
+			if errors.Is(err, directory.ErrInvalid) && refuseInUse != nil {
+				if _, inUse := refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); inUse != nil {
+					return nil, inUse
+				}
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}
