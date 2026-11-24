@@ -332,14 +332,21 @@ func (w *pseudoWrite) rebindAccount(ctx context.Context, d Deps, v *pseudo.Accou
 	if held != nil {
 		pseudo.Record(ctx, held.Meta.ID, held)
 	}
-	out, rows, err := d.applyAccountPolicy(ctx, v.Account, &v.PolicyID)
+	var policyID *string
+	if !v.Unbinds() {
+		policyID = &v.PolicyID
+	}
+	out, rows, err := d.applyAccountPolicy(ctx, v.Account, policyID)
 	if err != nil {
 		return err
 	}
-	if out.Binding == nil || len(rows) == 0 {
-		return fmt.Errorf("account %q: binding it to policy %s wrote nothing", v.Account.Meta.Name, v.PolicyID)
+	if len(rows) == 0 || (policyID != nil && out.Binding == nil) {
+		return fmt.Errorf("account %q: setting its policy to %q wrote nothing", v.Account.Meta.Name, v.PolicyID)
 	}
-	v.Binding, v.Held = *out.Binding, held
+	if out.Binding != nil {
+		v.Binding = *out.Binding
+	}
+	v.Held = held
 	if held != nil && !out.PreviousBindingDeleted {
 		if v.Left, err = d.Stores.PolicyBinding.Get(ctx, held.Meta.ID); err != nil {
 			return err

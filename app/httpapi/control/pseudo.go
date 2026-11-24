@@ -39,10 +39,11 @@ import (
 
 // pseudoKinds registers each pseudo kind's route, by the name RELAY_PSEUDO_KINDS turns it on with.
 var pseudoKinds = map[string]func(huma.API, Deps, huma.Middlewares){
-	"agents":    registerPseudoAgent,
-	"access":    registerPseudoAccess,
-	"limits":    registerPseudoLimits,
-	"host-keys": registerPseudoHostKey,
+	"agents":         registerPseudoAgent,
+	"access":         registerPseudoAccess,
+	"limits":         registerPseudoLimits,
+	"host-keys":      registerPseudoHostKey,
+	"agent-removals": registerPseudoAgentRemoval,
 }
 
 // pseudoKindsAll in RELAY_PSEUDO_KINDS turns every pseudo kind on.
@@ -103,8 +104,9 @@ type PseudoIssue struct {
 // pseudoRefusal is a refused pseudo object: the usual error envelope, plus where in the body the refused part is and, for plan_issue, the issues.
 type pseudoRefusal struct {
 	httpapi.APIError
-	Pointer string        `json:"pointer,omitempty" doc:"JSON pointer of the part of the body the refused row came from, such as /spec/access/accountIds/1."`
-	Issues  []PseudoIssue `json:"issues,omitempty"  doc:"With plan_issue: each error the rows would raise in the plans that they do not have now."`
+	Pointer  string         `json:"pointer,omitempty" doc:"JSON pointer of the part of the body the refused row came from, such as /spec/access/accountIds/1."`
+	Issues   []PseudoIssue  `json:"issues,omitempty"  doc:"With plan_issue: each error the rows would raise in the plans that they do not have now."`
+	Blockers []blockerGroup `json:"blockers,omitempty" doc:"With resource_in_use: the rows that still reference the row a delete step refused on, grouped as its own delete call groups them."`
 }
 
 // codePlanIssue refuses rows that pass one by one but would raise a plan error together.
@@ -389,9 +391,12 @@ func (d Deps) pseudoError(ctx context.Context, err error) error {
 	var answered *pseudoRefusal
 	var ue *pseudo.UndoError
 	var oe *pseudo.OrganizationError
+	var changed *removalChanged
 	switch {
 	case errors.As(err, &answered):
 		return answered
+	case errors.As(err, &changed):
+		return changed
 	case errors.As(err, &ue):
 		slog.ErrorContext(ctx, "control: pseudo write failed and left behind what it wrote before its transaction", "left", ue.Left, "err", ue)
 		return refusal(huma.Error500InternalServerError(fmt.Sprintf("nothing was written, but removing what was written before the transaction failed: %s is left behind", strings.Join(ue.Left, ", "))), "")
@@ -447,6 +452,9 @@ const (
 // refusal puts err in the pseudo refusal envelope with pointer.
 func refusal(err error, pointer string) *pseudoRefusal {
 	var ae *httpapi.APIError
+	if inUse, ok := errors.AsType[*resourceInUseError](err); ok {
+		return &pseudoRefusal{APIError: inUse.APIError, Pointer: pointer, Blockers: inUse.Blockers}
+	}
 	if !errors.As(err, &ae) {
 		var se huma.StatusError
 		status := http.StatusInternalServerError

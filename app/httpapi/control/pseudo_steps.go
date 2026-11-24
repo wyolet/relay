@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
@@ -67,6 +68,8 @@ func (w *pseudoWrite) remove(ctx context.Context, tx *appcatalog.Stores, r pseud
 			w.audit = append(w.audit, dropped.rows...)
 		}
 		return nil
+	case *key.Key, *policy.Policy, *pseudo.Removal:
+		return w.removeRow(ctx, d, r)
 	}
 	return fmt.Errorf("no delete for a %T row", r.Value)
 }
