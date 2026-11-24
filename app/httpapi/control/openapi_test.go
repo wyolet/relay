@@ -2,6 +2,7 @@ package control
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -170,6 +171,13 @@ func TestControlOpenAPI(t *testing.T) {
 					t.Errorf("GET %s does not filter on %s", path, name)
 				}
 			}
+		}
+	})
+
+	t.Run("a disabled service account's keys answer 401", func(t *testing.T) {
+		p, _ := schemaProps(t, doc, "ServiceAccountSpec")["enabled"].(map[string]any)
+		if desc, _ := p["description"].(string); !strings.Contains(desc, "401") || strings.Contains(desc, "403") {
+			t.Errorf("ServiceAccountSpec.enabled: %q, want the 401 its keys answer", desc)
 		}
 	})
 }
