@@ -18,16 +18,21 @@ package oauth
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"syscall"
 	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/wyolet/relay/pkg/publicaddr"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
 	"github.com/wyolet/relay/secret"
 )
@@ -51,14 +56,63 @@ type Resolver struct {
 	sf    singleflight.Group
 	now   func() time.Time
 	skew  time.Duration
+	// client carries every JWT-bearer exchange; see exchangeClient.
+	client *http.Client
 }
 
 var _ secret.Resolver = (*Resolver)(nil)
 
+// Option configures a Resolver.
+type Option func(*Resolver)
+
+// AllowLoopback admits token URLs at loopback addresses, trusting tlsConfig
+// for them; every other refused address and every redirect stay refused. For
+// tests against a local token endpoint.
+func AllowLoopback(tlsConfig *tls.Config) Option {
+	return func(r *Resolver) { r.client = exchangeClient(true, tlsConfig) }
+}
+
 // NewResolver builds an OAuth resolver. vault provides the encrypted
 // persistence; cfg looks up the provider's flow config.
-func NewResolver(vault Vault, cfg ProviderConfigFunc) *Resolver {
-	return &Resolver{vault: vault, cfg: cfg, now: time.Now, skew: time.Minute}
+func NewResolver(vault Vault, cfg ProviderConfigFunc, opts ...Option) *Resolver {
+	r := &Resolver{vault: vault, cfg: cfg, now: time.Now, skew: time.Minute, client: exchangeClient(false, nil)}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
+}
+
+var errRedirect = errors.New("secret/oauth: the token endpoint answered with a redirect")
+
+// exchangeClient is the client of every JWT-bearer exchange. Its token URL is
+// caller-supplied, so it connects only to public addresses (checked on the
+// resolved IP when dialing), through no proxy, and follows no redirect.
+func exchangeClient(allowLoopback bool, tlsConfig *tls.Config) *http.Client {
+	control := publicaddr.DialControl
+	if allowLoopback {
+		control = func(network, address string, c syscall.RawConn) error {
+			if ap, err := netip.ParseAddrPort(address); err == nil && ap.Addr().Unmap().IsLoopback() {
+				return nil
+			}
+			return publicaddr.DialControl(network, address, c)
+		}
+	}
+	dialer := &net.Dialer{Timeout: prepareWait, Control: control}
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			TLSClientConfig:     tlsConfig,
+			TLSHandshakeTimeout: prepareWait,
+			ForceAttemptHTTP2:   true,
+			IdleConnTimeout:     90 * time.Second,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
+	}
+}
+
+// exchange mints a token from g over the guarded client, whatever client ctx carries.
+func (r *Resolver) exchange(ctx context.Context, g *sdkoauth.JWTBearer) (*sdkoauth.Token, error) {
+	return g.Token(context.WithValue(ctx, oauth2.HTTPClient, r.client))
 }
 
 // Resolve returns the current access token for an OAuth credential, refreshing
@@ -119,7 +173,11 @@ func (r *Resolver) refreshTok(ctx context.Context, ref secret.Ref, cur *sdkoauth
 	var nt *sdkoauth.Token
 	if cur.JWTBearer != nil {
 		var err error
-		if nt, err = cur.JWTBearer.Token(ctx); err != nil {
+		if nt, err = r.exchange(ctx, cur.JWTBearer); err != nil {
+			if refusedURL(err) {
+				// The dial error names the address the URL resolved to; the status a reader sees must not.
+				err = rejectedError{err}
+			}
 			return nil, false, fmt.Errorf("secret/oauth: token exchange %q: %w", ref.ID, err)
 		}
 	} else {
@@ -206,8 +264,12 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 // operator re-authorization (the provider rejected the grant itself, e.g.
 // a revoked or reused refresh token), as opposed to a transient
 // network/server failure worth retrying. A success without an access token is
-// never permanent here: a renewal retries it.
+// never permanent here: a renewal retries it. A token URL the exchange client
+// refuses (a non-public address, a redirect) is.
 func IsPermanent(err error) bool {
+	if refusedURL(err) {
+		return true
+	}
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) {
 		switch re.ErrorCode {
@@ -230,12 +292,21 @@ func IsPermanent(err error) bool {
 	return false
 }
 
-// rejectedError is the token endpoint's refusal of a new credential, worded for the operator: the HTTP status and the RFC 6749 error fields.
+func refusedURL(err error) bool {
+	return errors.Is(err, publicaddr.ErrRefused) || errors.Is(err, errRedirect)
+}
+
+// rejectedError is the refusal of a new credential, worded for the operator: for a token endpoint's answer, its HTTP status and RFC 6749 error fields; never an address the URL resolved to.
 type rejectedError struct{ err error }
 
 func (e rejectedError) Error() string {
-	if errors.Is(e.err, sdkoauth.ErrNoAccessToken) {
+	switch {
+	case errors.Is(e.err, sdkoauth.ErrNoAccessToken):
 		return sdkoauth.ErrNoAccessToken.Error()
+	case errors.Is(e.err, publicaddr.ErrRefused):
+		return "the token URL is refused: relay calls a token endpoint only at a public address"
+	case errors.Is(e.err, errRedirect):
+		return "the token endpoint answered with a redirect, which relay does not follow"
 	}
 	msg := "the token endpoint rejected the credential"
 	var re *oauth2.RetrieveError
@@ -266,7 +337,7 @@ const prepareWait = 10 * time.Second
 // stores the credential without a token, minted on the next resolve. Every
 // error is a refusal of the value, worded for the operator and never quoting
 // it.
-func PrepareValue(ctx context.Context, raw []byte) ([]byte, error) {
+func (r *Resolver) PrepareValue(ctx context.Context, raw []byte) ([]byte, error) {
 	cred, err := sdkoauth.ParseCredential(raw)
 	if err != nil {
 		return nil, err
@@ -277,7 +348,7 @@ func PrepareValue(ctx context.Context, raw []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, prepareWait)
 	defer cancel()
 	next := sdkoauth.Credential{JWTBearer: cred.JWTBearer}
-	tok, err := cred.JWTBearer.Token(ctx)
+	tok, err := r.exchange(ctx, cred.JWTBearer)
 	switch {
 	case err == nil:
 		next.Token = *tok

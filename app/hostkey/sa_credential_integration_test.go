@@ -20,8 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/oauth2"
-
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/internal/storage/storagetest"
@@ -75,12 +73,15 @@ func TestIntegration_ServiceAccountKeyFileCredential(t *testing.T) {
 	}))
 	defer rejecting.Close()
 
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client())
+	ctx := context.Background()
 	pool := storagetest.Pool(t)
 	store, sec := hostKeyStore(t, pool, masterKey)
-	sec.Registry.Register(secret.KindOAuth, pkgoauth.NewResolver(sec.Stored, func(string) (sdkoauth.ProviderConfig, bool) {
+	// The token endpoints are local TLS test servers, which the exchange client refuses unless told otherwise.
+	res := pkgoauth.NewResolver(sec.Stored, func(string) (sdkoauth.ProviderConfig, bool) {
 		return sdkoauth.ProviderConfig{}, false
-	}))
+	}, pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig))
+	sec.Registry.Register(secret.KindOAuth, res)
+	store.UseOAuth(res)
 	owner := meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
 
 	k := storedKey(owner, hostkey.ValueKindOAuth, serviceAccountKeyFile(t, srv.URL))
@@ -121,12 +122,18 @@ func TestIntegration_ServiceAccountKeyFileCredential(t *testing.T) {
 	}
 
 	refused := storedKey(owner, hostkey.ValueKindOAuth, serviceAccountKeyFile(t, rejecting.URL))
-	rejectCtx := context.WithValue(context.Background(), oauth2.HTTPClient, rejecting.Client())
-	err = store.Upsert(rejectCtx, refused)
+	err = store.Upsert(ctx, refused)
 	if _, ok := errors.AsType[*hostkey.ValueRefusedError](err); !ok || !pkgoauth.IsPermanent(err) {
 		t.Fatalf("a key the endpoint rejects: err = %v, want a permanent ValueRefusedError", err)
 	}
 	if k, err := store.Get(ctx, refused.Meta.ID); err != nil || k != nil {
 		t.Fatalf("a refused key left a row: %+v, %v", k, err)
+	}
+
+	// Without the test's admission, the same local endpoint is a refused token URL.
+	guarded := hostkey.NewStore(pool, sec.Registry, sec.Stored)
+	local := storedKey(owner, hostkey.ValueKindOAuth, serviceAccountKeyFile(t, srv.URL))
+	if err := guarded.Upsert(ctx, local); !pkgoauth.IsPermanent(err) || strings.Contains(fmt.Sprint(err), "127.0.0.1") {
+		t.Fatalf("a loopback token URL: err = %v, want a permanent refusal naming no address", err)
 	}
 }

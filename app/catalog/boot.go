@@ -208,6 +208,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 			return pc.ProviderConfig, true
 		})
 	secReg.Register(secret.KindOAuth, oauthResolver)
+	stores.HostKey.UseOAuth(oauthResolver)
 	stores.OAuthResolver = oauthResolver
 
 	return cat, stores, nil

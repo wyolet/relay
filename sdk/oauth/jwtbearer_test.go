@@ -212,6 +212,31 @@ func TestJWTBearerCutShortSuccessIsNotARefusal(t *testing.T) {
 	}
 }
 
+type refusingTransport struct{ err error }
+
+func (r refusingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, r.err }
+
+// The caller's transport and redirect policy decide, and their errors reach the caller intact.
+func TestJWTBearerKeepsTheClientsErrors(t *testing.T) {
+	refused := errors.New("refused by policy")
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Transport: refusingTransport{refused}})
+	if _, err := grant(t, "https://token.example.test").Token(ctx); !errors.Is(err, refused) {
+		t.Fatalf("transport refusal: err = %v, want it wrapped", err)
+	}
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	noRedirects := errors.New("redirect refused")
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return noRedirects }
+	ctx = context.WithValue(context.Background(), oauth2.HTTPClient, client)
+	if _, err := grant(t, srv.URL).Token(ctx); !errors.Is(err, noRedirects) {
+		t.Fatalf("redirect: err = %v, want the redirect policy's error", err)
+	}
+}
+
 func TestJWTBearerTokenReturnsByContextDeadline(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

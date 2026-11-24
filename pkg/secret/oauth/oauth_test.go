@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -272,32 +273,37 @@ func jwtGrant(tokenURL string) *sdkoauth.JWTBearer {
 	return &sdkoauth.JWTBearer{Issuer: "svc@example.test", PrivateKey: testKeyPEM(), TokenURL: tokenURL, Scopes: []string{"scope-a"}}
 }
 
-// tokenServer is a TLS token endpoint answering status with body, counting hits; ctx carries a client that trusts it.
-func tokenServer(t *testing.T, status int, body string) (*httptest.Server, context.Context, *int32) {
+// allowServer admits srv, a local TLS test server, to a resolver's exchanges.
+func allowServer(srv *httptest.Server) pkgoauth.Option {
+	return pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)
+}
+
+// tokenServer is a TLS token endpoint answering status with body, counting hits; allow admits it to a resolver.
+func tokenServer(t *testing.T, status int, body string) (srv *httptest.Server, allow pkgoauth.Option, hits *int32) {
 	t.Helper()
-	var hits int32
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&hits, 1)
+	hits = new(int32)
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(hits, 1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return srv, context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client()), &hits
+	return srv, allowServer(srv), hits
 }
 
 const mintedBody = `{"access_token":"minted","token_type":"Bearer","expires_in":3600}`
 
 func TestResolve_JWTBearerRenewsWithoutProviderConfigAndKeepsGrant(t *testing.T) {
-	srv, ctx, hits := tokenServer(t, http.StatusOK, mintedBody)
+	srv, allow, hits := tokenServer(t, http.StatusOK, mintedBody)
 	v := newMemVault()
 	v.putCredential("k1", sdkoauth.Credential{
 		Token:     sdkoauth.Token{AccessToken: "stale", Expiry: time.Now().Add(-time.Hour)},
 		JWTBearer: jwtGrant(srv.URL),
 	})
-	r := pkgoauth.NewResolver(v, cfgFunc("http://unused"))
+	r := pkgoauth.NewResolver(v, cfgFunc("http://unused"), allow)
 	// "service-account" has no provider config: the grant in the blob is all it needs.
-	got, err := r.Resolve(ctx, secret.Ref{Kind: secret.KindOAuth, ID: "k1", Provider: "service-account"})
+	got, err := r.Resolve(context.Background(), secret.Ref{Kind: secret.KindOAuth, ID: "k1", Provider: "service-account"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -326,11 +332,11 @@ func TestResolve_JWTBearerSingleFlight(t *testing.T) {
 		_, _ = w.Write([]byte(mintedBody))
 	}))
 	defer srv.Close()
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client())
+	ctx := context.Background()
 
 	v := newMemVault()
 	v.putCredential("k1", sdkoauth.Credential{JWTBearer: jwtGrant(srv.URL)})
-	r := pkgoauth.NewResolver(v, cfgFunc("http://unused"))
+	r := pkgoauth.NewResolver(v, cfgFunc("http://unused"), allowServer(srv))
 
 	const n = 8
 	results := make([]string, n)
@@ -367,9 +373,13 @@ func keyFile(tokenURL string) []byte {
 	return b
 }
 
+func prepare(raw []byte, opts ...pkgoauth.Option) ([]byte, error) {
+	return pkgoauth.NewResolver(nil, nil, opts...).PrepareValue(context.Background(), raw)
+}
+
 func TestPrepareValue_KeyFileStoresMintedToken(t *testing.T) {
-	srv, ctx, _ := tokenServer(t, http.StatusOK, mintedBody)
-	out, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
+	srv, allow, _ := tokenServer(t, http.StatusOK, mintedBody)
+	out, err := prepare(keyFile(srv.URL), allow)
 	if err != nil {
 		t.Fatalf("PrepareValue: %v", err)
 	}
@@ -383,8 +393,8 @@ func TestPrepareValue_KeyFileStoresMintedToken(t *testing.T) {
 }
 
 func TestPrepareValue_RejectedGrantFailsTheWrite(t *testing.T) {
-	srv, ctx, _ := tokenServer(t, http.StatusBadRequest, `{"error":"invalid_grant","error_description":"bad signature","echo":"BODY-ECHO"}`)
-	_, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
+	srv, allow, _ := tokenServer(t, http.StatusBadRequest, `{"error":"invalid_grant","error_description":"bad signature","echo":"BODY-ECHO"}`)
+	_, err := prepare(keyFile(srv.URL), allow)
 	if err == nil || !pkgoauth.IsPermanent(err) {
 		t.Fatalf("err = %v, want a permanent error", err)
 	}
@@ -394,8 +404,8 @@ func TestPrepareValue_RejectedGrantFailsTheWrite(t *testing.T) {
 }
 
 func TestPrepareValue_SuccessWithoutAccessTokenFailsTheWrite(t *testing.T) {
-	srv, ctx, _ := tokenServer(t, http.StatusOK, `{"id_token":"x","token_type":"Bearer"}`)
-	_, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
+	srv, allow, _ := tokenServer(t, http.StatusOK, `{"id_token":"x","token_type":"Bearer"}`)
+	_, err := prepare(keyFile(srv.URL), allow)
 	if !errors.Is(err, sdkoauth.ErrNoAccessToken) {
 		t.Fatalf("err = %v, want ErrNoAccessToken", err)
 	}
@@ -416,8 +426,8 @@ func TestPrepareValue_TransientFailureStoresGrantWithoutToken(t *testing.T) {
 		{"success that is not a JSON object", `<html>maintenance</html>`, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, ctx, _ := tokenServer(t, tc.status, tc.body)
-			out, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
+			srv, allow, _ := tokenServer(t, tc.status, tc.body)
+			out, err := prepare(keyFile(srv.URL), allow)
 			if err != nil {
 				t.Fatalf("PrepareValue: %v", err)
 			}
@@ -432,9 +442,48 @@ func TestPrepareValue_TransientFailureStoresGrantWithoutToken(t *testing.T) {
 	}
 }
 
+// The token URL is caller-supplied: a save refuses one at a non-public address (decided on the resolved IP, so a hostname counts too) or one that redirects, never reaching it, and the reason names no address.
+func TestPrepareValue_RefusesNonPublicAndRedirectingTokenURLs(t *testing.T) {
+	var reached int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "/token", http.StatusTemporaryRedirect)
+			return
+		}
+		atomic.AddInt32(&reached, 1)
+		_, _ = w.Write([]byte(mintedBody))
+	}))
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+
+	for _, tc := range []struct {
+		name, url string
+		opts      []pkgoauth.Option
+	}{
+		{"loopback IP", srv.URL + "/token", nil},
+		{"hostname resolving to loopback", fmt.Sprintf("https://localhost:%d/token", port), nil},
+		{"link-local metadata address", "https://169.254.169.254/token", nil},
+		{"private address", "https://10.0.0.1/token", nil},
+		{"redirect", srv.URL + "/redirect", []pkgoauth.Option{allowServer(srv)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepare(keyFile(tc.url), tc.opts...)
+			if err == nil || !pkgoauth.IsPermanent(err) {
+				t.Fatalf("err = %v, want a permanent refusal", err)
+			}
+			if msg := err.Error(); strings.Contains(msg, "127.0.0.1") || strings.Contains(msg, "::1") || strings.Contains(msg, "10.0.0.1") {
+				t.Fatalf("message names an address: %q", msg)
+			}
+		})
+	}
+	if n := atomic.LoadInt32(&reached); n != 0 {
+		t.Fatalf("the token endpoint was reached %d times, want 0", n)
+	}
+}
+
 func TestPrepareValue_TokenBlobPassesThrough(t *testing.T) {
 	in := []byte(`{"access_token":"at","refresh_token":"rt","expiry":"2099-01-01T00:00:00Z"}`)
-	out, err := pkgoauth.PrepareValue(context.Background(), in)
+	out, err := prepare(in)
 	if err != nil || string(out) != string(in) {
 		t.Fatalf("got %s, %v; want the input unchanged", out, err)
 	}

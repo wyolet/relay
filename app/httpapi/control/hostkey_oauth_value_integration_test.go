@@ -4,7 +4,6 @@ package control
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -16,13 +15,15 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"golang.org/x/oauth2"
 
 	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/meta"
+	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
+	sdkoauth "github.com/wyolet/relay/sdk/oauth"
+	"github.com/wyolet/relay/secret"
 )
 
 // An oauth value the operator got wrong answers 400 with the reason and never the value; an unreachable token endpoint still stores the key.
@@ -52,15 +53,15 @@ func TestHostKeyCreateRefusesABadOAuthValue(t *testing.T) {
 	_, err = cat.Hydrate(ctx, stores, appcatalog.BootstrapOptions{Pool: pool})
 	must(t, "hydrate", err)
 
+	// The token endpoint is a local TLS test server, which the exchange client refuses unless told otherwise.
+	oauthResolver := pkgoauth.NewResolver(stores.Stored, func(string) (sdkoauth.ProviderConfig, bool) { return sdkoauth.ProviderConfig{}, false },
+		pkgoauth.AllowLoopback(tokenEndpoint.Client().Transport.(*http.Transport).TLSClientConfig))
+	stores.Secrets.Register(secret.KindOAuth, oauthResolver)
+	stores.HostKey.UseOAuth(oauthResolver)
+
 	deps := mountDeps(t)
 	deps.Stores, deps.Catalog = stores, cat
 	r := chi.NewRouter()
-	// The token endpoint is a TLS test server; the write's exchange trusts it through the oauth2 client on the request context.
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			next.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), oauth2.HTTPClient, tokenEndpoint.Client())))
-		})
-	})
 	Mount(r, deps)
 
 	k, err := rsa.GenerateKey(rand.Reader, 2048)

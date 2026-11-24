@@ -11,11 +11,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"golang.org/x/oauth2"
 
 	"github.com/wyolet/relay/pkg/kv"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
@@ -69,12 +68,12 @@ func tokenEndpoint(hits *int, fail string) http.HandlerFunc {
 	}
 }
 
-func testRefresher(t *testing.T, tokenURL string) (*Refresher, *memVault, *[]string) {
+func testRefresher(t *testing.T, tokenURL string, opts ...Option) (*Refresher, *memVault, *[]string) {
 	t.Helper()
 	vault := &memVault{blobs: map[string][]byte{}}
 	res := NewResolver(vault, func(string) (sdkoauth.ProviderConfig, bool) {
 		return sdkoauth.ProviderConfig{ClientID: "c", AuthURL: tokenURL, TokenURL: tokenURL}, true
-	})
+	}, opts...)
 	var events []string
 	revoked := map[string]bool{}
 	source := func(context.Context) ([]secret.Ref, error) {
@@ -167,6 +166,45 @@ func storeDueGrant(t *testing.T, vault *memVault, id, tokenURL string) *sdkoauth
 	return grant
 }
 
+func allowLocal(srv *httptest.Server) Option {
+	return AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)
+}
+
+// A renewal refuses a token URL at a non-public address or one that redirects, without following it, and reports the key revoked without naming the address.
+func TestRefresher_RefusedTokenURLRevokes(t *testing.T) {
+	followed := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "/token", http.StatusTemporaryRedirect)
+			return
+		}
+		followed++
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name, path string
+		opts       []Option
+	}{
+		{"loopback address", "/token", nil},
+		{"redirect", "/redirect", []Option{allowLocal(srv)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, vault, _ := testRefresher(t, "http://unused", tc.opts...)
+			var cause error
+			f.hooks.OnRevoked = func(_ context.Context, _ string, err error) error { cause = err; return nil }
+			storeDueGrant(t, vault, "k1", srv.URL+tc.path)
+			f.sweep(context.Background())
+			if cause == nil || !IsPermanent(cause) || strings.Contains(cause.Error(), "127.0.0.1") {
+				t.Fatalf("revocation cause = %v, want a permanent refusal that names no address", cause)
+			}
+		})
+	}
+	if followed != 0 {
+		t.Fatalf("the token endpoint was reached %d times, want 0", followed)
+	}
+}
+
 // A renewal answered with success but no access token is retried, never reported revoked.
 func TestRefresher_SuccessWithoutAccessTokenRetries(t *testing.T) {
 	hits := 0
@@ -176,9 +214,9 @@ func TestRefresher_SuccessWithoutAccessTokenRetries(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id_token":"x","token_type":"Bearer"}`))
 	}))
 	defer srv.Close()
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client())
+	ctx := context.Background()
 
-	f, vault, notified := testRefresher(t, "http://unused")
+	f, vault, notified := testRefresher(t, "http://unused", allowLocal(srv))
 	storeDueGrant(t, vault, "k1", srv.URL)
 
 	f.sweep(ctx)
@@ -193,10 +231,10 @@ func TestRefresher_RenewsDueJWTBearerCredential(t *testing.T) {
 	hits := 0
 	srv := httptest.NewTLSServer(tokenEndpoint(&hits, ""))
 	defer srv.Close()
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client())
+	ctx := context.Background()
 
 	// The provider config testRefresher wires points at an http URL; a grant never consults it.
-	f, vault, notified := testRefresher(t, "http://unused")
+	f, vault, notified := testRefresher(t, "http://unused", allowLocal(srv))
 	grant := storeDueGrant(t, vault, "k1", srv.URL)
 
 	f.sweep(ctx)

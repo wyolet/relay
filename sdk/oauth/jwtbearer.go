@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -59,7 +60,8 @@ func (g JWTBearer) Validate() error {
 // bounded by ctx's deadline and at most 15s. Errors carry the token endpoint's
 // HTTP status and RFC 6749 error fields (as *oauth2.RetrieveError), never its
 // response body. An *http.Client set on ctx under oauth2.HTTPClient lends its
-// Transport. A success response whose body is a JSON object without an access
+// Transport and CheckRedirect; their own errors are returned wrapped, so
+// errors.Is sees them. A success response whose body is a JSON object without an access
 // token is ErrNoAccessToken.
 func (g JWTBearer) Token(ctx context.Context) (*Token, error) {
 	if err := g.Validate(); err != nil {
@@ -73,11 +75,22 @@ func (g JWTBearer) Token(ctx context.Context) (*Token, error) {
 		return nil, context.DeadlineExceeded
 	}
 	status := &statusRecorder{next: http.DefaultTransport}
-	if base, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && base != nil && base.Transport != nil {
-		status.next = base.Transport
-	}
 	// jwt.Config posts without the request context, so only the client's timeout bounds the call.
 	hc := &http.Client{Timeout: wait, Transport: status}
+	if base, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && base != nil {
+		if base.Transport != nil {
+			status.next = base.Transport
+		}
+		if base.CheckRedirect != nil {
+			hc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+				err := base.CheckRedirect(req, via)
+				if !errors.Is(err, http.ErrUseLastResponse) {
+					status.err = err
+				}
+				return err
+			}
+		}
+	}
 	cfg := &jwt.Config{
 		Email:        g.Issuer,
 		Subject:      g.Subject,
@@ -93,6 +106,10 @@ func (g JWTBearer) Token(ctx context.Context) (*Token, error) {
 			return nil, ErrNoAccessToken
 		}
 		return nil, errUnreadableSuccess
+	}
+	if err != nil && status.err != nil {
+		// jwt.Config flattens transport errors to text; the client's own error keeps its chain.
+		return nil, fmt.Errorf("oauth: token request failed: %w", status.err)
 	}
 	if err != nil {
 		return nil, withoutBody(err)
@@ -119,11 +136,14 @@ type statusRecorder struct {
 	next http.RoundTripper
 	code int
 	body *recordedBody
+	// err is the transport's or the redirect policy's own error, if any.
+	err error
 }
 
 func (s *statusRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
 	resp, err := s.next.RoundTrip(r)
 	if err != nil {
+		s.err = err
 		return nil, err
 	}
 	s.code = resp.StatusCode

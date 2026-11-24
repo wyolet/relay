@@ -41,13 +41,24 @@ type Store struct {
 	q        *gen.Queries
 	resolver *secret.Registry
 	stored   *stored.Backend
+	oauth    ValuePreparer
+}
+
+// ValuePreparer checks a new oauth value and returns what to store; see pkg/secret/oauth.Resolver.PrepareValue.
+type ValuePreparer interface {
+	PrepareValue(ctx context.Context, raw []byte) ([]byte, error)
 }
 
 // NewStore constructs a Store over db. Pass the shared secret Registry + the
 // stored backend (see app/secret.Wire); backend may be nil to run env-only.
+// New oauth values are checked by a resolver with the default exchange client
+// until UseOAuth names the one the registry resolves with.
 func NewStore(db storage.DB, resolver *secret.Registry, backend *stored.Backend) *Store {
-	return &Store{db: db, q: gen.New(db), resolver: resolver, stored: backend}
+	return &Store{db: db, q: gen.New(db), resolver: resolver, stored: backend, oauth: pkgoauth.NewResolver(nil, nil)}
 }
+
+// UseOAuth makes p check new oauth values.
+func (s *Store) UseOAuth(p ValuePreparer) { s.oauth = p }
 
 // SecretScope is the scope a key's stored value is sealed under: its owner.
 func SecretScope(o meta.Owner) string {
@@ -131,7 +142,7 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
 		}
 		if k.Spec.ValueFrom.Kind == ValueKindOAuth && k.Spec.Value != "" {
-			prepared, err := pkgoauth.PrepareValue(ctx, []byte(k.Spec.Value))
+			prepared, err := s.oauth.PrepareValue(ctx, []byte(k.Spec.Value))
 			if err != nil {
 				return &ValueRefusedError{Err: err}
 			}
