@@ -94,6 +94,8 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		Adapters:       specs,
 		HostHealth:     hostHealth,
 		PlanView:       planView,
+		PlanCheck:      plan.NewCheck(cfg.Authz == config.AuthzRBAC, cfg.PlanCheckTimeout),
+		PseudoKinds:    cfg.PseudoKinds,
 		Counters:       counters,
 		PublicURL:      cfg.PublicURL,
 		RuntimeConfig:  runtimeConfig(cfg),

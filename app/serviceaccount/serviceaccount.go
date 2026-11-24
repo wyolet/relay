@@ -37,6 +37,14 @@ func (s *ServiceAccount) StampOwner() {
 	s.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: s.Spec.ProjectID}
 }
 
+// SetOwner places the service account under o, filling the spec field the owner mirrors; Validate refuses an owner a service account cannot have.
+func (s *ServiceAccount) SetOwner(o meta.Owner) {
+	s.Meta.Owner = o
+	if o.Kind == meta.OwnerProject {
+		s.Spec.ProjectID = o.ID
+	}
+}
+
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
 //   - Owner.Kind is project; Owner.ID, when set, equals Spec.ProjectID.
 func (s *ServiceAccount) Validate() error {

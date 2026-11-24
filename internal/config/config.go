@@ -169,6 +169,9 @@ type Config struct {
 	// PlanCheckTimeout bounds how long the control plane checks a set of rows against the plans before writing it, the wait for another check included (RELAY_PLAN_CHECK_TIMEOUT_MS, default 5000); past it the write answers 503.
 	PlanCheckTimeout time.Duration
 
+	// PseudoKinds are the pseudo kinds whose control routes are served (RELAY_PSEUDO_KINDS: comma-separated kind names such as agents, or all; empty serves none), lowercased.
+	PseudoKinds []string
+
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
@@ -554,6 +557,11 @@ func Load() (*Config, error) {
 		return nil, err
 	} else {
 		cfg.PlanCheckTimeout = time.Duration(v) * time.Millisecond
+	}
+	for _, k := range strings.Split(os.Getenv("RELAY_PSEUDO_KINDS"), ",") {
+		if t := strings.ToLower(strings.TrimSpace(k)); t != "" {
+			cfg.PseudoKinds = append(cfg.PseudoKinds, t)
+		}
 	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they take a floor of 0 rather than envPositiveInt.

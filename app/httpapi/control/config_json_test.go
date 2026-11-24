@@ -51,16 +51,20 @@ func TestConfigJSON(t *testing.T) {
 	}
 	wired := static
 	wired.Features = map[string]bool{"beta": true, "tokens": true, "users": true, "audit": true, "accessReview": true}
+	wired.PseudoKinds = []string{"agents"}
+	off := map[string]bool{"tokens": false, "users": false, "audit": false, "accessReview": false}
 
 	for _, tc := range []struct {
 		name string
 		d    Deps
 		want RuntimeConfig
 	}{
-		{"nothing wired", Deps{}, RuntimeConfig{Version: httpapi.Version, Features: map[string]bool{"tokens": false, "users": false, "audit": false, "accessReview": false}}},
+		{"nothing wired", Deps{}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}}},
 		{"a signer without a key mints nothing", Deps{TokenSigner: &TokenSigner{}, RuntimeConfig: RuntimeConfig{Features: map[string]bool{"tokens": true}}},
-			RuntimeConfig{Version: httpapi.Version, Features: map[string]bool{"tokens": false, "users": false, "audit": false, "accessReview": false}}},
-		{"everything wired", Deps{RuntimeConfig: static, TokenSigner: signer, Users: &user.Store{}, AuditReader: staticAudit{}, Authz: audit.Authorizer{Inner: authz.RBAC{}}}, wired},
+			RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}}},
+		{"everything wired", Deps{RuntimeConfig: static, TokenSigner: signer, Users: &user.Store{}, AuditReader: staticAudit{}, Authz: audit.Authorizer{Inner: authz.RBAC{}}, PseudoKinds: []string{"agents"}}, wired},
+		{"every pseudo kind, a name no kind has left out", Deps{PseudoKinds: []string{"all", "gadgets"}}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{"agents"}}},
+		{"only names no kind has", Deps{PseudoKinds: []string{"gadgets"}}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if diff := cmp.Diff(tc.want, runtimeConfig(t, tc.d)); diff != "" {

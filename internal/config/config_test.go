@@ -150,6 +150,7 @@ func TestLoad_Values(t *testing.T) {
 		{"limiter hybrid named", map[string]string{"RELAY_LIMITER": "hybrid"}, "", func(c *Config) {}},
 		{"plan cache", map[string]string{"RELAY_PLAN_CELL_IDLE_S": "1", "RELAY_PLAN_RESYNC_S": "0"}, "", func(c *Config) { c.PlanCellIdle, c.PlanResync = time.Second, 0 }},
 		{"plan check timeout", map[string]string{"RELAY_PLAN_CHECK_TIMEOUT_MS": "250"}, "", func(c *Config) { c.PlanCheckTimeout = 250 * time.Millisecond }},
+		{"pseudo kinds are split, trimmed and lowercased", map[string]string{"RELAY_PSEUDO_KINDS": " Agents , ,host-keys,"}, "", func(c *Config) { c.PseudoKinds = []string{"agents", "host-keys"} }},
 		{"stream timers at zero and usage off", map[string]string{"RELAY_STREAM_KEEPALIVE_S": "0", "RELAY_PROXY_BODY_IDLE_S": "0", "RELAY_STREAM_IDLE_TIMEOUT_S": "0", "RELAY_STREAM_USAGE": "False"}, "",
 			func(c *Config) {
 				c.StreamKeepAlive, c.ProxyBodyIdle, c.StreamIdleTimeout, c.StreamUsage = 0, 0, 0, false
