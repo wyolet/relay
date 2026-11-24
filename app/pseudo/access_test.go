@@ -67,6 +67,8 @@ func (w *accessWorld) reads() AccessReads {
 		OwnerName: "search",
 		Labelled:  []*pool.Pool{w.labelledA, w.labelledB},
 		LinkedBy:  map[string][]string{plainID: {"own"}, labelledAID: {"own"}, labelledBID: {"own"}},
+
+		LabelledDeletable: map[string]bool{labelledAID: true, labelledBID: true},
 	}
 }
 

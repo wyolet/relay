@@ -38,7 +38,11 @@ func (d Deps) accessReads(ctx context.Context, body pseudo.Access) (in pseudo.Ac
 		}
 		in.Accounts, in.HostNames, in.KeylessHosts, in.Shares, upstreamAccounts = ar.accounts, ar.hostNames, ar.keyless, ar.shares, ar.upstream
 	}
-	if in.Labelled, in.LinkedBy, err = d.labelledPools(ctx, acc.Meta.ID); err != nil {
+	policyID := ""
+	if p := in.Policy.Policy; p != nil {
+		policyID = p.Meta.ID
+	}
+	if in.Labelled, in.LinkedBy, in.LabelledDeletable, err = d.labelledPools(ctx, acc, policyID); err != nil {
 		return in, nil, err
 	}
 	drawn := slices.Clone(listed)
@@ -72,35 +76,47 @@ func (d Deps) accessReads(ctx context.Context, body pseudo.Access) (in pseudo.Ac
 	return in, poolNames, d.recordUpstream(ctx, upstreamAccounts, upstreamKeys)
 }
 
-// labelledPools are the pools labelled pseudo.AccessLabel=accountID the caller may see, and the ids of every policy linking each, seen or not, by pool id.
-func (d Deps) labelledPools(ctx context.Context, accountID string) ([]*pool.Pool, map[string][]string, error) {
+// labelledPools are the pools the access kind made for acc: labelled pseudo.AccessLabel=<acc's id>, owned by acc's scope, seen by the caller and linked by no policy but policyID (the one acc is under, "" for none), with the ids of every policy linking each, seen or not, by pool id, and those the caller may delete. A label anyone who makes a pool can write, so a labelled pool that fails any of these is not the kind's and is left alone.
+func (d Deps) labelledPools(ctx context.Context, acc *account.Account, policyID string) ([]*pool.Pool, map[string][]string, map[string]bool, error) {
 	pools, err := d.Stores.Pool.List(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	var labelled []*pool.Pool
-	ids := map[string]bool{}
+	candidates := map[string]*pool.Pool{}
 	for _, p := range pools {
-		if p.Meta.Labels[pseudo.AccessLabel] == accountID && visibleTo(ctx, d.Authz, "pool", p.Meta.ID, p.Meta.Owner) {
-			pseudo.Record(ctx, p.Meta.ID, p)
-			labelled = append(labelled, p)
-			ids[p.Meta.ID] = true
+		if p.Meta.Labels[pseudo.AccessLabel] == acc.Meta.ID && p.Meta.Owner == acc.Meta.Owner && visibleTo(ctx, d.Authz, "pool", p.Meta.ID, p.Meta.Owner) {
+			candidates[p.Meta.ID] = p
 		}
 	}
 	linkedBy := map[string][]string{}
-	if len(labelled) == 0 {
-		return nil, linkedBy, nil
+	if len(candidates) == 0 {
+		return nil, linkedBy, nil, nil
 	}
 	policies, err := d.Stores.Policy.List(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, p := range policies {
 		for _, id := range p.Spec.PoolIDs {
-			if ids[id] {
+			if candidates[id] != nil {
 				linkedBy[id] = append(linkedBy[id], p.Meta.ID)
 			}
 		}
 	}
-	return labelled, linkedBy, nil
+	pd := d
+	pd.Authz = unaudited(d.Authz)
+	checks := poolChecks(pd)
+	var labelled []*pool.Pool
+	deletable := map[string]bool{}
+	for _, p := range pools {
+		if candidates[p.Meta.ID] == nil || slices.ContainsFunc(linkedBy[p.Meta.ID], func(id string) bool { return id != policyID }) {
+			continue
+		}
+		pseudo.Record(ctx, p.Meta.ID, p)
+		labelled = append(labelled, p)
+		if deletable[p.Meta.ID], err = probeAllowed(mayDeleteRow(ctx, checks, &p.Meta, p)); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return labelled, linkedBy, deletable, nil
 }

@@ -38,9 +38,10 @@ type AccessReads struct {
 	Shares  map[string]*account.Account
 	// OwnerName is the name of the target's scope; a share's name carries it.
 	OwnerName string
-	// Labelled are the pools labelled AccessLabel=<target account id> the caller may see; LinkedBy are the ids of the policies linking each, by pool id.
-	Labelled []*pool.Pool
-	LinkedBy map[string][]string
+	// Labelled are the pools this kind made for the target: labelled AccessLabel=<target account id>, owned by the target's scope, seen by the caller and linked by no policy but the one the account is under. LinkedBy are the ids of the policies linking each, by pool id; LabelledDeletable those the caller may delete.
+	Labelled          []*pool.Pool
+	LinkedBy          map[string][]string
+	LabelledDeletable map[string]bool
 	// HiddenPools are the pools the policy links that the caller may not see, by id.
 	HiddenPools map[string]bool
 }
@@ -54,7 +55,7 @@ type AccessChange struct {
 	HiddenPoolsKept int
 }
 
-// ExpandAccess returns the steps that set the target's access: the shares access.accountIds needs, one pool per host (the labelled pool for that host updated in place when only the policy changed in place links it, else a new one labelled AccessLabel), the policy step setting the policy's pools to poolIds then those pools (none with everyCredential) and its models to access.models, then the delete of each labelled pool the policy no longer links that nothing else links. A pool link the caller may not see is kept where it was in the policy's order, in place and in a copy, as an update of the policy keeps the links it holds.
+// ExpandAccess returns the steps that set the target's access: the shares access.accountIds needs, one pool per host (the labelled pool for that host updated in place when only the policy changed in place links it, else a new one labelled AccessLabel), the policy step setting the policy's pools to poolIds then those pools (none with everyCredential) and its models to access.models, then the delete of each labelled pool the policy no longer links that nothing else links and the caller may delete; one the caller may not delete is only unlinked. A pool link the caller may not see is kept where it was in the policy's order, in place and in a copy, as an update of the policy keeps the links it holds.
 func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
 	if err := CheckAccess(body); err != nil {
 		return AccessChange{}, err
@@ -94,7 +95,7 @@ func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
 	}
 	rows := append(x.rows, c.Rows...)
 	for _, p := range in.Labelled {
-		if !slices.Contains(poolIDs, p.Meta.ID) && x.onlyInPlace(p) {
+		if !slices.Contains(poolIDs, p.Meta.ID) && x.onlyInPlace(p) && in.LabelledDeletable[p.Meta.ID] {
 			rows = append(rows, Row{Kind: "pool", Pointer: "/spec/access", Meta: &p.Meta, Value: p, Op: OpDelete})
 		}
 	}

@@ -29,8 +29,8 @@ type CurrentPool struct {
 	Labelled       bool     `json:"labelled"       doc:"True for a pool POST /pseudo-access made for this account (label access-for), which it updates or deletes on a later call; any other pool is only linked or unlinked."`
 }
 
-// policyCurrent is p as the caller may see it; nil for no policy. accountID is the target's account, whose labelled pools are flagged.
-func (d Deps) policyCurrent(ctx context.Context, p *policy.Policy, accountID string) (*PolicyCurrent, error) {
+// policyCurrent is p as the caller may see it; nil for no policy. labelled are the pools POST /pseudo-access made for the target's account (labelledPools), which are flagged.
+func (d Deps) policyCurrent(ctx context.Context, p *policy.Policy, labelled map[string]bool) (*PolicyCurrent, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -47,7 +47,7 @@ func (d Deps) policyCurrent(ctx context.Context, p *policy.Policy, accountID str
 			out.HiddenPools++
 			continue
 		}
-		cp := CurrentPool{ID: pl.Meta.ID, Name: pl.Meta.Name, Host: RowRef{ID: pl.Spec.HostID}, Accounts: []RowRef{}, Labelled: pl.Meta.Labels[pseudo.AccessLabel] == accountID}
+		cp := CurrentPool{ID: pl.Meta.ID, Name: pl.Meta.Name, Host: RowRef{ID: pl.Spec.HostID}, Accounts: []RowRef{}, Labelled: labelled[pl.Meta.ID]}
 		if h, err := d.Stores.Host.Get(ctx, pl.Spec.HostID); err == nil && h != nil {
 			cp.Host.Name = h.Meta.Name
 		}
@@ -90,6 +90,17 @@ func (d Deps) readPrefill(ctx context.Context, t pseudo.Target) (pseudo.PolicyCa
 		_, err := pseudo.ChangePolicy(in, func(*policy.Spec) {}, "/spec/target")
 		return c, nil, policyStepError(err)
 	}
-	cur, err := d.policyCurrent(ctx, in.Policy, in.Account.Meta.ID)
+	if in.Policy == nil {
+		return c, nil, nil
+	}
+	pools, _, _, err := d.labelledPools(ctx, in.Account, in.Policy.Meta.ID)
+	if err != nil {
+		return "", nil, err
+	}
+	labelled := map[string]bool{}
+	for _, p := range pools {
+		labelled[p.Meta.ID] = true
+	}
+	cur, err := d.policyCurrent(ctx, in.Policy, labelled)
 	return c, cur, err
 }
