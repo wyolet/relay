@@ -128,7 +128,7 @@ type UsageFilterInput struct {
 	StatusMin     int      `query:"status_min" doc:"Minimum HTTP status to include."`
 	StatusMax     int      `query:"status_max" doc:"Maximum HTTP status to include."`
 
-	HostKeyID      []string `query:"host_key_id,explode" doc:"Match any of the given HostKey.metadata.id values."`
+	HostKeyID      []string `query:"host_key_id,explode" doc:"Match any of the given host_key_id values: hashes of the upstream credential's value, not HostKey.metadata.id."`
 	RequestedModel []string `query:"requested_model,explode" doc:"Match any of the model strings as the caller sent them."`
 	Model          []string `query:"model,explode" doc:"Match any of the given model slugs (event-time metadata.name, denormalized)."`
 	Host           []string `query:"host,explode" doc:"Match any of the given host slugs (event-time metadata.name, denormalized)."`
