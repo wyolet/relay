@@ -247,7 +247,7 @@ func (cp *CallerPlan) upstreamChecks(m *model.Model) []UpstreamCheck {
 		if !b.IsEnabled() || !ok || !servesRequests(h) {
 			continue
 		}
-		_, priced := bindingPricing(snap, b)
+		_, priced := snap.PricingForBinding(b)
 		for _, p := range cp.Pools {
 			if p.Host.Meta.ID != h.Meta.ID {
 				continue

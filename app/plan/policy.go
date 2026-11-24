@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/wyolet/relay/app/account"
@@ -32,9 +33,11 @@ type CatalogIndex struct {
 
 func (c *controllers) catalogIndex(tx *engine.Txn, _ string) error {
 	models := engine.Members[model.Model](tx)
+	// Disabled sheets are left out as the live catalog leaves them out, so a binding resolves the sheet it is costed with: a disabled one never shadows an enabled one, and a binding naming one falls back to the host's.
+	pricings := slices.DeleteFunc(engine.Members[pricing.Pricing](tx), func(p *pricing.Pricing) bool { return !p.IsEnabled() })
 	snap := appcatalog.BuildCatalog(
 		engine.Members[provider.Provider](tx), engine.Members[host.Host](tx), models,
-		engine.Members[pricing.Pricing](tx), engine.Members[binding.Binding](tx), engine.Members[overlay.Overlay](tx),
+		pricings, engine.Members[binding.Binding](tx), engine.Members[overlay.Overlay](tx),
 	)
 	idx := &CatalogIndex{Snap: snap, bindingsByHost: map[string][]*binding.Binding{}}
 	for _, b := range snap.AllBindings() {
@@ -198,7 +201,7 @@ func warnUnpriced(tx *engine.Txn, src engine.Ref, ep *ExpandedPolicy, hosts map[
 			if ep.Grant != nil && !ep.Grant.Allows(prov, m, h.Meta.Name) {
 				continue
 			}
-			if _, priced := bindingPricing(idx.Snap, b); priced {
+			if _, priced := idx.Snap.PricingForBinding(b); priced {
 				continue
 			}
 			if n++; first == "" || b.Meta.Name < first {

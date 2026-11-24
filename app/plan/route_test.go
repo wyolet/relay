@@ -8,8 +8,10 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 func wantHops(t *testing.T, r *Route, want ...[]string) {
@@ -314,12 +316,50 @@ func TestRoute_DisabledPricingUnderBudgetIsRefusedAndFlagged(t *testing.T) {
 		t.Fatal("an enabled pricing's hop is marked unpriced")
 	}
 
-	// Without a budget the disabled pricing's binding serves, marked unpriced.
+	// Without a budget the disabled pricing's binding serves unpriced, naming no pricing.
 	apply(h, pr)
 	del(h, KindPolicyBinding, pb.Meta.ID)
-	if hop := h.route(b.key, "m2").Hops[0]; hop.Priced {
-		t.Fatal("a disabled pricing's hop is marked priced")
+	if hop := h.route(b.key, "m2").Hops[0]; hop.Priced || hop.Pricing != nil {
+		t.Fatalf("a disabled pricing's hop: priced %v, pricing %v; want unpriced and none", hop.Priced, hop.Pricing)
 	}
+	if u := h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed("m2"); u.Refused != nil || u.Pricing != nil {
+		t.Fatalf("a disabled pricing's unkeyed route = %+v, want served naming no pricing", u)
+	}
+}
+
+// A disabled sheet never stands in for an enabled one: not when it is the later row covering the same model and host, nor when the binding names it while an enabled sheet covers the pair. Either binding is priced and charged under a budget.
+func TestRoute_DisabledPricingNeverShadowsAnEnabledOne(t *testing.T) {
+	b := newBasic()
+	shadowed, named := b.w.model(b.prov, "shadowed"), b.w.model(b.prov, "named")
+	b.w.bind(shadowed, b.hostA)
+	enabledShadowed := b.w.price(shadowed, b.hostA)
+	b.w.price(shadowed, b.hostA).Spec.Enabled = boolp(false)
+	draft := b.w.price(named, b.hostA)
+	draft.Spec.Enabled = boolp(false)
+	enabledNamed := b.w.price(named, b.hostA)
+	b.w.bind(named, b.hostA).Spec.PricingID = draft.Meta.ID
+	bud := b.w.budget("50")
+	p := b.w.policy("capped", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	b.w.bindPolicy(p, b.w.teamAccount(b.team))
+	h := b.w.start(t)
+
+	for ref, want := range map[string]*pricing.Pricing{"shadowed": enabledShadowed, "named": enabledNamed} {
+		r := h.route(b.key, ref)
+		if r.Refused != nil {
+			t.Fatalf("%s refused: %v", ref, r.Refused)
+		}
+		hop := r.Hops[0]
+		if !hop.Priced || hop.Pricing == nil || hop.Pricing.Meta.ID != want.Meta.ID {
+			t.Fatalf("%s: priced %v with %v, want the enabled sheet %s", ref, hop.Priced, hop.Pricing, want.Meta.Name)
+		}
+		if cost, _, ok := hop.Pricing.CostNanos(usage.Tokens{"input": 1_000_000}); !ok || cost == 0 {
+			t.Errorf("%s: cost %d (ok %v), want a charge", ref, cost, ok)
+		}
+		if u := h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed(ref); u.Refused != nil || u.Pricing == nil || u.Pricing.Meta.ID != want.Meta.ID {
+			t.Fatalf("%s unkeyed = %+v, want served with the enabled sheet", ref, u)
+		}
+	}
+	h.wantIssue(KindPolicy, p.Meta.ID, CodeUnpricedUnderBudget, false)
 }
 
 func TestRoute_UpstreamBudgetRefusesUnpricedOnThatSlotOnly(t *testing.T) {

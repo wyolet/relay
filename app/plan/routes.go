@@ -204,7 +204,7 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 				best.note(stepNoCredentials, &Refusal{Code: CodeNoCredentials, Message: "host " + h.Meta.Name + " needs no key and is reached only through a pool"})
 				continue
 			}
-			pr, priced := bindingPricing(snap, b)
+			pr, priced := snap.PricingForBinding(b)
 			if r := cp.unpriced(b, priced); r != nil {
 				best.note(stepUnpriced, r)
 				continue
@@ -320,12 +320,6 @@ func (b *refusalAt) note(step int, r *Refusal) {
 // servesRequests reports whether requests are routed to h: it is enabled and has an upstream to dial.
 func servesRequests(h *host.Host) bool { return h.IsEnabled() && h.Routable() }
 
-// bindingPricing is b's pricing and whether it prices requests: a disabled sheet costs nothing, so it counts as none.
-func bindingPricing(snap *appcatalog.Snapshot, b *binding.Binding) (*pricing.Pricing, bool) {
-	pr, ok := snap.PricingForBinding(b)
-	return pr, ok && pr.IsEnabled()
-}
-
 // served is one binding that can serve the model, at its effective host.
 type served struct {
 	b       *binding.Binding
@@ -356,7 +350,7 @@ func (t *RouteTable) route(models []*model.Model, sn *model.Snapshot, pinHostID 
 				best.note(stepModelNotAllowed, cp.notAllowed(i))
 				continue
 			}
-			pr, priced := bindingPricing(snap, b)
+			pr, priced := snap.PricingForBinding(b)
 			cands = append(cands, served{b: b, h: h, pricing: pr, priced: priced})
 		}
 		if len(cands) == 0 {
