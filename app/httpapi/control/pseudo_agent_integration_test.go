@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -285,6 +286,65 @@ func TestPseudoAgent_PolicyAndKey(t *testing.T) {
 	if diff := cmp.Diff(wantActions, actions); diff != "" {
 		t.Errorf("audit (-want +got):\n%s", diff)
 	}
+}
+
+// A write is audited as each row's create; a refused request as one row naming the request and its refusal; a dry run, refused or not, as nothing.
+func TestPseudoAgent_Audit(t *testing.T) {
+	type entry struct {
+		Action, Kind, Status string
+		Code                 int
+	}
+	created := func(kind string) entry {
+		return entry{authz.Plural(kind) + ".create", kind, audit.StatusAllowed, http.StatusCreated}
+	}
+	for _, tc := range []struct {
+		name, deny string
+		dry, empty bool
+		want       []entry
+	}{
+		{name: "made", want: []entry{created("service-account"), created("account"), created("pool"), created("policy"), created("policy-binding"), created("key")}},
+		{name: "a row refused", deny: "pools.create", want: []entry{{"pseudo-agents.create", "pseudo-agent", audit.StatusDenied, http.StatusForbidden}}},
+		{name: "refused by the plans", empty: true, want: []entry{{"pseudo-agents.create", "pseudo-agent", audit.StatusError, http.StatusUnprocessableEntity}}},
+		{name: "a dry run", dry: true},
+		{name: "a refused dry run", deny: "pools.create", dry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &auditSink{}
+			em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
+			w := newPseudoAgentWorld(t, func(d *Deps) { d.Audit = em })
+			w.loadPlans(t)
+			*w.denied = tc.deny
+			acct := w.teamTwoAcct
+			if tc.empty {
+				acct = w.emptyAcct
+			}
+			w.send("bob", http.MethodPost, pseudoPath(tc.dry), mustJSON(t, w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{acct.Meta.ID}}, "key": map[string]any{}})))
+			em.Close()
+			var got []entry
+			for _, ev := range sink.all() {
+				if strings.HasSuffix(ev.Request.Path, "/pseudo-agents") {
+					got = append(got, entry{ev.Action, ev.Resource.Kind, ev.Outcome.Status, ev.Outcome.Code})
+				}
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("audit (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func pseudoPath(dry bool) string {
+	if dry {
+		return "/pseudo-agents?dryRun=true"
+	}
+	return "/pseudo-agents"
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	must(t, "body", err)
+	return string(raw)
 }
 
 func (w *pseudoAgentWorld) holdingOf(t *testing.T, accountID string) *policybinding.PolicyBinding {

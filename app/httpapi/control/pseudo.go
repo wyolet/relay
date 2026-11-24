@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
 	"slices"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/audit"
@@ -203,14 +206,38 @@ func (d Deps) runPseudo(ctx context.Context, expand pseudo.ExpandFunc, dryRun bo
 	writer := pseudo.Writer{Stores: d.Stores, Check: d.PlanCheck, View: d.PlanView}
 	rows, err := writer.Run(ctx, expand, w.create, dryRun)
 	if err != nil {
-		return nil, nil, d.pseudoError(ctx, err)
+		err = d.pseudoError(ctx, err)
 	}
-	if dryRun {
+	switch {
+	case dryRun:
 		audit.Discard(ctx)
-	} else {
+	case err != nil:
+		audit.RecordEach(ctx, []audit.Row{refusedRow(ctx, err)})
+	default:
 		audit.RecordEach(ctx, w.audit)
 	}
+	if err != nil {
+		return nil, nil, err
+	}
 	return w, rows, nil
+}
+
+// refusedRow is the one audit row of a refused pseudo request: it names the request (pseudo-agents.create, from the route) rather than the row it got to, since nothing was written; a refused grant is denied, any other refusal an error.
+func refusedRow(ctx context.Context, refused error) audit.Row {
+	code := http.StatusInternalServerError
+	var se huma.StatusError
+	if errors.As(refused, &se) {
+		code = se.GetStatus()
+	}
+	plural := "pseudo"
+	if rc := chi.RouteContext(ctx); rc != nil && rc.RoutePattern() != "" {
+		plural = path.Base(rc.RoutePattern())
+	}
+	status := audit.StatusError
+	if code == http.StatusUnauthorized || code == http.StatusForbidden {
+		status = audit.StatusDenied
+	}
+	return audit.Row{Action: plural + ".create", Resource: audit.Resource{Kind: strings.TrimSuffix(plural, "s")}, Status: status, Code: code}
 }
 
 func (w *pseudoWrite) create(ctx context.Context, tx *appcatalog.Stores, r pseudo.Row) error {
