@@ -4,6 +4,7 @@ package plan
 
 import (
 	"github.com/wyolet/relay/app/account"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
@@ -47,9 +48,10 @@ type ModelReach struct {
 	Refused   *Refusal
 }
 
-// SnapshotReach is where a request naming one snapshot goes: the hosts and what brings them, or, with Refused set, why it is refused.
+// SnapshotReach is where a request naming one snapshot goes: the hosts and what brings them, or, with Refused set, why it is refused. Aliases are the model's declared exact aliases that resolve to the snapshot.
 type SnapshotReach struct {
 	Name    string
+	Aliases []string
 	Hosts   []*host.Host
 	Via     []ReachVia
 	Refused *Refusal
@@ -252,11 +254,12 @@ func (cp *CallerPlan) reachModel(m *model.Model) ModelReach {
 		mr.Provider = p
 	}
 	pointer := m.PointerSnapshot()
+	aliases := aliasesBySnapshot(snap, m)
 	hopAt := map[*PoolPlan]*RouteHop{}
 	for i := range m.Spec.Snapshots {
 		sn := &m.Spec.Snapshots[i]
 		route := cp.Routes.route([]*model.Model{m}, sn, "")
-		sr := SnapshotReach{Name: sn.Name, Refused: route.Refused}
+		sr := SnapshotReach{Name: sn.Name, Aliases: aliases[sn.Name], Refused: route.Refused}
 		for j := range route.Hops {
 			hop := &route.Hops[j]
 			hopAt[hop.Pool] = hop
@@ -280,6 +283,25 @@ func (cp *CallerPlan) reachModel(m *model.Model) ModelReach {
 	}
 	mr.Upstream = cp.upstreamChecks(m)
 	return mr
+}
+
+// aliasesBySnapshot maps the snapshots of m to its declared exact aliases that resolve to them, as a request naming the alias resolves; an alias a catalog name or another model's alias shadows is left out.
+func aliasesBySnapshot(snap *appcatalog.Snapshot, m *model.Model) map[string][]string {
+	var out map[string][]string
+	for _, a := range m.Spec.Aliases {
+		if _, _, pattern := model.AliasPattern(a); pattern {
+			continue
+		}
+		res := snap.ResolveModelRef(a)
+		if res.Alias == nil || res.Models[0].Meta.ID != m.Meta.ID {
+			continue
+		}
+		if out == nil {
+			out = map[string][]string{}
+		}
+		out[res.Snapshot.Name] = append(out[res.Snapshot.Name], a)
+	}
+	return out
 }
 
 // addHop adds the hop's host and the pool and account each of its keys draws on, those not listed yet.
