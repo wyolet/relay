@@ -4,7 +4,9 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -78,6 +80,55 @@ func TestServiceAccountTeamOwnerDownMigration(t *testing.T) {
 			}
 			migrateModule(t, dsn, embeddedVersion(t))
 			must(t, New(openPool(t, dsn)).ServiceAccounts.Upsert(ctx, bot))
+		})
+	}
+}
+
+// On the module's own schema a down that counts the rows it refuses on holds the table: a row a transaction inserts while it counts is refused, not left to fail the down's ALTERs.
+func TestServiceAccountOwnerDownsHoldTheTable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		at      uint
+		col     string
+		refusal string
+	}{
+		{"000007, a user owner", 7, "user_id", "auth migration 000007 down: 1 service accounts are owned by a user; delete them first"},
+		{"000006, a team owner", 6, "team_id", "auth migration 000006 down: 1 service accounts are owned by a team; delete them first"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dsn := atFirstMigration(t, false)
+			migrateModule(t, dsn, tc.at)
+			stores := New(openPool(t, dsn))
+			tm := &directory.Team{Meta: directory.Metadata{ID: directory.NewID(), Name: "core", Owner: authz.Owner(directory.Global)}}
+			must(t, stores.Teams.Upsert(ctx, tm))
+			ada := &directory.User{ID: directory.NewID(), Username: "ada"}
+			must(t, stores.Users.Upsert(ctx, ada))
+			owner := map[string]string{"user_id": ada.ID, "team_id": tm.Meta.ID}[tc.col]
+
+			pool := openPool(t, dsn)
+			tx, err := pool.Begin(ctx)
+			must(t, err)
+			defer func() { _ = tx.Rollback(ctx) }()
+			_, err = tx.Exec(ctx, `INSERT INTO service_accounts (id, name, metadata, spec, `+tc.col+`) VALUES ($1, 'racer', '{}', '{}', $2)`, directory.NewID(), owner)
+			must(t, err)
+			done := make(chan error, 1)
+			go func() { done <- MigrateDown(dsn, tc.at-1) }()
+			for i := 0; ; i++ {
+				var waiting int
+				must(t, pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE NOT granted`).Scan(&waiting))
+				if waiting > 0 {
+					break
+				}
+				if i == 200 {
+					t.Fatal("the down migration never waited on a lock")
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			must(t, tx.Commit(ctx))
+			if err := <-done; err == nil || !strings.Contains(err.Error(), tc.refusal) {
+				t.Fatalf("down to %d = %v, want the refusal naming the row inserted meanwhile", tc.at-1, err)
+			}
 		})
 	}
 }

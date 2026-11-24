@@ -11,6 +11,8 @@ BEGIN
                   AND conrelid::regclass::text <> 'role_binding_subjects') THEN
         RETURN;
     END IF;
+    -- Holds off a service account written while the rows are counted; the ALTERs below take it anyway.
+    LOCK TABLE service_accounts IN ACCESS EXCLUSIVE MODE;
     SELECT count(*) INTO user_owned FROM service_accounts WHERE user_id IS NOT NULL;
     IF user_owned > 0 THEN
         RAISE EXCEPTION 'auth migration 000007 down: % service accounts are owned by a user; delete them first', user_owned;

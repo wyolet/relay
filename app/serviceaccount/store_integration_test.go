@@ -8,6 +8,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -129,6 +130,80 @@ func TestIntegration_ServiceAccountUserOwnerMigrationDown(t *testing.T) {
 	if err := x.accounts.Upsert(ctx, bot); err != nil {
 		t.Fatalf("user service account after down and up: %v", err)
 	}
+}
+
+// A down that counts the rows it refuses on must hold the table: a row a transaction inserts while it counts is either seen, and refused cleanly, or made to wait. Without the lock the insert commits after the count, the down's constraint then fails on it, and the schema is left dirty.
+func TestIntegration_ServiceAccountOwnerDownsHoldTheTable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		down    uint
+		refusal string
+		owner   func(tenancy, *user.User) meta.Owner
+	}{
+		{"000048, a user owner", 47, "migration 000048 down: 1 service accounts are owned by a user; delete them first", func(_ tenancy, u *user.User) meta.Owner { return meta.Owner{Kind: meta.OwnerUser, ID: u.ID} }},
+		{"000047, a team owner", 46, "migration 000047 down: 1 service accounts are owned by a team; delete them first", func(x tenancy, _ *user.User) meta.Owner { return meta.Owner{Kind: meta.OwnerTeam, ID: x.team.Meta.ID} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dsn := storagetest.DB(t)
+			pool, err := pgxpool.New(ctx, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			x := newTenancy(t, pool)
+			ada := &user.User{ID: meta.NewID(), Username: "ada"}
+			if err := user.NewStore(pool).Upsert(ctx, ada); err != nil {
+				t.Fatalf("upsert user: %v", err)
+			}
+			owner := tc.owner(x, ada)
+			col := map[meta.OwnerKind]string{meta.OwnerUser: "user_id", meta.OwnerTeam: "team_id"}[owner.Kind]
+			// Start at the migration under test, so no later down takes the table first.
+			pool.Reset()
+			if err := storage.MigrateTo(dsn, tc.down+1); err != nil {
+				t.Fatalf("migrate down to %d: %v", tc.down+1, err)
+			}
+
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := tx.Exec(ctx, `INSERT INTO service_accounts (id, name, metadata, spec, `+col+`) VALUES ($1, 'racer', '{}', '{}', $2)`, meta.NewID(), owner.ID); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- storage.MigrateTo(dsn, tc.down) }()
+			waitForLockWait(t, pool)
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			down := <-done
+			if down == nil || !strings.Contains(down.Error(), tc.refusal) {
+				t.Fatalf("migrate down to %d = %v, want the refusal naming the row inserted meanwhile", tc.down, down)
+			}
+			var dirty bool
+			if err := pool.QueryRow(ctx, `SELECT dirty FROM schema_migrations`).Scan(&dirty); err != nil || dirty {
+				t.Fatalf("schema dirty %v (%v) after %v, want clean", dirty, err, down)
+			}
+		})
+	}
+}
+
+// waitForLockWait returns once some session waits on a lock: the down migration queued behind the open insert.
+func waitForLockWait(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for range 200 {
+		var waiting int
+		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_locks WHERE NOT granted`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("the down migration never waited on a lock")
 }
 
 type tenancy struct {

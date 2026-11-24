@@ -1,4 +1,7 @@
 -- Reverse 000048. The schema before it has no column for a user owner, so it refuses while a user owns a service account: delete those first.
+-- The lock holds off a service account written while the rows are counted; the ALTERs below take it anyway.
+
+LOCK TABLE service_accounts IN ACCESS EXCLUSIVE MODE;
 
 DO $$
 DECLARE
