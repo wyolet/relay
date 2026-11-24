@@ -141,6 +141,11 @@ func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create C
 			if rb, ok := r.Value.(*AccountRebinding); ok && rb.Held != nil {
 				changed[rb.Held.Meta.ID] = true
 			}
+			if rm, ok := r.Value.(*Removal); ok {
+				for _, a := range rm.Along {
+					changed[a.Meta.ID] = true
+				}
+			}
 		}
 		found, err := w.Check.Find(ctx, live, read.except(created, changed), proposal(rows))
 		if err != nil {
@@ -173,7 +178,7 @@ func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create C
 	return rows, warnings, nil
 }
 
-// Values is the rows' values as the plans see them, in order: an AccountRebinding is the binding it made, a PolicyCopy the copy.
+// Values is the rows' values as the plans see them, in order: an AccountRebinding is the binding it made, a PolicyCopy the copy, a Removal the row it deletes.
 func Values(rows []Row) []any {
 	out := make([]any, len(rows))
 	for i, r := range rows {
@@ -183,42 +188,67 @@ func Values(rows []Row) []any {
 			out[i] = &v.Binding
 		case *PolicyCopy:
 			out[i] = v.Policy
+		case *Removal:
+			out[i] = v.Row
 		}
 	}
 	return out
 }
 
-// proposal is what the steps propose to the plan check: each created or updated row, each deleted one as a plan.Deleted, and for a rebinding also the binding it took the account out of, as left.
+// proposal is what the steps propose to the plan check: each created or updated row, each deleted one as a plan.Deleted, for a rebinding also the binding it took the account out of, as left, and for a removal the rows it took along.
 func proposal(rows []Row) []any {
-	out := Values(rows)
+	values := Values(rows)
+	out := make([]any, 0, len(rows))
 	for i, r := range rows {
-		if r.Op == OpDelete {
-			out[i] = plan.Deleted{Row: r.Value}
+		switch rb, _ := r.Value.(*AccountRebinding); {
+		case rb != nil && rb.Unbinds():
+		case r.Op == OpDelete:
+			out = append(out, plan.Deleted{Row: values[i]})
+		default:
+			out = append(out, values[i])
 		}
-		rb, ok := r.Value.(*AccountRebinding)
-		if !ok {
-			continue
+	}
+	for _, r := range rows {
+		if rb, ok := r.Value.(*AccountRebinding); ok {
+			switch held, op := rb.heldRow(); op {
+			case OpUpdate:
+				out = append(out, held)
+			case OpDelete:
+				out = append(out, plan.Deleted{Row: held})
+			}
 		}
-		switch held, op := rb.heldRow(); op {
-		case OpUpdate:
-			out = append(out, held)
-		case OpDelete:
-			out = append(out, plan.Deleted{Row: held})
+		if rm, ok := r.Value.(*Removal); ok {
+			for _, a := range rm.Along {
+				if a.Op == OpDelete {
+					out = append(out, plan.Deleted{Row: a.Value})
+				} else {
+					out = append(out, a.Value)
+				}
+			}
 		}
 	}
 	return out
 }
 
-// Changed lists the rows the steps that do op write, in write order, each as its kind and metadata: a rebinding's binding is made, and the binding it took the account out of is updated or deleted.
+// Changed lists the rows the steps that do op write, in write order, each as its kind and metadata: a rebinding's binding is made (none when it only unbinds), and the binding it took the account out of is updated or deleted; a removal's rows taken along follow it.
 func Changed(rows []Row, op Op) []Row {
 	var out []Row
 	for _, r := range rows {
-		if r.Op == op {
+		rb, _ := r.Value.(*AccountRebinding)
+		if r.Op == op && (rb == nil || !rb.Unbinds()) {
 			out = append(out, r)
 		}
-		if rb, ok := r.Value.(*AccountRebinding); ok {
+		if rb != nil {
 			if held, hop := rb.heldRow(); held != nil && hop == op {
 				out = append(out, Row{Kind: r.Kind, Pointer: r.Pointer, Meta: &held.Meta, Value: held, Op: op})
+			}
+		}
+		if rm, ok := r.Value.(*Removal); ok {
+			for _, a := range rm.Along {
+				if a.Op == op {
+					a.Pointer = r.Pointer
+					out = append(out, a)
+				}
 			}
 		}
 	}
