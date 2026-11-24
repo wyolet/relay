@@ -53,6 +53,27 @@ func TestApplyUpdatesAStoredHostKeyWithoutItsValue(t *testing.T) {
 	}
 }
 
+// An oauth key stored without a token resolves to nothing; an apply that edits it without a value still keeps the stored credential.
+func TestApplyUpdatesATokenlessOAuthHostKey(t *testing.T) {
+	rows, hk := storedHostKeyRows(hostkey.ValueKindOAuth)
+	hk.Resolved = ""
+	doc := &manifest.HostKeyDTO{APIVersion: manifest.APIVersion, Kind: "HostKey"}
+	doc.Metadata.Name = hk.Meta.Name
+	doc.Metadata.DisplayName = "Acme (renamed)"
+	doc.Spec = manifest.HostKeySpec{
+		HostID:    "acme-api",
+		Account:   "acme-org",
+		ValueFrom: manifest.HostKeyValueFrom{Kind: string(hostkey.ValueKindOAuth), Provider: hk.Spec.ValueFrom.Provider},
+	}
+	b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows)}
+	if err := b.run(context.Background(), []manifest.Document{{HostKey: doc}}); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if e := entryFor(t, b, "HostKey", hk.Meta.Name); e.Action != ActionUpdate {
+		t.Fatalf("action = %s, want update", e.Action)
+	}
+}
+
 // keepHostKeySecret is what the update writes: no value means the stored
 // secret stays; an explicit value replaces it.
 func TestKeepHostKeySecret(t *testing.T) {

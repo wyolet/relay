@@ -2,15 +2,25 @@ package oauth_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"golang.org/x/oauth2"
+
+	"github.com/wyolet/relay/pkg/publicaddr"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
 	"github.com/wyolet/relay/secret"
@@ -36,6 +46,19 @@ func (m *memVault) get(id string) sdkoauth.Token {
 	var t sdkoauth.Token
 	_ = json.Unmarshal(m.data[id], &t)
 	return t
+}
+
+func (m *memVault) putCredential(id string, c sdkoauth.Credential) {
+	b, _ := json.Marshal(c)
+	m.mu.Lock()
+	m.data[id] = b
+	m.mu.Unlock()
+}
+
+func (m *memVault) raw(id string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return string(m.data[id])
 }
 
 func (m *memVault) Resolve(_ context.Context, ref secret.Ref) ([]byte, error) {
@@ -115,6 +138,9 @@ func TestResolve_ExpiredRefreshesAndPersistsRotated(t *testing.T) {
 	stored := v.get("k1")
 	if stored.AccessToken != "fresh" || stored.RefreshToken != "r2" {
 		t.Errorf("persisted blob: got access=%q refresh=%q (rotation not saved)", stored.AccessToken, stored.RefreshToken)
+	}
+	if raw := v.raw("k1"); strings.Contains(raw, "jwtBearer") {
+		t.Errorf("a token blob gained a jwtBearer member: %s", raw)
 	}
 }
 
@@ -229,5 +255,337 @@ func TestResolve_RefreshEndpointError(t *testing.T) {
 	// The stale blob must be left intact (no corruption on failed refresh).
 	if stored := v.get("k1"); stored.RefreshToken != "revoked" {
 		t.Errorf("stored blob changed on failed refresh: %+v", stored)
+	}
+}
+
+var testKeyPEM = sync.OnceValue(func() string {
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(k)
+	if err != nil {
+		panic(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+})
+
+func jwtGrant(tokenURL string) *sdkoauth.JWTBearer {
+	return &sdkoauth.JWTBearer{Issuer: "svc@example.test", PrivateKey: testKeyPEM(), TokenURL: tokenURL, Scopes: []string{"scope-a"}}
+}
+
+// allowServer admits srv, a local TLS test server, to a resolver's exchanges: its address and its host.
+func allowServer(srv *httptest.Server) pkgoauth.Option {
+	return func(r *pkgoauth.Resolver) {
+		pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)(r)
+		pkgoauth.TokenHosts([]string{"127.0.0.1"})(r)
+	}
+}
+
+// tokenServer is a TLS token endpoint answering status with body, counting hits; allow admits it to a resolver.
+func tokenServer(t *testing.T, status int, body string) (srv *httptest.Server, allow pkgoauth.Option, hits *int32) {
+	t.Helper()
+	hits = new(int32)
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, allowServer(srv), hits
+}
+
+const mintedBody = `{"access_token":"minted","token_type":"Bearer","expires_in":3600}`
+
+func TestResolve_JWTBearerRenewsWithoutProviderConfigAndKeepsGrant(t *testing.T) {
+	srv, allow, hits := tokenServer(t, http.StatusOK, mintedBody)
+	v := newMemVault()
+	v.putCredential("k1", sdkoauth.Credential{
+		Token:     sdkoauth.Token{AccessToken: "stale", Expiry: time.Now().Add(-time.Hour)},
+		JWTBearer: jwtGrant(srv.URL),
+	})
+	r := pkgoauth.NewResolver(v, cfgFunc("http://unused"), allow)
+	// "service-account" has no provider config: the grant in the blob is all it needs.
+	got, err := r.Resolve(context.Background(), secret.Ref{Kind: secret.KindOAuth, ID: "k1", Provider: "service-account"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if string(got) != "minted" || atomic.LoadInt32(hits) != 1 {
+		t.Fatalf("got %q after %d hits, want minted after 1", got, atomic.LoadInt32(hits))
+	}
+	var stored sdkoauth.Credential
+	if err := json.Unmarshal([]byte(v.raw("k1")), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.AccessToken != "minted" || stored.JWTBearer == nil || stored.JWTBearer.PrivateKey != testKeyPEM() {
+		t.Fatalf("persisted credential lost its token or grant: access %q, grant kept %v", stored.AccessToken, stored.JWTBearer != nil)
+	}
+}
+
+func TestResolve_JWTBearerSingleFlight(t *testing.T) {
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+	var hits int32
+	var once sync.Once
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		once.Do(func() { close(started) })
+		<-proceed
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mintedBody))
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+
+	v := newMemVault()
+	v.putCredential("k1", sdkoauth.Credential{JWTBearer: jwtGrant(srv.URL)})
+	r := pkgoauth.NewResolver(v, cfgFunc("http://unused"), allowServer(srv))
+
+	const n = 8
+	results := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range n {
+		go func(i int) {
+			defer wg.Done()
+			got, err := r.Resolve(ctx, secret.Ref{Kind: secret.KindOAuth, ID: "k1", Provider: "service-account"})
+			results[i], errs[i] = string(got), err
+		}(i)
+	}
+	<-started
+	time.Sleep(50 * time.Millisecond) // let the other callers queue into the flight
+	close(proceed)
+	wg.Wait()
+
+	if h := atomic.LoadInt32(&hits); h != 1 {
+		t.Errorf("token endpoint hit %d times, want 1 (single-flight)", h)
+	}
+	for i := range n {
+		if errs[i] != nil || results[i] != "minted" {
+			t.Errorf("goroutine %d: %q, %v", i, results[i], errs[i])
+		}
+	}
+}
+
+func keyFile(tokenURL string) []byte {
+	b, _ := json.Marshal(map[string]any{
+		"type": "service_account", "client_email": "svc@example.test", "private_key": testKeyPEM(),
+		"private_key_id": "kid-1", "token_uri": tokenURL, "scopes": []string{"scope-a"},
+	})
+	return b
+}
+
+func prepare(raw []byte, opts ...pkgoauth.Option) ([]byte, error) {
+	return pkgoauth.NewResolver(nil, nil, opts...).PrepareValue(context.Background(), "k1", raw)
+}
+
+func TestPrepareValue_KeyFileStoresMintedToken(t *testing.T) {
+	srv, allow, _ := tokenServer(t, http.StatusOK, mintedBody)
+	out, err := prepare(keyFile(srv.URL), allow)
+	if err != nil {
+		t.Fatalf("PrepareValue: %v", err)
+	}
+	var c sdkoauth.Credential
+	if err := json.Unmarshal(out, &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.AccessToken != "minted" || c.JWTBearer == nil || c.JWTBearer.Issuer != "svc@example.test" || c.JWTBearer.PrivateKeyID != "kid-1" {
+		t.Fatalf("prepared credential: access %q grant %+v", c.AccessToken, c.JWTBearer != nil)
+	}
+}
+
+func TestPrepareValue_RejectedGrantFailsTheWrite(t *testing.T) {
+	srv, allow, _ := tokenServer(t, http.StatusBadRequest, `{"error":"invalid_grant","error_description":"bad signature","echo":"BODY-ECHO"}`)
+	_, err := prepare(keyFile(srv.URL), allow)
+	if err == nil || !pkgoauth.IsPermanent(err) {
+		t.Fatalf("err = %v, want a permanent error", err)
+	}
+	if want := "the token endpoint rejected the credential with HTTP 400: invalid_grant (bad signature)"; err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+}
+
+func TestPrepareValue_SuccessWithoutAccessTokenFailsTheWrite(t *testing.T) {
+	srv, allow, _ := tokenServer(t, http.StatusOK, `{"id_token":"x","token_type":"Bearer"}`)
+	_, err := prepare(keyFile(srv.URL), allow)
+	if !errors.Is(err, sdkoauth.ErrNoAccessToken) {
+		t.Fatalf("err = %v, want ErrNoAccessToken", err)
+	}
+	if pkgoauth.IsPermanent(err) {
+		t.Fatalf("IsPermanent(%v) = true; a renewal must retry it", err)
+	}
+	if err.Error() != sdkoauth.ErrNoAccessToken.Error() {
+		t.Fatalf("message = %q, want %q", err, sdkoauth.ErrNoAccessToken)
+	}
+}
+
+// A token without an expiry would never be renewed, and one living less than the refresher's 10-minute lead plus 5 would be renewed on every sweep: a save refuses both, and accepts 15 minutes.
+func TestPrepareValue_RefusesTokenWithoutUsableLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		body    string
+		refused bool
+	}{
+		{`{"access_token":"minted","token_type":"Bearer"}`, true},
+		{`{"access_token":"minted","token_type":"Bearer","expires_in":60}`, true},
+		{`{"access_token":"minted","token_type":"Bearer","expires_in":600}`, true},
+		{`{"access_token":"minted","token_type":"Bearer","expires_in":910}`, false},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			srv, allow, _ := tokenServer(t, http.StatusOK, tc.body)
+			_, err := prepare(keyFile(srv.URL), allow)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("err = %v, want the token accepted", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "under 15 minutes") || pkgoauth.IsPermanent(err) {
+				t.Fatalf("err = %v, want the lifetime refusal, not permanent", err)
+			}
+		})
+	}
+}
+
+func TestPrepareValue_TransientFailureStoresGrantWithoutToken(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"unavailable", `{}`, http.StatusServiceUnavailable},
+		{"success that is not a JSON object", `<html>maintenance</html>`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, allow, _ := tokenServer(t, tc.status, tc.body)
+			out, err := prepare(keyFile(srv.URL), allow)
+			if err != nil {
+				t.Fatalf("PrepareValue: %v", err)
+			}
+			var c sdkoauth.Credential
+			if err := json.Unmarshal(out, &c); err != nil {
+				t.Fatal(err)
+			}
+			if c.AccessToken != "" || c.JWTBearer == nil {
+				t.Fatalf("prepared credential: access %q grant kept %v", c.AccessToken, c.JWTBearer != nil)
+			}
+		})
+	}
+}
+
+// A service-account credential is exchanged only when its token URL's hostname is listed, exactly and without regard to case.
+func TestPrepareValue_TokenHostAllowlist(t *testing.T) {
+	srv, _, hits := tokenServer(t, http.StatusOK, mintedBody)
+	loopback := pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)
+
+	if _, err := prepare(keyFile(srv.URL), loopback); err == nil || !strings.Contains(err.Error(), "RELAY_OAUTH_TOKEN_HOSTS") {
+		t.Fatalf("no listed host: err = %v, want a refusal naming RELAY_OAUTH_TOKEN_HOSTS", err)
+	}
+	out, err := prepare(keyFile(srv.URL), loopback, pkgoauth.TokenHosts([]string{"127.0.0.1"}))
+	if err != nil || !strings.Contains(string(out), "minted") {
+		t.Fatalf("listed host: %v", err)
+	}
+	listed := pkgoauth.TokenHosts([]string{"allowed.example"})
+	for _, u := range []string{
+		"https://allowed.example@evil.example/token",
+		"https://allowed.example.evil.example/token",
+		"https://allowed.example./token",
+		"https://evil.example/allowed.example",
+		"https://notallowed.example/token",
+	} {
+		t.Run(u, func(t *testing.T) {
+			_, err := prepare(keyFile(u), listed)
+			if err == nil || !strings.Contains(err.Error(), "RELAY_OAUTH_TOKEN_HOSTS") || !pkgoauth.IsPermanent(err) {
+				t.Fatalf("err = %v, want a permanent refusal naming RELAY_OAUTH_TOKEN_HOSTS", err)
+			}
+		})
+	}
+	if n := atomic.LoadInt32(hits); n != 1 {
+		t.Fatalf("token endpoint hits = %d, want only the listed host's 1", n)
+	}
+}
+
+// A stored credential whose host has left the list is no longer exchanged: a read fails naming the host, a renewal is permanent.
+func TestResolve_DelistedTokenHostStopsExchanging(t *testing.T) {
+	srv, _, hits := tokenServer(t, http.StatusOK, mintedBody)
+	v := newMemVault()
+	v.putCredential("k1", sdkoauth.Credential{JWTBearer: jwtGrant(srv.URL)})
+	r := pkgoauth.NewResolver(v, cfgFunc("http://unused"),
+		pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig), pkgoauth.TokenHosts([]string{"token.example"}))
+	ref := secret.Ref{Kind: secret.KindOAuth, ID: "k1", Provider: "service-account"}
+
+	if _, err := r.Resolve(context.Background(), ref); err == nil || !strings.Contains(err.Error(), `"127.0.0.1"`) {
+		t.Fatalf("Resolve: err = %v, want one naming the host", err)
+	}
+	v.putCredential("k1", sdkoauth.Credential{Token: sdkoauth.Token{AccessToken: "at", Expiry: time.Now().Add(time.Minute)}, JWTBearer: jwtGrant(srv.URL)})
+	if _, _, err := r.Renew(context.Background(), ref, 10*time.Minute); !pkgoauth.IsPermanent(err) {
+		t.Fatalf("Renew: err = %v, want a permanent failure", err)
+	}
+	if n := atomic.LoadInt32(hits); n != 0 {
+		t.Fatalf("token endpoint hits = %d, want 0", n)
+	}
+}
+
+// The token URL is caller-supplied: a save refuses one at a non-public address (decided on the resolved IP, so a hostname counts too) or one that redirects, never reaching it, and the reason names no address.
+func TestPrepareValue_RefusesNonPublicAndRedirectingTokenURLs(t *testing.T) {
+	var reached int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "/token", http.StatusTemporaryRedirect)
+			return
+		}
+		atomic.AddInt32(&reached, 1)
+		_, _ = w.Write([]byte(mintedBody))
+	}))
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	// Every host is listed, so what refuses them is the address guard.
+	listed := pkgoauth.TokenHosts([]string{"127.0.0.1", "localhost", "169.254.169.254", "10.0.0.1"})
+
+	for _, tc := range []struct {
+		name, url string
+		opts      []pkgoauth.Option
+	}{
+		{"loopback IP", srv.URL + "/token", []pkgoauth.Option{listed}},
+		{"hostname resolving to loopback", fmt.Sprintf("https://localhost:%d/token", port), []pkgoauth.Option{listed}},
+		{"link-local metadata address", "https://169.254.169.254/token", []pkgoauth.Option{listed}},
+		{"private address", "https://10.0.0.1/token", []pkgoauth.Option{listed}},
+		{"redirect", srv.URL + "/redirect", []pkgoauth.Option{allowServer(srv)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepare(keyFile(tc.url), tc.opts...)
+			if !errors.Is(err, publicaddr.ErrRefused) && !strings.Contains(fmt.Sprint(err), "redirect") {
+				t.Fatalf("err = %v, want the address guard or the redirect refusal", err)
+			}
+			if msg := err.Error(); strings.Contains(msg, "127.0.0.1") || strings.Contains(msg, "::1") || strings.Contains(msg, "10.0.0.1") {
+				t.Fatalf("message names an address: %q", msg)
+			}
+		})
+	}
+	if n := atomic.LoadInt32(&reached); n != 0 {
+		t.Fatalf("the token endpoint was reached %d times, want 0", n)
+	}
+}
+
+func TestPrepareValue_TokenBlobPassesThrough(t *testing.T) {
+	in := []byte(`{"access_token":"at","refresh_token":"rt","expiry":"2099-01-01T00:00:00Z"}`)
+	out, err := prepare(in)
+	if err != nil || string(out) != string(in) {
+		t.Fatalf("got %s, %v; want the input unchanged", out, err)
+	}
+}
+
+func TestIsPermanent_StatusClasses(t *testing.T) {
+	for status, want := range map[int]bool{
+		http.StatusBadRequest:          true,
+		http.StatusUnauthorized:        true,
+		http.StatusRequestTimeout:      false,
+		http.StatusTooManyRequests:     false,
+		http.StatusInternalServerError: false,
+	} {
+		err := &oauth2.RetrieveError{Response: &http.Response{StatusCode: status}}
+		if got := pkgoauth.IsPermanent(err); got != want {
+			t.Errorf("IsPermanent(%d) = %v, want %v", status, got, want)
+		}
 	}
 }

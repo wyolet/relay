@@ -9,6 +9,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/refcheck"
@@ -77,7 +78,8 @@ func staleVersionError(kind, id string) error {
 }
 
 // mapWriteErr maps a store write error: a stale resourceVersion or a row a
-// provisioning source manages is the caller's 409, anything else is a 500.
+// provisioning source manages is the caller's 409, a refused oauth value its
+// 400, anything else is a 500.
 func mapWriteErr(kind, id string, err error) error {
 	if errors.Is(err, meta.ErrStaleResourceVersion) {
 		return staleVersionError(kind, id)
@@ -87,6 +89,9 @@ func mapWriteErr(kind, id string, err error) error {
 	}
 	if refused := grantRefusal(err); refused != nil {
 		return refused
+	}
+	if vr, ok := errors.AsType[*hostkey.ValueRefusedError](err); ok {
+		return huma.Error400BadRequest(vr.Error())
 	}
 	// The save-time check already refuses this; the store's constraint answers the write that raced it.
 	if errors.Is(err, policybinding.ErrAccountBound) {
