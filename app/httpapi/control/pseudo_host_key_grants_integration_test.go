@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/pkg/ids"
@@ -24,6 +25,45 @@ func (w *hostKeyFormWorld) secretRows(t *testing.T) map[string]int {
 		out[table] = n
 	}
 	return out
+}
+
+// Every refusal that needs no write comes before the host is asked and before the value is sealed: an account the caller may not see or that is not the owner's, another host's tier, a receiver the caller may not see, a row's own grant. An organization another account holds needs the host's answer, so the host is asked once, but nothing is sealed. Real runs and dry runs alike.
+func TestPseudoHostKey_RefusedBeforeProbeAndSeal(t *testing.T) {
+	w := newHostKeyFormWorld(t)
+	teamAcct := &account.Account{Meta: meta.Metadata{ID: ids.New(), Name: "two-alpha", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: w.teamTwo.Meta.ID}}, Spec: account.Spec{HostID: w.alpha.Meta.ID}}
+	must(t, "team account", w.stores.Account.Upsert(t.Context(), teamAcct))
+	must(t, "reload", w.cat.Reload(t.Context()))
+	w.loadPlans(t)
+	newAcct := map[string]any{"displayName": "Work"}
+	for _, tc := range []struct {
+		name, deny, pointer string
+		spec                map[string]any
+		status              int
+		probes              int64
+	}{
+		{name: "an account the caller may not see", spec: map[string]any{"value": keyOrgC, "accountId": w.bobsAcct.Meta.ID}, status: 404, pointer: "/spec/accountId"},
+		{name: "an account not the owner's", spec: map[string]any{"value": keyOrgC, "accountId": teamAcct.Meta.ID}, status: 400, pointer: "/spec/accountId"},
+		{name: "another host's tier", spec: map[string]any{"value": keyOrgC, "account": newAcct, "tierPolicyId": w.betaFree.Meta.ID}, status: 400, pointer: "/spec/tierPolicyId"},
+		{name: "a receiver the caller may not see", spec: map[string]any{"value": keyOrgC, "account": newAcct, "shareWith": []any{map[string]string{"kind": "team", "id": w.teamOne.Meta.ID}}}, status: 404, pointer: "/spec/shareWith/0"},
+		{name: "the tier binding's grant", deny: "policy-bindings.create", spec: map[string]any{"value": keyOrgC, "account": newAcct, "tierPolicyId": w.paid.Meta.ID}, status: 403, pointer: "/spec/tierPolicyId"},
+		{name: "an organization another account holds", spec: map[string]any{"value": keyOrgA, "account": newAcct}, status: 409, pointer: "/spec/account", probes: 1},
+	} {
+		for _, dry := range []bool{false, true} {
+			*w.denied = tc.deny
+			before, probes := w.secretRows(t), w.probes.Load()
+			rec, _ := w.post(t, "alice", w.body("alice", tc.spec), dry)
+			*w.denied = ""
+			if r := refusalOf(t, rec); rec.Code != tc.status || r.Pointer != tc.pointer {
+				t.Errorf("%s, dry run %v: %d %s, want %d at %s", tc.name, dry, rec.Code, rec.Body, tc.status, tc.pointer)
+			}
+			if diff := cmp.Diff(before, w.secretRows(t)); diff != "" {
+				t.Errorf("%s, dry run %v: secret rows (-before +after):\n%s", tc.name, dry, diff)
+			}
+			if n := w.probes.Load() - probes; n != tc.probes {
+				t.Errorf("%s, dry run %v: the host was asked %d times, want %d", tc.name, dry, n, tc.probes)
+			}
+		}
+	}
 }
 
 // An account held by a binding the caller may not see answers 403 as PUT /accounts/{ref}/policy does, whichever tier preset the request names, so a dry run per preset does not tell which one the hidden binding uses.
