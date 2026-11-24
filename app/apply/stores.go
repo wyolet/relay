@@ -66,19 +66,24 @@ type Stores struct {
 }
 
 // NewStores wires every store against pool. sec writes stored-mode HostKey
-// values through the same secret stack the server uses; nil wires one with no
-// master key, so stored-mode rows fail loudly.
+// values through the same secret stack the server uses, and its OAuth, when
+// set, checks new oauth values; nil wires one with no master key, so
+// stored-mode rows fail loudly.
 func NewStores(pool *pgxpool.Pool, sec *appsecret.Secrets) *Stores {
 	q := gen.New(pool)
 	if sec == nil {
 		// Without master keys Wire has nothing to refuse.
 		sec, _ = appsecret.Wire(pool, nil)
 	}
+	hostKeys := hostkey.NewStore(pool, sec.Registry, sec.Stored)
+	if sec.OAuth != nil {
+		hostKeys.UseOAuth(sec.OAuth)
+	}
 	return &Stores{
 		Provider:    catalogstore.NewProviderStore(q),
 		Host:        catalogstore.NewHostStore(q),
 		RateLimit:   catalogstore.NewRateLimitStore(q),
-		HostKey:     hostkey.NewStore(pool, sec.Registry, sec.Stored),
+		HostKey:     hostKeys,
 		Model:       catalogstore.NewModelStore(q),
 		Policy:      catalogstore.NewPolicyStore(pool),
 		Pricing:     catalogstore.NewPricingStore(pool),

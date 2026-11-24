@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/wyolet/relay/app/manifest"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 )
 
 // seedDryRun parses every YAML doc in dir and reports the kind tally,
@@ -26,6 +29,16 @@ func seedDryRun(dir string) error {
 	}
 	slog.Info("seed dry-run: parsed manifests", "from", dir, "counts", counts)
 	return nil
+}
+
+// cliSecrets wires the secret stack a CLI command writes host keys through. New oauth values are checked as the server checks them, against cfg's token hosts; opts add resolver options for tests.
+func cliSecrets(pool *pgxpool.Pool, cfg *config.Config, opts ...pkgoauth.Option) (*appsecret.Secrets, error) {
+	sec, err := appsecret.Wire(pool, cfg.MasterKeys())
+	if err != nil {
+		return nil, err
+	}
+	sec.OAuth = pkgoauth.NewResolver(sec.Stored, nil, append(opts, pkgoauth.TokenHosts(cfg.OAuthTokenHosts))...)
+	return sec, nil
 }
 
 // runSeed implements `relay seed --from <dir> [--apply]`. Without
@@ -64,7 +77,7 @@ func runSeed(args []string) error {
 	}
 	defer st.Close()
 
-	sec, err := appsecret.Wire(st.Pool(), cfg.MasterKeys())
+	sec, err := cliSecrets(st.Pool(), cfg)
 	if err != nil {
 		return err
 	}
