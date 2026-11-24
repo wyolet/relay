@@ -336,6 +336,12 @@ Lists with nothing in them are left out of the answer, except `warnings`, which 
 
 `POST /api/pseudo-limits` takes `metadata` (`name`, `displayName`, `description`, `labels`) and exactly one of `spec.budget` and `spec.rateLimit`, each the spec `POST /api/budgets` or `POST /api/rate-limits` takes. The row is owned by the target's scope and linked from the policy beside what it links already. The answer carries `case`, `policy`, `budget` or `rateLimit`, the three row lists, and for a budget `unpricedModels`: the models the target uses now that have no pricing and would answer `unpriced_under_budget` once the budget applies. It is a warning; the request goes through.
 
+`spec.link` sets the fields of the policy's new `budgets` or `rateLimits` entry. `shared` is the entry's `shared`: `true` or omitted counts the limit once for everyone under the target, `false` once for each account under it, each lane with a counter of its own. `models`, with a rate limit only, is the entry's `models`: the limit applies to those models, in the policy model grammar, checked as `PUT /api/policies/by-id/{id}` checks a rate-limit entry's models and stored in canonical form; empty or omitted applies it to every model. A budget entry has no model scope, so `models` with a budget answers `400`, as does a model the policy update would refuse, both with `pointer` `/spec/link/models`. Without `spec.link` the entry is linked as before: shared, over every model. `budget` or `rateLimit` in the answer carries the entry as stored:
+
+```json
+{ "rateLimit": { "id": "…", "name": "ci-rpm", "link": { "shared": false, "models": ["openai/gpt-5"] } } }
+```
+
 The dry run without a change answers the case and what you may see of the current policy, so a form opens filled; it is absent in case `none`:
 
 ```json
@@ -398,6 +404,59 @@ Then, in one transaction: the account (when new), its binding to `tierPolicyId` 
 | `403`, `404` | A row's own grant, or a host, account, policy or receiver you may not see. |
 | `409` | `organization_taken`, `organization_mismatch`; `conflict` as above; `share_exists`, `reshare_refused`, `duplicate_binding` from a row's own call. |
 | `422` | `provider_refused_key`, with `pointer` `/spec/value`; `plan_issue` as above. |
+| `503` | As above. |
+
+### Removing an agent in one request
+
+```
+POST /api/pseudo-agent-removals              a service account and what was made for it, deleted in one transaction
+POST /api/pseudo-agent-removals?dryRun=true  the same checks, nothing deleted; answers what would be deleted and kept
+```
+
+The route is served only when `RELAY_PSEUDO_KINDS` lists `agent-removals` or is `all`, as for `pseudo-agents` above.
+
+```json
+{ "spec": { "serviceAccountId": "<service-account-id>", "keep": ["<pool-id>"], "expect": ["<id>", "…"] } }
+```
+
+Relay decides what goes, in an order each delete's own call accepts: the service account's keys; its account out of the policy binding holding it, as `PUT /api/accounts/{ref}/policy` with `"policyId": null` takes it out (the binding is deleted when it held only that account, else shrinks); each share the service account holds, revoked as `DELETE /api/accounts/by-id/{id}` revokes it; the service account, which takes its account with it; then each policy, then each pool, labelled `agent-id=<service account id>`, when the service account's scope owns it, you may see and delete it, `keep` does not name it, and no binding or policy left after the earlier deletes uses it, including ones you may not see.
+
+A label is a claim anyone who can make a pool or policy can write, so a labelled row that does not go stays and is listed in `kept` with a `reason`:
+
+| `reason` | When |
+| --- | --- |
+| `in_use` | A binding or policy the request does not delete uses it, whether you may see it or not. |
+| `kept_by_request` | `keep` names it. |
+| `not_visible` | The service account's scope owns it, but you may not see it; its `name` is left out. |
+| `not_deletable` | It is owned outside the service account's scope, or its delete's grant or governance refuses you. |
+
+A labelled row owned outside the scope that you may not see is neither touched nor listed. `keep` names labelled rows the answer lists; any other id answers `400` with `pointer` `/spec/keep/<i>`.
+
+```json
+{
+  "deleted": [
+    { "kind": "key", "id": "…", "name": "ci-key" },
+    { "kind": "policy-binding", "id": "…", "name": "ci-bot-sa-ci-bot" },
+    { "kind": "service-account", "id": "…", "name": "ci-bot" },
+    { "kind": "account", "id": "…", "name": "sa-ci-bot" },
+    { "kind": "policy", "id": "…", "name": "ci-bot" }
+  ],
+  "kept": [{ "kind": "pool", "id": "…", "name": "ci-bot-at-openai", "reason": "in_use" }],
+  "updated": [],
+  "warnings": []
+}
+```
+
+`deleted` lists every row in delete order, with the bindings a revoke left empty after their share and the service account's account after it; `updated` lists a binding the account left that holds other accounts, and the bindings, keys and pools a revoke changed. Both answers are `200`. `expect`, when given, is the ids of a dry run's `deleted`: when the set to delete differs at submit, the request answers `409` `changed` with the current `deleted` and `kept`, and deletes nothing.
+
+Each delete passes the grant, governance and reference check of its own delete call, with the same answer and `pointer` `/spec/serviceAccountId`; a refused delete refuses the request and nothing is deleted. A `409` `resource_in_use` carries the row's `blockers`, such as a role binding naming the service account. Then the result is checked against the plans as for `pseudo-agents`, so a delete that would leave an error on a row that stays answers `422` `plan_issue`, and against what every other account reaches, as for `pseudo-access`. Each row deleted or changed is audited as its own delete call records it. A deleted key stops authenticating once the pod's plans hear the delete, as after `DELETE /api/keys/by-id/{id}`.
+
+| Answer | When |
+| --- | --- |
+| `400` | `serviceAccountId` or a `keep` entry is not an id, a `keep` entry is listed twice or names no listed labelled row. |
+| `403`, `404` | A delete's own grant, or a service account you may not see. |
+| `409` | `changed`; `resource_in_use` with `blockers`; `managed_by_source`; `conflict` as above. |
+| `422` | `plan_issue` or `other_accounts_changed`, as above. |
 | `503` | As above. |
 
 ### Accounts and limits
