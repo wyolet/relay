@@ -36,6 +36,7 @@ import (
 var pseudoKinds = map[string]func(huma.API, Deps, huma.Middlewares){
 	"agents": registerPseudoAgent,
 	"access": registerPseudoAccess,
+	"limits": registerPseudoLimits,
 }
 
 // pseudoKindsAll in RELAY_PSEUDO_KINDS turns every pseudo kind on.

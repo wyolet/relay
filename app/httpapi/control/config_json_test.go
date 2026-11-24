@@ -63,7 +63,7 @@ func TestConfigJSON(t *testing.T) {
 		{"a signer without a key mints nothing", Deps{TokenSigner: &TokenSigner{}, RuntimeConfig: RuntimeConfig{Features: map[string]bool{"tokens": true}}},
 			RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}}},
 		{"everything wired", Deps{RuntimeConfig: static, TokenSigner: signer, Users: &user.Store{}, AuditReader: staticAudit{}, Authz: audit.Authorizer{Inner: authz.RBAC{}}, PseudoKinds: []string{"agents"}}, wired},
-		{"every pseudo kind, a name no kind has left out", Deps{PseudoKinds: []string{"all", "gadgets"}}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{"access", "agents"}}},
+		{"every pseudo kind, a name no kind has left out", Deps{PseudoKinds: []string{"all", "gadgets"}}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{"access", "agents", "limits"}}},
 		{"only names no kind has", Deps{PseudoKinds: []string{"gadgets"}}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
