@@ -1,6 +1,7 @@
 package plan_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -92,14 +93,16 @@ func previewAnswers(r *plan.Reach) (bySnapshot, byModel map[string]answer) {
 	return bySnapshot, byModel
 }
 
-// routeAnswers is what Routes.Get answers for each name.
+// routeAnswers is what Routes.Get answers for each name, each host once in hop order.
 func routeAnswers(cp *plan.CallerPlan, names ...string) map[string]answer {
 	out := map[string]answer{}
 	for _, name := range names {
 		r := cp.Routes.Get(name)
 		var hosts []*host.Host
 		for i := range r.Hops {
-			hosts = append(hosts, r.Hops[i].Host)
+			if !slices.Contains(hosts, r.Hops[i].Host) {
+				hosts = append(hosts, r.Hops[i].Host)
+			}
 		}
 		out[name] = answerOf(hosts, r.Refused)
 	}
