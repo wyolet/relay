@@ -160,6 +160,12 @@ var ErrReservedEnv = errors.New("valueFrom.env names a variable reserved for rel
 // ErrNoAccount refuses a key that names no provider account.
 var ErrNoAccount = errors.New("a host key needs a provider account; create one at this host first")
 
+// ValueRefusedError is an oauth value a write refused before storing anything: it does not parse, its service-account grant is invalid, or the token endpoint rejected it. Its text never quotes the value.
+type ValueRefusedError struct{ Err error }
+
+func (e *ValueRefusedError) Error() string { return "the oauth value was refused: " + e.Err.Error() }
+func (e *ValueRefusedError) Unwrap() error { return e.Err }
+
 // reservedEnv reports whether name falls under relay's own configuration. Case is ignored because some platforms resolve env names case-insensitively.
 func reservedEnv(name string) bool {
 	upper := strings.ToUpper(name)

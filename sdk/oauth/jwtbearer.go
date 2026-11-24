@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -138,6 +137,8 @@ type Credential struct {
 	JWTBearer *JWTBearer `json:"jwtBearer,omitempty"`
 }
 
+var errNotCredential = errors.New("oauth: the credential is not a token blob, a jwtBearer credential or a service-account key file (a field has the wrong type)")
+
 // serviceAccountKeyFile is the key-file shape of a service account, plus the
 // scopes array the caller adds to it.
 type serviceAccountKeyFile struct {
@@ -155,9 +156,13 @@ type serviceAccountKeyFile struct {
 // with an added scopes array. A JWT-bearer grant is validated; errors never
 // include the input.
 func ParseCredential(raw []byte) (*Credential, error) {
+	// JSON decode errors quote the offending input, so they are not passed on.
+	if !json.Valid(raw) {
+		return nil, errors.New("oauth: the credential is not valid JSON")
+	}
 	var keyFile serviceAccountKeyFile
 	if err := json.Unmarshal(raw, &keyFile); err != nil {
-		return nil, fmt.Errorf("oauth: credential is not a JSON object: %w", err)
+		return nil, errNotCredential
 	}
 	if keyFile.Type == "service_account" {
 		g := &JWTBearer{
@@ -174,7 +179,7 @@ func ParseCredential(raw []byte) (*Credential, error) {
 	}
 	var c Credential
 	if err := json.Unmarshal(raw, &c); err != nil {
-		return nil, fmt.Errorf("oauth: credential: %w", err)
+		return nil, errNotCredential
 	}
 	if c.JWTBearer != nil {
 		if err := c.JWTBearer.Validate(); err != nil {

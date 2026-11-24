@@ -1,0 +1,125 @@
+//go:build integration
+
+package control
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"golang.org/x/oauth2"
+
+	"github.com/wyolet/relay/app/account"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/meta"
+)
+
+// An oauth value the operator got wrong answers 400 with the reason and never the value; an unreachable token endpoint still stores the key.
+func TestHostKeyCreateRefusesABadOAuthValue(t *testing.T) {
+	tokenEndpoint := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/reject":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"bad signature"}`))
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer tokenEndpoint.Close()
+
+	pool := storagetest.Pool(t)
+	ctx := t.Context()
+	cat, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool, MasterKey: bytes.Repeat([]byte{0x5a}, 32)})
+	must(t, "bootstrap stores", err)
+	h := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "sa-host", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
+	must(t, "upsert host", stores.Host.Upsert(ctx, h))
+	acct := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "sa-org", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: h.Meta.ID}}
+	must(t, "upsert account", stores.Account.Upsert(ctx, acct))
+	_, err = cat.Hydrate(ctx, stores, appcatalog.BootstrapOptions{Pool: pool})
+	must(t, "hydrate", err)
+
+	deps := mountDeps(t)
+	deps.Stores, deps.Catalog = stores, cat
+	r := chi.NewRouter()
+	// The token endpoint is a TLS test server; the write's exchange trusts it through the oauth2 client on the request context.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), oauth2.HTTPClient, tokenEndpoint.Client())))
+		})
+	})
+	Mount(r, deps)
+
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	must(t, "generate key", err)
+	der, err := x509.MarshalPKCS8PrivateKey(k)
+	must(t, "marshal key", err)
+	keyFile := func(tokenURI string) string {
+		b, _ := json.Marshal(map[string]any{
+			"type": "service_account", "client_email": "svc@example.test", "private_key_id": "kid-1",
+			"private_key": string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
+			"token_uri":   tokenURI, "scopes": []string{"scope-a"},
+		})
+		return string(b)
+	}
+	create := func(t *testing.T, name, value string) *httptest.ResponseRecorder {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{
+			"metadata": map[string]any{"name": name, "owner": map[string]string{"kind": "system"}},
+			"spec": map[string]any{
+				"hostId": h.Meta.ID, "accountId": acct.Meta.ID,
+				"valueFrom": map[string]string{"kind": "oauth", "provider": "service-account"},
+				"value":     value,
+			},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/host-keys", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-admin-token")
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	errorBody := func(t *testing.T, w *httptest.ResponseRecorder) (typ, msg string) {
+		t.Helper()
+		var b struct {
+			Error struct{ Type, Message string } `json:"error"`
+		}
+		must(t, "decode error", json.Unmarshal(w.Body.Bytes(), &b))
+		return b.Error.Type, b.Error.Message
+	}
+
+	t.Run("malformed key file", func(t *testing.T) {
+		w := create(t, "sa-malformed", `{"type":"service_account","private_key":"VALUE-MARKER`)
+		wantStatus(t, w, http.StatusBadRequest)
+		typ, msg := errorBody(t, w)
+		if typ != "invalid_request_error" || !strings.Contains(msg, "not valid JSON") || strings.Contains(msg, "VALUE-MARKER") {
+			t.Fatalf("error %s: %q", typ, msg)
+		}
+	})
+	t.Run("token endpoint rejects the key", func(t *testing.T) {
+		w := create(t, "sa-rejected", keyFile(tokenEndpoint.URL+"/reject"))
+		wantStatus(t, w, http.StatusBadRequest)
+		typ, msg := errorBody(t, w)
+		if typ != "invalid_request_error" || !strings.Contains(msg, "invalid_grant") || !strings.Contains(msg, "400") || strings.Contains(msg, "PRIVATE KEY") {
+			t.Fatalf("error %s: %q", typ, msg)
+		}
+	})
+	t.Run("token endpoint unreachable", func(t *testing.T) {
+		w := create(t, "sa-later", keyFile(tokenEndpoint.URL+"/down"))
+		wantStatus(t, w, http.StatusCreated)
+		if strings.Contains(w.Body.String(), "PRIVATE KEY") {
+			t.Fatalf("the create answer carries key material: %s", w.Body)
+		}
+	})
+}

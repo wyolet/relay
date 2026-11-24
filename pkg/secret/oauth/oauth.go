@@ -229,6 +229,29 @@ func IsPermanent(err error) bool {
 	return false
 }
 
+// rejectedError is the token endpoint's refusal of a new credential, worded for the operator: the HTTP status and the RFC 6749 error fields.
+type rejectedError struct{ err error }
+
+func (e rejectedError) Error() string {
+	msg := "the token endpoint rejected the credential"
+	var re *oauth2.RetrieveError
+	if !errors.As(e.err, &re) {
+		return msg
+	}
+	if re.Response != nil {
+		msg += fmt.Sprintf(" with HTTP %d", re.Response.StatusCode)
+	}
+	if re.ErrorCode != "" {
+		msg += ": " + re.ErrorCode
+	}
+	if re.ErrorDescription != "" {
+		msg += " (" + re.ErrorDescription + ")"
+	}
+	return msg
+}
+
+func (e rejectedError) Unwrap() error { return e.err }
+
 // prepareWait bounds the token exchange a write runs to check a new credential.
 const prepareWait = 10 * time.Second
 
@@ -236,7 +259,9 @@ const prepareWait = 10 * time.Second
 // returns what to store. A token blob is returned byte-identical. A
 // service-account credential (a key file or the Credential shape) is
 // exchanged once: a rejected grant fails the write, while a transient failure
-// stores the credential without a token, minted on the next resolve.
+// stores the credential without a token, minted on the next resolve. Every
+// error is a refusal of the value, worded for the operator and never quoting
+// it.
 func PrepareValue(ctx context.Context, raw []byte) ([]byte, error) {
 	cred, err := sdkoauth.ParseCredential(raw)
 	if err != nil {
@@ -253,7 +278,7 @@ func PrepareValue(ctx context.Context, raw []byte) ([]byte, error) {
 	case err == nil:
 		next.Token = *tok
 	case IsPermanent(err):
-		return nil, fmt.Errorf("secret/oauth: token endpoint rejected the credential: %w", err)
+		return nil, rejectedError{err}
 	default:
 		slog.Warn("secret/oauth: token exchange failed; storing the credential without a token", "err", err)
 	}

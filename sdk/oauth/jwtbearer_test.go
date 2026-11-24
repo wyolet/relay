@@ -220,15 +220,16 @@ func TestParseCredential(t *testing.T) {
 		{"non-RSA key", keyFile(func(m map[string]any) { m["private_key"] = pkcs8PEM(t, ecKey) })},
 		{"http token URL", keyFile(func(m map[string]any) { m["token_uri"] = "http://token.example.test/token" })},
 		{"no token and no grant", []byte(`{"token_type":"Bearer"}`)},
-		{"not JSON", []byte(`not json`)},
+		{"not JSON", []byte(`{"private_key":"VALUE-MARKER`)},
+		{"field of the wrong type", []byte(`{"type":"service_account","scopes":"VALUE-MARKER"}`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := oauth.ParseCredential(tc.raw)
 			if err == nil {
 				t.Fatal("want an error")
 			}
-			if strings.Contains(err.Error(), "PRIVATE KEY") {
-				t.Fatalf("error carries key material: %v", err)
+			if strings.Contains(err.Error(), "PRIVATE KEY") || strings.Contains(err.Error(), "VALUE-MARKER") {
+				t.Fatalf("error quotes the value: %v", err)
 			}
 		})
 	}

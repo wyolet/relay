@@ -133,7 +133,7 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 		if k.Spec.ValueFrom.Kind == ValueKindOAuth && k.Spec.Value != "" {
 			prepared, err := pkgoauth.PrepareValue(ctx, []byte(k.Spec.Value))
 			if err != nil {
-				return fmt.Errorf("hostkey.Upsert %q: %w", k.Meta.Name, err)
+				return &ValueRefusedError{Err: err}
 			}
 			k.Spec.Value = string(prepared)
 		}

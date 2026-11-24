@@ -382,13 +382,13 @@ func TestPrepareValue_KeyFileStoresMintedToken(t *testing.T) {
 }
 
 func TestPrepareValue_RejectedGrantFailsTheWrite(t *testing.T) {
-	srv, ctx, _ := tokenServer(t, http.StatusBadRequest, `{"error":"invalid_grant"}`)
+	srv, ctx, _ := tokenServer(t, http.StatusBadRequest, `{"error":"invalid_grant","error_description":"bad signature","echo":"BODY-ECHO"}`)
 	_, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
 	if err == nil || !pkgoauth.IsPermanent(err) {
 		t.Fatalf("err = %v, want a permanent error", err)
 	}
-	if strings.Contains(err.Error(), "PRIVATE KEY") {
-		t.Fatalf("error carries key material: %v", err)
+	if want := "the token endpoint rejected the credential with HTTP 400: invalid_grant (bad signature)"; err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
 	}
 }
 

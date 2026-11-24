@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -121,8 +122,9 @@ func TestIntegration_ServiceAccountKeyFileCredential(t *testing.T) {
 
 	refused := storedKey(owner, hostkey.ValueKindOAuth, serviceAccountKeyFile(t, rejecting.URL))
 	rejectCtx := context.WithValue(context.Background(), oauth2.HTTPClient, rejecting.Client())
-	if err := store.Upsert(rejectCtx, refused); err == nil || !pkgoauth.IsPermanent(err) {
-		t.Fatalf("a key the endpoint rejects: err = %v, want a permanent error", err)
+	err = store.Upsert(rejectCtx, refused)
+	if _, ok := errors.AsType[*hostkey.ValueRefusedError](err); !ok || !pkgoauth.IsPermanent(err) {
+		t.Fatalf("a key the endpoint rejects: err = %v, want a permanent ValueRefusedError", err)
 	}
 	if k, err := store.Get(ctx, refused.Meta.ID); err != nil || k != nil {
 		t.Fatalf("a refused key left a row: %+v, %v", k, err)

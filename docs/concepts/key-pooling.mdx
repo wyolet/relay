@@ -190,7 +190,7 @@ spec:
 
 Relay reads `client_email` (the assertion's issuer), `private_key` (an RSA key in PEM, PKCS#8 or PKCS#1), `private_key_id`, `token_uri` (must be `https`) and `scopes`, and stores only those. To set an assertion `subject` or an `audience` other than the token URL, send `{"jwtBearer": {…}}` as the value instead, with the fields `issuer`, `privateKey`, `privateKeyId`, `tokenUrl`, `scopes`, `subject` and `audience`.
 
-The write exchanges the key once, for up to 10 seconds. A token endpoint that rejects it refuses the write; one that cannot be reached leaves the key stored without a token, and Relay gets one the next time it loads the key. Replace the key file with `POST /api/host-keys/by-id/<id>/rotate` and the new file, with its `scopes`, as `value`.
+The write exchanges the key once, for up to 10 seconds. A value that does not parse, a key file missing a field, and a key the token endpoint rejects answer `400` with the reason (for a rejection, the endpoint's status and its `error` and `error_description`); the value is never echoed. A token endpoint that cannot be reached leaves the key stored without a token, and Relay gets one the next time it loads the key. Replace the key file with `POST /api/host-keys/by-id/<id>/rotate` and the new file, with its `scopes`, as `value`.
 
 Reads never return the key file or the access token. Lists of an account's or pool's keys show part of the current access token as `prefix`, which changes with each renewal. Relay renews the token about 10 minutes before it expires and records the outcome in the key's `status.credential`:
 
