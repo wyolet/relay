@@ -204,12 +204,10 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 
 // IsPermanent reports whether a refresh error is unrecoverable without
 // operator re-authorization (the provider rejected the grant itself, e.g.
-// a revoked or reused refresh token, or a success carrying no access token),
-// as opposed to a transient network/server failure worth retrying.
+// a revoked or reused refresh token), as opposed to a transient
+// network/server failure worth retrying. A success without an access token is
+// never permanent here: a renewal retries it.
 func IsPermanent(err error) bool {
-	if errors.Is(err, sdkoauth.ErrNoAccessToken) {
-		return true
-	}
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) {
 		switch re.ErrorCode {
@@ -283,7 +281,7 @@ func PrepareValue(ctx context.Context, raw []byte) ([]byte, error) {
 	switch {
 	case err == nil:
 		next.Token = *tok
-	case IsPermanent(err):
+	case IsPermanent(err), errors.Is(err, sdkoauth.ErrNoAccessToken):
 		return nil, rejectedError{err}
 	default:
 		slog.Warn("secret/oauth: token exchange failed; storing the credential without a token", "err", err)

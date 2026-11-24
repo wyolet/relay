@@ -396,8 +396,11 @@ func TestPrepareValue_RejectedGrantFailsTheWrite(t *testing.T) {
 func TestPrepareValue_SuccessWithoutAccessTokenFailsTheWrite(t *testing.T) {
 	srv, ctx, _ := tokenServer(t, http.StatusOK, `{"id_token":"x","token_type":"Bearer"}`)
 	_, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
-	if !errors.Is(err, sdkoauth.ErrNoAccessToken) || !pkgoauth.IsPermanent(err) {
-		t.Fatalf("err = %v, want a permanent ErrNoAccessToken", err)
+	if !errors.Is(err, sdkoauth.ErrNoAccessToken) {
+		t.Fatalf("err = %v, want ErrNoAccessToken", err)
+	}
+	if pkgoauth.IsPermanent(err) {
+		t.Fatalf("IsPermanent(%v) = true; a renewal must retry it", err)
 	}
 	if err.Error() != sdkoauth.ErrNoAccessToken.Error() {
 		t.Fatalf("message = %q, want %q", err, sdkoauth.ErrNoAccessToken)
@@ -405,17 +408,27 @@ func TestPrepareValue_SuccessWithoutAccessTokenFailsTheWrite(t *testing.T) {
 }
 
 func TestPrepareValue_TransientFailureStoresGrantWithoutToken(t *testing.T) {
-	srv, ctx, _ := tokenServer(t, http.StatusServiceUnavailable, `{}`)
-	out, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
-	if err != nil {
-		t.Fatalf("PrepareValue: %v", err)
-	}
-	var c sdkoauth.Credential
-	if err := json.Unmarshal(out, &c); err != nil {
-		t.Fatal(err)
-	}
-	if c.AccessToken != "" || c.JWTBearer == nil {
-		t.Fatalf("prepared credential: access %q grant kept %v", c.AccessToken, c.JWTBearer != nil)
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"unavailable", `{}`, http.StatusServiceUnavailable},
+		{"success that is not a JSON object", `<html>maintenance</html>`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, ctx, _ := tokenServer(t, tc.status, tc.body)
+			out, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
+			if err != nil {
+				t.Fatalf("PrepareValue: %v", err)
+			}
+			var c sdkoauth.Credential
+			if err := json.Unmarshal(out, &c); err != nil {
+				t.Fatal(err)
+			}
+			if c.AccessToken != "" || c.JWTBearer == nil {
+				t.Fatalf("prepared credential: access %q grant kept %v", c.AccessToken, c.JWTBearer != nil)
+			}
+		})
 	}
 }
 

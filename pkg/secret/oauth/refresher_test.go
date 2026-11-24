@@ -167,8 +167,8 @@ func storeDueGrant(t *testing.T, vault *memVault, id, tokenURL string) *sdkoauth
 	return grant
 }
 
-// A token endpoint answering success without an access token refuses the grant: the key is reported revoked, not retried.
-func TestRefresher_SuccessWithoutAccessTokenRevokes(t *testing.T) {
+// A renewal answered with success but no access token is retried, never reported revoked.
+func TestRefresher_SuccessWithoutAccessTokenRetries(t *testing.T) {
 	hits := 0
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
@@ -184,11 +184,8 @@ func TestRefresher_SuccessWithoutAccessTokenRevokes(t *testing.T) {
 	f.sweep(ctx)
 	f.sweep(ctx)
 
-	if hits != 1 {
-		t.Fatalf("token endpoint hits = %d, want 1 (revoked keys leave the source)", hits)
-	}
-	if len(*notified) != 1 || (*notified)[0] != "revoked:k1" {
-		t.Fatalf("events = %v, want [revoked:k1]", *notified)
+	if hits != 2 || len(*notified) != 0 {
+		t.Fatalf("hits = %d, events = %v; want 2 hits and no event", hits, *notified)
 	}
 }
 

@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"crypto/x509"
@@ -11,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -59,7 +59,8 @@ func (g JWTBearer) Validate() error {
 // bounded by ctx's deadline and at most 15s. Errors carry the token endpoint's
 // HTTP status and RFC 6749 error fields (as *oauth2.RetrieveError), never its
 // response body. An *http.Client set on ctx under oauth2.HTTPClient lends its
-// Transport. A success response without an access token is ErrNoAccessToken.
+// Transport. A success response whose body is a JSON object without an access
+// token is ErrNoAccessToken.
 func (g JWTBearer) Token(ctx context.Context) (*Token, error) {
 	if err := g.Validate(); err != nil {
 		return nil, err
@@ -87,30 +88,37 @@ func (g JWTBearer) Token(ctx context.Context) (*Token, error) {
 		Scopes:       g.Scopes,
 	}
 	tok, err := cfg.TokenSource(context.WithValue(ctx, oauth2.HTTPClient, hc)).Token()
-	// A success the grant cannot read a token from (an id_token alone, say) is the endpoint refusing what was asked, not an outage.
-	if status.code >= 200 && status.code < 300 && status.read.Load() && (err != nil || tok.AccessToken == "") {
-		return nil, ErrNoAccessToken
+	if status.code >= 200 && status.code < 300 && (err != nil || tok.AccessToken == "") {
+		if status.tokenlessObject() {
+			return nil, ErrNoAccessToken
+		}
+		return nil, errUnreadableSuccess
 	}
 	if err != nil {
 		return nil, withoutBody(err)
 	}
-	if tok.AccessToken == "" {
-		return nil, ErrNoAccessToken
-	}
 	return tok, nil
 }
 
-// ErrNoAccessToken is a token endpoint answering success without an access
-// token, as one does for scopes it does not grant the account.
+// ErrNoAccessToken is a token endpoint answering success with a JSON object
+// that holds no access token, as one does for a scope it does not grant the
+// account (it may send only an id_token).
 var ErrNoAccessToken = errors.New("oauth: the token endpoint returned no access token; check the scopes")
 
-// statusRecorder keeps the status of the one response a token exchange
-// receives, and whether its body was read to the end: a body cut short by
-// the timeout is an outage, not an answer.
+// errUnreadableSuccess is any other success without a usable token: a body
+// that is not a JSON object (a maintenance page, say) or one cut short.
+var errUnreadableSuccess = errors.New("oauth: the token endpoint answered success without a readable token")
+
+// maxTokenBody is what x/oauth2/jwt reads of a token response.
+const maxTokenBody = 1 << 20
+
+// statusRecorder keeps the status and body of the one response a token
+// exchange receives, so a success without a token can be told apart from an
+// unreadable one.
 type statusRecorder struct {
 	next http.RoundTripper
 	code int
-	read atomic.Bool
+	body *recordedBody
 }
 
 func (s *statusRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -119,19 +127,39 @@ func (s *statusRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	s.code = resp.StatusCode
-	resp.Body = &eofBody{ReadCloser: resp.Body, read: &s.read}
+	s.body = &recordedBody{ReadCloser: resp.Body}
+	resp.Body = s.body
 	return resp, nil
 }
 
-type eofBody struct {
-	io.ReadCloser
-	read *atomic.Bool
+// tokenlessObject reports whether the whole response body was read and is a
+// JSON object with no non-empty access_token string.
+func (s *statusRecorder) tokenlessObject() bool {
+	if s.body == nil || !s.body.complete || s.body.buf.Len() > maxTokenBody {
+		return false
+	}
+	var members map[string]json.RawMessage
+	if json.Unmarshal(s.body.buf.Bytes(), &members) != nil {
+		return false
+	}
+	var access string
+	_ = json.Unmarshal(members["access_token"], &access)
+	return access == ""
 }
 
-func (b *eofBody) Read(p []byte) (int, error) {
+type recordedBody struct {
+	io.ReadCloser
+	buf      bytes.Buffer
+	complete bool
+}
+
+func (b *recordedBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
+	if b.buf.Len() <= maxTokenBody {
+		b.buf.Write(p[:n])
+	}
 	if errors.Is(err, io.EOF) {
-		b.read.Store(true)
+		b.complete = true
 	}
 	return n, err
 }

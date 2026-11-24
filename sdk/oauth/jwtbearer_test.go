@@ -179,6 +179,19 @@ func TestJWTBearerSuccessWithoutAccessToken(t *testing.T) {
 	}
 }
 
+// A success that is not a JSON object, a maintenance page say, is not taken for an answer without a token.
+func TestJWTBearerSuccessThatIsNotAnObject(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html>maintenance</html>`))
+	}))
+	defer srv.Close()
+	_, err := grant(t, srv.URL).Token(withClient(srv))
+	if err == nil || errors.Is(err, oauth.ErrNoAccessToken) {
+		t.Fatalf("err = %v, want an error other than ErrNoAccessToken", err)
+	}
+}
+
 // A success whose body never finishes is an outage, not an answer without a token.
 func TestJWTBearerCutShortSuccessIsNotARefusal(t *testing.T) {
 	release := make(chan struct{})
