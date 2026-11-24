@@ -84,6 +84,28 @@ func TestServiceAccountDocumentNamesOneOwner(t *testing.T) {
 	}
 }
 
+// Pruning a team that still owns a stored service account the selector leaves out is refused while planning, before any write; selected too, both go, the service account first.
+func TestPlanRefusesPruningATeamThatOwnsAKeptServiceAccount(t *testing.T) {
+	prune := func(e *env) manifest.Options {
+		return manifest.Options{Prune: true, Selector: map[string]string{"managed-by": "gitops"}, Refs: e.opts.Refs, Names: e.opts.Names}
+	}
+	e := newEnv(t)
+	e.apply(t, strings.Replace(teamOwnedBundle, "{name: deployer, labels: {managed-by: gitops}}", "{name: deployer}", 1), manifest.Options{})
+	if _, err := e.reg.Plan(context.Background(), e.store.Stores(), nil, prune(e)); !errors.Is(err, manifest.ErrTeamOwnsServiceAccount) {
+		t.Fatalf("plan err = %v, want ErrTeamOwnsServiceAccount", err)
+	}
+	if teams, _ := e.store.Stores().Teams.List(context.Background()); len(teams) != 1 {
+		t.Fatalf("teams after the refused plan = %d, want the team kept", len(teams))
+	}
+
+	e = newEnv(t)
+	e.apply(t, teamOwnedBundle, manifest.Options{})
+	p := e.apply(t, "", prune(e))
+	if got := strings.Join(actions(p), ","); got != "delete ServiceAccount/deployer,delete Team/platform" {
+		t.Fatalf("prune of both = %s", got)
+	}
+}
+
 // Pruning a team refuses a bundle that keeps or adds a service account the team owns: the team cannot be deleted under it.
 func TestPlanRefusesAServiceAccountWhoseTeamIsPruned(t *testing.T) {
 	e := newEnv(t)
