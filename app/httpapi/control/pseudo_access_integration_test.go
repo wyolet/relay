@@ -331,7 +331,8 @@ func TestPseudoAccess_NothingToWrite(t *testing.T) {
 	before := w.rowCounts(t)
 	rec, out := w.access(t, "bob", target("team", w.teamTwo.Meta.ID), map[string]any{"everyCredential": true}, false)
 	wantStatus(t, rec, http.StatusOK)
-	if diff := cmp.Diff(PseudoAccessAnswer{Case: pseudo.CaseNone, Unchanged: true, Warnings: []PseudoIssue{}}, out); diff != "" {
+	want := PseudoAccessAnswer{Case: pseudo.CaseNone, Unchanged: true, Warnings: []PseudoIssue{}, Under: &PseudoUnder{Lanes: 3, Unreachable: []UnderLane{}}}
+	if diff := cmp.Diff(want, out); diff != "" {
 		t.Errorf("answer (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
