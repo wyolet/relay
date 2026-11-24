@@ -44,6 +44,8 @@ type HostKey struct {
 	Resolved string `json:"-" yaml:"-"`
 	// KeyHash is sha256 hex (first 6 bytes) of Resolved, for telemetry.
 	KeyHash string `json:"-" yaml:"-"`
+	// KeepStoredValue marks a stored or oauth write that carries no value and keeps the stored one, even when it resolves to nothing (an oauth credential stored without a token). Runtime-only.
+	KeepStoredValue bool `json:"-" yaml:"-"`
 
 	// Derived: populated by the control-API enrich step from the stores; not
 	// stored and not loaded from YAML. Lists every Policy whose pools reach
@@ -255,14 +257,14 @@ func (k *HostKey) Validate() error {
 			return fmt.Errorf("hostkey %q: value must be empty for env mode", k.Meta.Name)
 		}
 	case ValueKindStored:
-		if k.Spec.Value == "" && k.Resolved == "" {
+		if k.Spec.Value == "" && k.Resolved == "" && !k.KeepStoredValue {
 			return fmt.Errorf("hostkey %q: value required for stored mode", k.Meta.Name)
 		}
 		if k.Spec.ValueFrom.Env != "" {
 			return fmt.Errorf("hostkey %q: valueFrom.env must be empty for stored mode", k.Meta.Name)
 		}
 	case ValueKindOAuth:
-		if k.Spec.Value == "" && k.Resolved == "" {
+		if k.Spec.Value == "" && k.Resolved == "" && !k.KeepStoredValue {
 			return fmt.Errorf("hostkey %q: value (oauth token blob) required for oauth mode", k.Meta.Name)
 		}
 		if k.Spec.ValueFrom.Env != "" {

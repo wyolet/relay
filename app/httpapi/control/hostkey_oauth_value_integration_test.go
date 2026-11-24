@@ -18,6 +18,8 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/meta"
@@ -131,6 +133,34 @@ func TestHostKeyCreateRefusesABadOAuthValue(t *testing.T) {
 		wantStatus(t, w, http.StatusCreated)
 		if strings.Contains(w.Body.String(), "PRIVATE KEY") {
 			t.Fatalf("the create answer carries key material: %s", w.Body)
+		}
+		var created struct {
+			Metadata meta.Metadata `json:"metadata"`
+		}
+		must(t, "decode host key", json.Unmarshal(w.Body.Bytes(), &created))
+
+		// The key has no token yet; a metadata-only edit keeps its stored credential.
+		body, _ := json.Marshal(map[string]any{
+			"metadata": map[string]any{"name": "sa-later", "displayName": "Renamed", "owner": map[string]string{"kind": "system"}},
+			"spec": map[string]any{
+				"hostId": h.Meta.ID, "accountId": acct.Meta.ID,
+				"valueFrom": map[string]string{"kind": "oauth", "provider": "service-account"},
+			},
+		})
+		req := httptest.NewRequest(http.MethodPut, "/host-keys/by-id/"+created.Metadata.ID, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-admin-token")
+		req.Header.Set("Content-Type", "application/json")
+		put := httptest.NewRecorder()
+		r.ServeHTTP(put, req)
+		wantStatus(t, put, http.StatusOK)
+		edited, err := stores.HostKey.Get(ctx, created.Metadata.ID)
+		must(t, "get host key", err)
+		if edited.Meta.DisplayName != "Renamed" {
+			t.Fatalf("displayName = %q, want the edit applied", edited.Meta.DisplayName)
+		}
+		raw, err := stores.Stored.Resolve(stored.WithScope(ctx, hostkey.SecretScope(edited.Meta.Owner)), secret.Ref{Kind: secret.KindStored, ID: created.Metadata.ID})
+		if err != nil || !strings.Contains(string(raw), "jwtBearer") {
+			t.Fatalf("stored credential after the edit: %v (grant kept %v)", err, strings.Contains(string(raw), "jwtBearer"))
 		}
 	})
 }

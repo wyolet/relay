@@ -138,7 +138,7 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 		// value is kept, only moved to the owner's scope if the owner changed.
 		// It is the only way to edit an oauth key without re-supplying its
 		// token blob (its Resolved is the access token, not the stored blob).
-		if k.Spec.Value == "" && k.Resolved == "" && !keepValue {
+		if k.Spec.Value == "" && k.Resolved == "" && !keepValue && !k.KeepStoredValue {
 			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
 		}
 		if k.Spec.ValueFrom.Kind == ValueKindOAuth && k.Spec.Value != "" {
