@@ -20,6 +20,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/wyolet/relay/pkg/publicaddr"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
 	"github.com/wyolet/relay/secret"
@@ -273,9 +274,12 @@ func jwtGrant(tokenURL string) *sdkoauth.JWTBearer {
 	return &sdkoauth.JWTBearer{Issuer: "svc@example.test", PrivateKey: testKeyPEM(), TokenURL: tokenURL, Scopes: []string{"scope-a"}}
 }
 
-// allowServer admits srv, a local TLS test server, to a resolver's exchanges.
+// allowServer admits srv, a local TLS test server, to a resolver's exchanges: its address and its host.
 func allowServer(srv *httptest.Server) pkgoauth.Option {
-	return pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)
+	return func(r *pkgoauth.Resolver) {
+		pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)(r)
+		pkgoauth.TokenHosts([]string{"127.0.0.1"})(r)
+	}
 }
 
 // tokenServer is a TLS token endpoint answering status with body, counting hits; allow admits it to a resolver.
@@ -458,6 +462,59 @@ func TestPrepareValue_TransientFailureStoresGrantWithoutToken(t *testing.T) {
 	}
 }
 
+// A service-account credential is exchanged only when its token URL's hostname is listed, exactly and without regard to case.
+func TestPrepareValue_TokenHostAllowlist(t *testing.T) {
+	srv, _, hits := tokenServer(t, http.StatusOK, mintedBody)
+	loopback := pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)
+
+	if _, err := prepare(keyFile(srv.URL), loopback); err == nil || !strings.Contains(err.Error(), "RELAY_OAUTH_TOKEN_HOSTS") {
+		t.Fatalf("no listed host: err = %v, want a refusal naming RELAY_OAUTH_TOKEN_HOSTS", err)
+	}
+	out, err := prepare(keyFile(srv.URL), loopback, pkgoauth.TokenHosts([]string{"127.0.0.1"}))
+	if err != nil || !strings.Contains(string(out), "minted") {
+		t.Fatalf("listed host: %v", err)
+	}
+	listed := pkgoauth.TokenHosts([]string{"allowed.example"})
+	for _, u := range []string{
+		"https://allowed.example@evil.example/token",
+		"https://allowed.example.evil.example/token",
+		"https://allowed.example./token",
+		"https://evil.example/allowed.example",
+		"https://notallowed.example/token",
+	} {
+		t.Run(u, func(t *testing.T) {
+			_, err := prepare(keyFile(u), listed)
+			if err == nil || !strings.Contains(err.Error(), "RELAY_OAUTH_TOKEN_HOSTS") || !pkgoauth.IsPermanent(err) {
+				t.Fatalf("err = %v, want a permanent refusal naming RELAY_OAUTH_TOKEN_HOSTS", err)
+			}
+		})
+	}
+	if n := atomic.LoadInt32(hits); n != 1 {
+		t.Fatalf("token endpoint hits = %d, want only the listed host's 1", n)
+	}
+}
+
+// A stored credential whose host has left the list is no longer exchanged: a read fails naming the host, a renewal is permanent.
+func TestResolve_DelistedTokenHostStopsExchanging(t *testing.T) {
+	srv, _, hits := tokenServer(t, http.StatusOK, mintedBody)
+	v := newMemVault()
+	v.putCredential("k1", sdkoauth.Credential{JWTBearer: jwtGrant(srv.URL)})
+	r := pkgoauth.NewResolver(v, cfgFunc("http://unused"),
+		pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig), pkgoauth.TokenHosts([]string{"token.example"}))
+	ref := secret.Ref{Kind: secret.KindOAuth, ID: "k1", Provider: "service-account"}
+
+	if _, err := r.Resolve(context.Background(), ref); err == nil || !strings.Contains(err.Error(), `"127.0.0.1"`) {
+		t.Fatalf("Resolve: err = %v, want one naming the host", err)
+	}
+	v.putCredential("k1", sdkoauth.Credential{Token: sdkoauth.Token{AccessToken: "at", Expiry: time.Now().Add(time.Minute)}, JWTBearer: jwtGrant(srv.URL)})
+	if _, _, err := r.Renew(context.Background(), ref, 10*time.Minute); !pkgoauth.IsPermanent(err) {
+		t.Fatalf("Renew: err = %v, want a permanent failure", err)
+	}
+	if n := atomic.LoadInt32(hits); n != 0 {
+		t.Fatalf("token endpoint hits = %d, want 0", n)
+	}
+}
+
 // The token URL is caller-supplied: a save refuses one at a non-public address (decided on the resolved IP, so a hostname counts too) or one that redirects, never reaching it, and the reason names no address.
 func TestPrepareValue_RefusesNonPublicAndRedirectingTokenURLs(t *testing.T) {
 	var reached int32
@@ -471,21 +528,23 @@ func TestPrepareValue_RefusesNonPublicAndRedirectingTokenURLs(t *testing.T) {
 	}))
 	defer srv.Close()
 	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	// Every host is listed, so what refuses them is the address guard.
+	listed := pkgoauth.TokenHosts([]string{"127.0.0.1", "localhost", "169.254.169.254", "10.0.0.1"})
 
 	for _, tc := range []struct {
 		name, url string
 		opts      []pkgoauth.Option
 	}{
-		{"loopback IP", srv.URL + "/token", nil},
-		{"hostname resolving to loopback", fmt.Sprintf("https://localhost:%d/token", port), nil},
-		{"link-local metadata address", "https://169.254.169.254/token", nil},
-		{"private address", "https://10.0.0.1/token", nil},
+		{"loopback IP", srv.URL + "/token", []pkgoauth.Option{listed}},
+		{"hostname resolving to loopback", fmt.Sprintf("https://localhost:%d/token", port), []pkgoauth.Option{listed}},
+		{"link-local metadata address", "https://169.254.169.254/token", []pkgoauth.Option{listed}},
+		{"private address", "https://10.0.0.1/token", []pkgoauth.Option{listed}},
 		{"redirect", srv.URL + "/redirect", []pkgoauth.Option{allowServer(srv)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := prepare(keyFile(tc.url), tc.opts...)
-			if err == nil || !pkgoauth.IsPermanent(err) {
-				t.Fatalf("err = %v, want a permanent refusal", err)
+			if !errors.Is(err, publicaddr.ErrRefused) && !strings.Contains(fmt.Sprint(err), "redirect") {
+				t.Fatalf("err = %v, want the address guard or the redirect refusal", err)
 			}
 			if msg := err.Error(); strings.Contains(msg, "127.0.0.1") || strings.Contains(msg, "::1") || strings.Contains(msg, "10.0.0.1") {
 				t.Fatalf("message names an address: %q", msg)

@@ -45,6 +45,10 @@ type BootstrapOptions struct {
 	// KEK change; which KEK wraps new data keys is recorded in the database.
 	MasterKeyExtra [][]byte
 
+	// OAuthTokenHosts are the token URL hosts service-account host keys may
+	// name (RELAY_OAUTH_TOKEN_HOSTS); empty refuses them.
+	OAuthTokenHosts []string
+
 	// AutoSeedDir, when non-empty AND the catalog is empty in PG, triggers
 	// a YAML import from this directory before the initial Reload. The
 	// expected layout matches wyolet/relay-catalog's data/ tree (providers/
@@ -206,7 +210,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 				return sdkoauth.ProviderConfig{}, false
 			}
 			return pc.ProviderConfig, true
-		})
+		}, pkgoauth.TokenHosts(opts.OAuthTokenHosts))
 	secReg.Register(secret.KindOAuth, oauthResolver)
 	stores.HostKey.UseOAuth(oauthResolver)
 	stores.OAuthResolver = oauthResolver

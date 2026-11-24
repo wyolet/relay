@@ -57,7 +57,7 @@ func TestHostKeyCreateRefusesABadOAuthValue(t *testing.T) {
 
 	// The token endpoint is a local TLS test server, which the exchange client refuses unless told otherwise.
 	oauthResolver := pkgoauth.NewResolver(stores.Stored, func(string) (sdkoauth.ProviderConfig, bool) { return sdkoauth.ProviderConfig{}, false },
-		pkgoauth.AllowLoopback(tokenEndpoint.Client().Transport.(*http.Transport).TLSClientConfig))
+		pkgoauth.AllowLoopback(tokenEndpoint.Client().Transport.(*http.Transport).TLSClientConfig), pkgoauth.TokenHosts([]string{"127.0.0.1"}))
 	stores.Secrets.Register(secret.KindOAuth, oauthResolver)
 	stores.HostKey.UseOAuth(oauthResolver)
 
@@ -118,6 +118,13 @@ func TestHostKeyCreateRefusesABadOAuthValue(t *testing.T) {
 		typ, msg := errorBody(t, w)
 		if typ != "invalid_request_error" || !strings.Contains(msg, "invalid_grant") || !strings.Contains(msg, "400") || strings.Contains(msg, "PRIVATE KEY") {
 			t.Fatalf("error %s: %q", typ, msg)
+		}
+	})
+	t.Run("token host not listed", func(t *testing.T) {
+		w := create(t, "sa-unlisted", keyFile("https://token.example.test/token"))
+		wantStatus(t, w, http.StatusBadRequest)
+		if _, msg := errorBody(t, w); !strings.Contains(msg, "RELAY_OAUTH_TOKEN_HOSTS") || !strings.Contains(msg, "token.example.test") {
+			t.Fatalf("message %q, want the host and RELAY_OAUTH_TOKEN_HOSTS", msg)
 		}
 	})
 	t.Run("token endpoint returns no access token", func(t *testing.T) {

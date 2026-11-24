@@ -167,7 +167,10 @@ func storeDueGrant(t *testing.T, vault *memVault, id, tokenURL string) *sdkoauth
 }
 
 func allowLocal(srv *httptest.Server) Option {
-	return AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)
+	return func(r *Resolver) {
+		AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)(r)
+		TokenHosts([]string{"127.0.0.1"})(r)
+	}
 }
 
 // A renewal refuses a token URL at a non-public address or one that redirects, without following it, and reports the key revoked without naming the address.
@@ -186,7 +189,7 @@ func TestRefresher_RefusedTokenURLRevokes(t *testing.T) {
 		name, path string
 		opts       []Option
 	}{
-		{"loopback address", "/token", nil},
+		{"loopback address", "/token", []Option{TokenHosts([]string{"127.0.0.1"})}},
 		{"redirect", "/redirect", []Option{allowLocal(srv)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

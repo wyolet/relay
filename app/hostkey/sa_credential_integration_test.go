@@ -79,7 +79,7 @@ func TestIntegration_ServiceAccountKeyFileCredential(t *testing.T) {
 	// The token endpoints are local TLS test servers, which the exchange client refuses unless told otherwise.
 	res := pkgoauth.NewResolver(sec.Stored, func(string) (sdkoauth.ProviderConfig, bool) {
 		return sdkoauth.ProviderConfig{}, false
-	}, pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig))
+	}, pkgoauth.AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig), pkgoauth.TokenHosts([]string{"127.0.0.1"}))
 	sec.Registry.Register(secret.KindOAuth, res)
 	store.UseOAuth(res)
 	owner := meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
@@ -130,10 +130,10 @@ func TestIntegration_ServiceAccountKeyFileCredential(t *testing.T) {
 		t.Fatalf("a refused key left a row: %+v, %v", k, err)
 	}
 
-	// Without the test's admission, the same local endpoint is a refused token URL.
+	// A store that never gets UseOAuth lists no token host, so it refuses service-account credentials.
 	guarded := hostkey.NewStore(pool, sec.Registry, sec.Stored)
 	local := storedKey(owner, hostkey.ValueKindOAuth, serviceAccountKeyFile(t, srv.URL))
-	if err := guarded.Upsert(ctx, local); !pkgoauth.IsPermanent(err) || strings.Contains(fmt.Sprint(err), "127.0.0.1") {
-		t.Fatalf("a loopback token URL: err = %v, want a permanent refusal naming no address", err)
+	if err := guarded.Upsert(ctx, local); !pkgoauth.IsPermanent(err) || !strings.Contains(fmt.Sprint(err), "RELAY_OAUTH_TOKEN_HOSTS") {
+		t.Fatalf("no listed token host: err = %v, want a refusal naming RELAY_OAUTH_TOKEN_HOSTS", err)
 	}
 }

@@ -27,6 +27,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -60,6 +62,8 @@ type Resolver struct {
 	skew  time.Duration
 	// client carries every JWT-bearer exchange; see exchangeClient.
 	client *http.Client
+	// tokenHosts are the only token URL hosts a JWT-bearer exchange may call.
+	tokenHosts map[string]struct{}
 
 	failuresMu sync.Mutex
 	failures   map[string]exchangeFailure
@@ -126,6 +130,47 @@ func AllowLoopback(tlsConfig *tls.Config) Option {
 	return func(r *Resolver) { r.client = exchangeClient(true, tlsConfig) }
 }
 
+// TokenHosts sets the token URL hosts JWT-bearer credentials may name,
+// matched exactly (case-insensitive) against the URL's hostname. Without it
+// none is allowed, so service-account credentials are refused.
+func TokenHosts(hosts []string) Option {
+	return func(r *Resolver) {
+		r.tokenHosts = make(map[string]struct{}, len(hosts))
+		for _, h := range hosts {
+			r.tokenHosts[strings.ToLower(h)] = struct{}{}
+		}
+	}
+}
+
+// unlistedHostError is a JWT-bearer token URL whose host is not in the
+// operator's list; host is "" when the URL does not parse.
+type unlistedHostError struct {
+	host    string
+	noHosts bool
+}
+
+func (e unlistedHostError) Error() string {
+	if e.noHosts {
+		return "service-account credentials are off: RELAY_OAUTH_TOKEN_HOSTS lists no token host"
+	}
+	return fmt.Sprintf("the token URL host %q is not in RELAY_OAUTH_TOKEN_HOSTS", e.host)
+}
+
+func (r *Resolver) checkTokenHost(tokenURL string) error {
+	if len(r.tokenHosts) == 0 {
+		return unlistedHostError{noHosts: true}
+	}
+	u, err := url.Parse(tokenURL)
+	if err != nil {
+		return unlistedHostError{}
+	}
+	host := strings.ToLower(u.Hostname())
+	if _, ok := r.tokenHosts[host]; !ok {
+		return unlistedHostError{host: host}
+	}
+	return nil
+}
+
 // NewResolver builds an OAuth resolver. vault provides the encrypted
 // persistence; cfg looks up the provider's flow config.
 func NewResolver(vault Vault, cfg ProviderConfigFunc, opts ...Option) *Resolver {
@@ -165,8 +210,12 @@ func exchangeClient(allowLoopback bool, tlsConfig *tls.Config) *http.Client {
 	}
 }
 
-// exchange mints a token from g over the guarded client, whatever client ctx carries.
+// exchange mints a token from g over the guarded client, whatever client ctx
+// carries, and only when g's token host is listed.
 func (r *Resolver) exchange(ctx context.Context, g *sdkoauth.JWTBearer) (*sdkoauth.Token, error) {
+	if err := r.checkTokenHost(g.TokenURL); err != nil {
+		return nil, err
+	}
 	return g.Token(context.WithValue(ctx, oauth2.HTTPClient, r.client))
 }
 
@@ -334,9 +383,9 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 // a revoked or reused refresh token), as opposed to a transient
 // network/server failure worth retrying. A success without an access token is
 // never permanent here: a renewal retries it. A token URL the exchange client
-// refuses (a non-public address, a redirect) is.
+// refuses (a non-public address, a redirect) or whose host is not listed is.
 func IsPermanent(err error) bool {
-	if refusedURL(err) {
+	if refusedURL(err) || errors.As(err, new(unlistedHostError)) {
 		return true
 	}
 	var re *oauth2.RetrieveError
@@ -369,7 +418,10 @@ func refusedURL(err error) bool {
 type rejectedError struct{ err error }
 
 func (e rejectedError) Error() string {
+	var unlisted unlistedHostError
 	switch {
+	case errors.As(e.err, &unlisted):
+		return unlisted.Error()
 	case errors.Is(e.err, sdkoauth.ErrNoAccessToken):
 		return sdkoauth.ErrNoAccessToken.Error()
 	case errors.Is(e.err, publicaddr.ErrRefused):
