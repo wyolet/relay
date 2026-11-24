@@ -142,14 +142,15 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, route *plan.R
 	}
 
 	result, err := d.Pipeline.Run(ctx, &pipeline.Request{
-		Body:          req.upstreamBody(route.UpstreamModel, nil),
+		Body:          req.upstreamBody(hops[0].UpstreamModel, nil),
+		HopBody:       HopBodyFor(hops, hops[0].UpstreamModel),
 		Headers:       forwardHeaders(r.Header),
 		Adapter:       counter.CountAdapter(),
 		Model:         route.Model,
 		Provider:      route.Provider,
 		Hops:          hops,
 		ModelName:     route.Model.Meta.Name,
-		UpstreamModel: route.UpstreamModel,
+		UpstreamModel: hops[0].UpstreamModel,
 		Lifecycle:     lc,
 	})
 	if err != nil {

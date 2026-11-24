@@ -83,7 +83,7 @@ type reservationTestAdapter struct {
 	call func(context.Context) (*http.Response, error)
 }
 
-func (a reservationTestAdapter) Call(ctx context.Context, _ string, _ *string, _ string, _ []byte, _ http.Header, _ string, _ bool, _ bool) (*http.Response, error) {
+func (a reservationTestAdapter) Call(ctx context.Context, _ Upstream, _ string, _ []byte, _ http.Header, _ string, _ bool, _ bool) (*http.Response, error) {
 	if a.call != nil {
 		return a.call(ctx)
 	}

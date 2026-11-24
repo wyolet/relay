@@ -130,7 +130,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 
 	result, err := rn.Pipeline.Run(ctx, &pipeline.Request{
 		Body:          wireBody,
-		HopBody:       inference.HopBody,
+		HopBody:       inference.HopBodyFor(hops, route.UpstreamModel),
 		BodyShape:     inbound,
 		Headers:       http.Header{},
 		Adapter:       upstreamAdapter,

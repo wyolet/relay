@@ -132,6 +132,44 @@ func TestSpecDefaults(t *testing.T) {
 	}
 }
 
+// placeholderSyntax is which paths hold only well-formed placeholders. app/adapter's FillPath test keeps a copy, so the two parsers agree.
+var placeholderSyntax = []struct {
+	path       string
+	wellFormed bool
+}{
+	{"", true},
+	{"/v1/chat/completions", true},
+	{"/v1/projects/{project}/locations/{location}/chat", true},
+	{"/m/x-{location}:generate", true},
+	{"/{a_1}/{project}", true},
+	{"/{project}?alt=sse", true},
+	{"/v1/chat?alt=sse", true},
+	{"/v1/{project", false},
+	{"/v1/{}/chat", false},
+	{"/v1/{pro-ject}", false},
+	{"/v1/{{project}}", false},
+	{"/v1/{", false},
+	{"/v1/}", false},
+	{"/a}/{project}", false},
+	{"/v1/chat?alt={project}", false},
+	{"/v1/{project}?x={location}", false},
+}
+
+// Validate refuses a malformed placeholder in path or paths and accepts a well-formed one whatever backend sets: the operator may fill backend after install, and a request then answers host_misconfigured.
+func TestValidate_PathPlaceholders(t *testing.T) {
+	for _, tc := range placeholderSyntax {
+		path := tc.path
+		for name, h := range map[string]*Host{
+			"path":  {Meta: meta.Metadata{Name: "h"}, Spec: Spec{Path: &path}},
+			"paths": {Meta: meta.Metadata{Name: "h"}, Spec: Spec{Paths: map[adapters.Name]string{adapters.OpenAI: "/ok", adapters.Anthropic: path}}},
+		} {
+			if err := h.Validate(); (err == nil) != tc.wellFormed {
+				t.Errorf("%s %q: Validate() = %v, want well-formed %v", name, tc.path, err, tc.wellFormed)
+			}
+		}
+	}
+}
+
 func TestPathFor(t *testing.T) {
 	own, compat := "/own", "/v1beta/openai/chat/completions"
 	both := Spec{Path: &own, Paths: map[adapters.Name]string{adapters.OpenAI: compat, adapters.Anthropic: ""}}

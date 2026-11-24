@@ -34,7 +34,7 @@ type Event struct {
 	Streamed     bool   `json:"streamed,omitempty"      doc:"The response was streamed."`
 	FinishReason string `json:"finish_reason,omitempty" doc:"Why generation stopped: stop, length, tool_calls, content_filter, refusal or other."` // "stop"|"length"|"tool_calls"|"content_filter"|"refusal"|"other"
 	Attempts     int    `json:"attempts,omitempty"      doc:"Upstream attempts, counting failover; 0 when not tracked."`                           // upstream tries (pipeline failover); 0 = not tracked
-	ErrorKind    string `json:"error_kind,omitempty"    doc:"Error code of a failed request, such as model_not_allowed, rate_limit_exceeded or upstream_error."`
+	ErrorKind    string `json:"error_kind,omitempty"    doc:"Error code of a failed request, such as model_not_allowed, rate_limited or upstream_error."`
 	Refusal      string `json:"refusal,omitempty"       enum:"model_not_allowed,host_not_reachable,no_capacity" doc:"Set when relay refused the request itself, as the class of error_kind: model_not_allowed (a policy, account or principal refuses the model), host_not_reachable (no host the caller can reach serves it, or none of them accepted a connection), no_capacity (a rate limit, budget, cooldown, or every host key out of rotation). Absent on success and on every other failure, an upstream's own error included."`
 	ErrorMessage string `json:"error_message,omitempty" doc:"Error message of a failed request."`
 

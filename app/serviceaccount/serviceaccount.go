@@ -27,7 +27,7 @@ type Spec struct {
 	ProjectID string `json:"projectId" yaml:"projectId" validate:"required,uuid" doc:"Id of the project the service account belongs to. The owner follows it."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference with the service account's keys (403 subject_disabled). Omitted means true."`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference with the service account's keys (401 unauthenticated). Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

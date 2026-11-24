@@ -37,18 +37,40 @@ import (
 
 // Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.
 //
-// upstreamModel is the resolved upstream model name (snapshot.Upstream());
+// upstreamModel is the model name the hop is sent (plan.RouteHop.UpstreamModel);
 // stream reports whether the caller requested a streamed response. Most
 // shapes ignore both (model + stream live in the request body), but shapes
 // that encode them in the URL path — Gemini's generateContent vs
 // streamGenerateContent — need them to build the upstream URL.
 type Adapter interface {
-	// hostPath is the host's upstream-path override (Host.Spec.PathFor): used
-	// verbatim when non-nil (explicit "" appends nothing to baseURL); nil
-	// keeps the adapter's shape default.
-	Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
+	Call(ctx context.Context, up Upstream, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
 	ExtractTokens(body []byte) sdkusage.Tokens
 	Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration)
+}
+
+// Upstream is the host's settings an Adapter.Call is addressed with.
+type Upstream struct {
+	BaseURL string
+	// Path is the host's upstream-path override (Host.Spec.PathFor): used when non-nil (explicit "" appends nothing to BaseURL); nil keeps the adapter's shape default.
+	Path *string
+	// Backend fills the {key} placeholders of the upstream path (Host.Spec.Backend).
+	Backend map[string]string
+}
+
+// PathPlaceholderError is an upstream path with a placeholder the host's backend does not fill, or a malformed one. No request was sent: the fault is the hop's configuration, not its credential or its reachability.
+type PathPlaceholderError struct {
+	// Host is the host's name, set by the caller that knows the host.
+	Host string
+	Path string
+	// Key is the placeholder's key; empty when the placeholder is malformed.
+	Key string
+}
+
+func (e *PathPlaceholderError) Error() string {
+	if e.Key == "" {
+		return fmt.Sprintf("upstream path %q has a malformed placeholder", e.Path)
+	}
+	return fmt.Sprintf("upstream path %q: host backend sets no value for {%s}", e.Path, e.Key)
 }
 
 // CallTimeouter is the optional capability of an Adapter that caps one call end to end, body read included; 0 means no cap. The runner sets that cap on the call context it derives anyway, so the adapter need not derive a second one.
@@ -88,10 +110,9 @@ type Request struct {
 
 	ModelName string
 
-	// UpstreamModel is the resolved upstream wire name (routing's
-	// Plan.UpstreamModel() — the snapshot's upstream name, or the alias
-	// verbatim override when resolution matched a declared alias). Passed
-	// to Adapter.Call for shapes that put the model in the URL path.
+	// UpstreamModel is the model name Body carries. Adapter.Call, for
+	// shapes that put the model in the URL path, gets the hop's own
+	// plan.RouteHop.UpstreamModel instead when the hop has one.
 	UpstreamModel string
 
 	// Stream reports whether the caller requested a streamed response, passed
@@ -571,6 +592,7 @@ func AnswerOf(err error) (a plan.Answer, ok bool) {
 	var refused *limits.Refused
 	var limited *UpstreamLimitedError
 	var unreachable *UpstreamUnreachableError
+	var unfilled *PathPlaceholderError
 	switch {
 	case errors.As(err, &limited):
 		// The caller's own limits had room; the upstream rules are the host's configuration and stay out of the message.
@@ -596,6 +618,16 @@ func AnswerOf(err error) (a plan.Answer, ok bool) {
 			a.Kind = plan.KindOf(plan.CodeUpstreamUnreachable)
 		}
 		return a, true
+	case errors.As(err, &unfilled):
+		// Like the dial target, the path template stays in the error; the caller is told the host by name and the key it lacks.
+		msg := fmt.Sprintf("upstream host %q is misconfigured: its upstream path has a malformed placeholder", unfilled.Host)
+		if unfilled.Key != "" {
+			msg = fmt.Sprintf("upstream host %q is misconfigured: its backend sets no value for the path placeholder {%s}", unfilled.Host, unfilled.Key)
+		}
+		return plan.Answer{
+			Status: http.StatusBadGateway, Type: "server_error", Code: plan.CodeHostMisconfigured, Kind: plan.KindOf(plan.CodeHostMisconfigured),
+			Message: msg,
+		}, true
 	case errors.Is(err, ErrNoKeys):
 		// No credential speaks the request's shape: as unreachable as a route with none.
 		return plan.Answer{
@@ -612,13 +644,18 @@ func AnswerOf(err error) (a plan.Answer, ok bool) {
 func classifyFailure(err error) (kind string, status int) {
 	var upstream *UpstreamFailureError
 	var unreachable *UpstreamUnreachableError
+	var unfilled *PathPlaceholderError
 	var refused *limits.Refused
 	var limited *UpstreamLimitedError
 	switch {
 	case errors.As(err, &unreachable):
 		return plan.CodeUpstreamUnreachable, 0
+	case errors.As(err, &unfilled):
+		return plan.CodeHostMisconfigured, 0
 	case errors.As(err, &upstream):
 		return "upstream_error", upstream.Status
+	case errors.As(err, &refused) && plan.LimitCode(refused) == plan.CodeBudgetExceeded:
+		return plan.CodeBudgetExceeded, 0
 	case errors.As(err, &refused), errors.As(err, &limited):
 		// Refused before any upstream call → status 0
 		// (the kind carries the 429 meaning; Status is the upstream status).

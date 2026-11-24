@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/wyolet/relay/app/pipeline"
 )
 
 // BenchmarkCallSmallBody is one non-streamed upstream call with a typical chat-sized body and forwarded headers, against an in-process upstream that drains the body.
@@ -28,7 +30,7 @@ func BenchmarkCallSmallBody(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		resp, err := a.Call(context.Background(), srv.URL, nil, "sk-bench", body, hdr, "", false, false)
+		resp, err := a.Call(context.Background(), pipeline.Upstream{BaseURL: srv.URL}, "sk-bench", body, hdr, "", false, false)
 		if err != nil {
 			b.Fatal(err)
 		}

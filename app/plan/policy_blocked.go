@@ -167,7 +167,7 @@ func entryModels(idx *CatalogIndex, r modelref.Ref) []*model.Model {
 	return out
 }
 
-// blocks returns the refusal of a rung above policyID's, or of an upstream tier, that keeps every one of models the lane's pools reach from the lane; nil when one is routed, or none is kept by such a rung.
+// blocks returns the refusal of a rung above policyID's, or of an upstream tier, that keeps every one of models the lane's pools reach from the lane; nil when a request naming one of their snapshots is routed, or none is kept by such a rung.
 func (cp *CallerPlan) blocks(policyID string, models []*model.Model) *Refusal {
 	if !cp.narrowsAbove(policyID) {
 		return nil
@@ -179,12 +179,13 @@ func (cp *CallerPlan) blocks(policyID string, models []*model.Model) *Refusal {
 		if !boundAt(cp.Routes.idx, m, reached) {
 			continue
 		}
-		route := cp.Routes.route([]*model.Model{m}, nil, "")
-		if len(route.Hops) > 0 {
-			return nil
-		}
-		if r := route.Refused; blk == nil && r != nil && r.Code == CodeModelNotAllowed && r.PolicyID != "" && (r.Rung == limits.RungAccount || rungIndex(r.Rung) < own) {
-			blk = r
+		for _, route := range cp.Routes.snapshotRoutes(m) {
+			if len(route.Hops) > 0 {
+				return nil
+			}
+			if r := route.Refused; blk == nil && r != nil && r.Code == CodeModelNotAllowed && r.PolicyID != "" && (r.Rung == limits.RungAccount || rungIndex(r.Rung) < own) {
+				blk = r
+			}
 		}
 	}
 	return blk

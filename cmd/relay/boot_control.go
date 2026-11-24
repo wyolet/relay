@@ -34,6 +34,7 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	"github.com/wyolet/relay/pkg/reqid"
 )
 
 func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Catalog, stores *appcatalog.Stores,
@@ -44,11 +45,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	planHolder *plan.Holder, planView func() *engine.View, counters control.CounterReader,
 	catalogSync func(context.Context) (appcatalog.CheckResult, error),
 	catalogPrune func(context.Context, time.Duration, bool) (catalogprune.Report, error)) (*http.Server, <-chan error) {
-	ctrlRouter := chi.NewRouter()
-	ctrlRouter.Use(httpmw.SecurityHeaders)
-	if len(cfg.ControlAllowOrigins) > 0 {
-		ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
-	}
+	ctrlRouter := controlRouter(cfg.ControlAllowOrigins)
 	// Control API under /api so its CRUD paths (/models, /policies, …) don't
 	// shadow the SPA's identically-named client-side routes on the shared
 	// control origin (a hard-reload of /models must serve the UI, not JSON).
@@ -145,4 +142,15 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
 	_, ch := serve(ctrlSrv, nil)
 	return ctrlSrv, ch
+}
+
+// controlRouter is the control listener's router with the middleware every route shares: the request id first, as on the inference listener, so audit rows and logs carry it.
+func controlRouter(allowOrigins []string) *chi.Mux {
+	r := chi.NewRouter()
+	r.Use(reqid.Middleware(slog.Default()))
+	r.Use(httpmw.SecurityHeaders)
+	if len(allowOrigins) > 0 {
+		r.Use(control.CORS(allowOrigins...))
+	}
+	return r
 }
