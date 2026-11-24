@@ -140,7 +140,8 @@ var errRedirect = errors.New("secret/oauth: the token endpoint answered with a r
 
 // exchangeClient is the client of every JWT-bearer exchange. Its token URL is
 // caller-supplied, so it connects only to public addresses (checked on the
-// resolved IP when dialing), through no proxy, and follows no redirect.
+// resolved IP when dialing), through no proxy, follows no redirect and keeps
+// no idle connection.
 func exchangeClient(allowLoopback bool, tlsConfig *tls.Config) *http.Client {
 	control := publicaddr.DialControl
 	if allowLoopback {
@@ -158,7 +159,7 @@ func exchangeClient(allowLoopback bool, tlsConfig *tls.Config) *http.Client {
 			TLSClientConfig:     tlsConfig,
 			TLSHandshakeTimeout: prepareWait,
 			ForceAttemptHTTP2:   true,
-			IdleConnTimeout:     90 * time.Second,
+			DisableKeepAlives:   true,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
 	}
