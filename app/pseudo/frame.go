@@ -90,9 +90,11 @@ type Writer struct {
 	Check  *plan.Check
 	// View is the live plans' current view.
 	View func() *engine.View
+	// Outside are the writes made before the transaction opens, undone when it does not commit.
+	Outside []Outside
 }
 
-// Run takes the check slot (plan.Check.Hold) before its transaction begins and frees it once the transaction ended, so one write is open at a time and a writer that waits holds no connection; one that waits past the bound answers plan.ErrCheckTimeout. It expands, writes each step in order, checks the result against the plans and commits; a dry run does all of it but the commit. It returns the steps as written, also on a dry run. A refused step is a *RowError, a body that expands to nothing a *BodyError, steps the plans refuse an *IssuesError; nothing is written on any error. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created and updated and without the rows deleted. A row a step updates or deletes is laid in the baseline as first read, before any step wrote it. Once the check passed, the hook AfterCheck put on ctx is given the result.
+// Run takes the check slot (plan.Check.Hold) before its outside writes and transaction begin and frees it once the transaction ended and what it did not commit was undone, so one write is open at a time and a writer that waits holds no connection; one that waits past the bound answers plan.ErrCheckTimeout. It makes the outside writes, then expands, writes each step in order, checks the result against the plans and commits; a dry run does all of it but the outside writes and the commit. It returns the steps as written, also on a dry run. A refused step is a *RowError, a body that expands to nothing a *BodyError, steps the plans refuse an *IssuesError; nothing is written on any error, and an *UndoError names what an outside write left behind when it could not be undone. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created and updated and without the rows deleted. A row a step updates or deletes is laid in the baseline as first read, before any step wrote it. Once the check passed, the hook AfterCheck put on ctx is given what it found.
 func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, error) {
 	rows, _, err := w.RunWithWarnings(ctx, expand, create, dryRun)
 	return rows, err
@@ -113,6 +115,10 @@ func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create C
 	}
 	defer release()
 	ctx, read := withReads(ctx)
+	written, err := w.writeOutside(ctx, dryRun)
+	if err != nil {
+		return nil, nil, err
+	}
 	var rows []Row
 	var warnings []engine.Issue
 	err = w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
@@ -159,16 +165,19 @@ func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create C
 		return rows, warnings, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, undoOutside(ctx, written, err)
 	}
 	return rows, warnings, nil
 }
 
-// Values is the rows' values, in order.
+// Values is the rows' values as the plans see them, in order: an AccountRebinding is the binding it made.
 func Values(rows []Row) []any {
 	out := make([]any, len(rows))
 	for i, r := range rows {
 		out[i] = r.Value
+		if rb, ok := r.Value.(*AccountRebinding); ok {
+			out[i] = &rb.Binding
+		}
 	}
 	return out
 }

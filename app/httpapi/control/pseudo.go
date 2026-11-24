@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/budget"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan"
@@ -37,9 +38,10 @@ import (
 
 // pseudoKinds registers each pseudo kind's route, by the name RELAY_PSEUDO_KINDS turns it on with.
 var pseudoKinds = map[string]func(huma.API, Deps, huma.Middlewares){
-	"agents": registerPseudoAgent,
-	"access": registerPseudoAccess,
-	"limits": registerPseudoLimits,
+	"agents":    registerPseudoAgent,
+	"access":    registerPseudoAccess,
+	"limits":    registerPseudoLimits,
+	"host-keys": registerPseudoHostKey,
 }
 
 // pseudoKindsAll in RELAY_PSEUDO_KINDS turns every pseudo kind on.
@@ -167,6 +169,8 @@ func (d Deps) namesTaken(kind string) func(string) bool {
 		return slugTakenFn(s.PolicyBinding, func(r *policybinding.PolicyBinding) *meta.Metadata { return &r.Meta })
 	case "key":
 		return slugTakenFn(s.Key, func(r *key.Key) *meta.Metadata { return &r.Meta })
+	case "host-key":
+		return slugTakenFn(s.HostKey, func(r *hostkey.HostKey) *meta.Metadata { return &r.Meta })
 	}
 	return func(string) bool { return false }
 }
@@ -216,10 +220,10 @@ type pseudoWrite struct {
 	warnings []PseudoIssue
 }
 
-// runPseudo writes the rows expand returns in one transaction (pseudo.Writer); a dry run writes nothing and records no audit row.
-func (d Deps) runPseudo(ctx context.Context, expand pseudo.ExpandFunc, dryRun bool) (*pseudoWrite, []pseudo.Row, error) {
+// runPseudo writes the rows expand returns in one transaction (pseudo.Writer), after the outside writes; a dry run writes nothing and records no audit row.
+func (d Deps) runPseudo(ctx context.Context, expand pseudo.ExpandFunc, dryRun bool, outside ...pseudo.Outside) (*pseudoWrite, []pseudo.Row, error) {
 	w := &pseudoWrite{d: d, plaintexts: map[string]string{}}
-	writer := pseudo.Writer{Stores: d.Stores, Check: d.PlanCheck, View: d.PlanView}
+	writer := pseudo.Writer{Stores: d.Stores, Check: d.PlanCheck, View: d.PlanView, Outside: outside}
 	rows, warnings, err := writer.RunWithWarnings(ctx, expand, w.write, dryRun)
 	if err != nil {
 		err = d.pseudoError(ctx, err)
@@ -288,6 +292,10 @@ func (w *pseudoWrite) create(ctx context.Context, tx *appcatalog.Stores, r pseud
 		var plaintext string
 		plaintext, err = d.createKey(ctx, v, createKeySpec{AccountID: v.Spec.AccountID, ExpiresAt: v.Spec.ExpiresAt, Enabled: v.Spec.Enabled, PassthroughAllowed: v.Spec.PassthroughAllowed, PayloadLoggingEnabled: v.Spec.PayloadLoggingEnabled})
 		w.plaintexts[v.Meta.ID] = plaintext
+	case *hostkey.HostKey:
+		err = d.createPseudoHostKey(ctx, v)
+	case *pseudo.AccountRebinding:
+		return w.rebindAccount(ctx, d, v)
 	default:
 		err = fmt.Errorf("no create for a %T row", r.Value)
 	}
@@ -313,8 +321,10 @@ func (d Deps) createPseudoAccount(ctx context.Context, a *account.Account) error
 		return d.createPseudoShare(ctx, a)
 	case a.ManagedKey() != "":
 		return d.createPseudoManaged(ctx, a)
+	case a.IsProvider():
+		return d.createPseudoProviderAccount(ctx, a)
 	}
-	return fmt.Errorf("account %q: only a share or a caller account is made here", a.Meta.Name)
+	return fmt.Errorf("account %q: only a share, a caller account or a provider account is made here", a.Meta.Name)
 }
 
 func (d Deps) createPseudoShare(ctx context.Context, share *account.Account) error {
@@ -372,9 +382,16 @@ func (d Deps) pseudoError(ctx context.Context, err error) error {
 	var ie *pseudo.IssuesError
 	var re *pseudo.RowError
 	var answered *pseudoRefusal
+	var ue *pseudo.UndoError
+	var oe *pseudo.OrganizationError
 	switch {
 	case errors.As(err, &answered):
 		return answered
+	case errors.As(err, &ue):
+		slog.ErrorContext(ctx, "control: pseudo write failed and left behind what it wrote before its transaction", "left", ue.Left, "err", ue)
+		return refusal(huma.Error500InternalServerError(fmt.Sprintf("nothing was written, but removing what was written before the transaction failed: %s is left behind", strings.Join(ue.Left, ", "))), "")
+	case errors.As(err, &oe):
+		return organizationRefusal(oe)
 	case errors.As(err, &be):
 		return refusal(huma.Error400BadRequest(be.Message), be.Pointer)
 	case errors.As(err, &ie):

@@ -342,6 +342,60 @@ The dry run without a change answers the case and what you may see of the curren
 
 Each row passes what its own create, update or delete call passes, with the same answers and pointers, and is audited as that call; then the result is checked against the plans as for `POST /api/pseudo-agents`, and against what every other account reaches: a change that would alter another account's models or hosts answers `422` `other_accounts_changed`, and one that would leave the target's account refusing every request answers `422` `plan_issue`. A concurrent change to a row the request read answers `409` `conflict`. Nothing is written on any refusal.
 
+### Provider keys in one request
+
+```
+POST /api/pseudo-host-keys              a provider key, its account, the account's tier and its shares, in one transaction
+POST /api/pseudo-host-keys?dryRun=true  the same checks and the same one read of the host; nothing written, the value not stored
+```
+
+The route is served only when `RELAY_PSEUDO_KINDS` lists `host-keys` or is `all`, as for `pseudo-agents` above.
+
+```json
+{
+  "metadata": { "displayName": "Work key", "owner": { "kind": "user", "id": "<user-id>" } },
+  "spec": {
+    "hostId": "<host-id>",
+    "value": "<the provider key>",
+    "account": { "displayName": "Work" },
+    "tierPolicyId": "<one of the host's tier presets>",
+    "shareWith": [{ "kind": "team", "id": "<team-id>" }]
+  }
+}
+```
+
+`metadata` is the host key's, as `POST /api/host-keys` takes it; its owner owns the account too, and an omitted user id is yours. `spec` takes exactly one of `accountId`, an existing provider account of the owner at the host, and `account`, a new one. It takes exactly one of `value` and `valueFrom` (a host key's own `valueFrom`, such as `{"kind": "env", "env": "VAR"}`), or neither for a host that takes no key (`spec.noAuth`), which then gets no host key. `pricingStrategy` is the host key's. Every reference is an id; a slug answers `400` with its pointer.
+
+Before anything is written, Relay asks the host which organization `value` belongs to, with the read `POST /api/host-keys/by-id/{id}/detect-account` makes, sent only to the host's own base URL. A `401` or `403` to the key refuses the request with `422` `provider_refused_key`. A host that names no organization, or does not answer, refuses nothing; `detection` says which. A detected organization becomes the new account's `orgId`; one that another account of the owner at the host holds refuses the request with `409` `organization_taken`, naming that account in `account`, and an `accountId` holding another organization answers `409` `organization_mismatch`. `valueFrom` is not checked.
+
+Then, in one transaction: the account (when new), its binding to `tierPolicyId` (an existing account is moved to it as `PUT /api/accounts/{ref}/policy` moves it), the host key, and a share of the account with each `shareWith` receiver. A receiver that already holds a share of the account, or reaches it by ownership, gets none and is answered with `existing: true`. `value` is sealed under the owner's scope before the transaction opens, since the secret store writes on a connection of its own, and is removed when the transaction does not commit; if that removal fails, the answer is `500` and says what is left behind.
+
+```json
+{
+  "created": [
+    { "kind": "account", "id": "…", "name": "work" },
+    { "kind": "policy-binding", "id": "…", "name": "tier-1-work" },
+    { "kind": "host-key", "id": "…", "name": "work-key" },
+    { "kind": "account", "id": "…", "name": "work-for-platform" }
+  ],
+  "account": { "id": "…", "name": "work" },
+  "hostKey": { "id": "…", "name": "work-key" },
+  "shares": [{ "receiver": { "kind": "team", "id": "…" }, "id": "…", "name": "work-for-platform" }],
+  "detection": "detected",
+  "detected": { "orgId": "org-…", "orgName": "…" }
+}
+```
+
+Each row passes what its own call passes (`POST /api/accounts`, `PUT /api/accounts/{ref}/policy`, `POST /api/host-keys`, `POST /api/accounts/{ref}/shares`), is audited as it, and the rows are checked against the plans together, as for `pseudo-agents`. The value appears in no answer, log line or audit row.
+
+| Answer | When |
+| --- | --- |
+| `400` | A reference is not an id; the body names both or neither of `accountId` and `account`, or both `value` and `valueFrom`; a value for a host that takes no key, or none for one that takes keys; `tierPolicyId` is not one of the host's tier presets; `accountId` is not a provider account of the owner at the host; or a row breaks a rule of its own call. |
+| `403`, `404` | A row's own grant, or a host, account, policy or receiver you may not see. |
+| `409` | `organization_taken`, `organization_mismatch`; `conflict` as above; `share_exists`, `reshare_refused`, `duplicate_binding` from a row's own call. |
+| `422` | `provider_refused_key`, with `pointer` `/spec/value`; `plan_issue` as above. |
+| `503` | As above. |
+
 ### Accounts and limits
 
 ```

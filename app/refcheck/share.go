@@ -65,6 +65,11 @@ func (c Checker) newShare(ctx context.Context, src, share *account.Account) erro
 	return nil
 }
 
+// ReachesByOwnership reports whether a share owned by receiver, of an account owned by owner, would be refused as already_reachable: receiver is owner or a scope inside it.
+func (c Checker) ReachesByOwnership(ctx context.Context, owner, receiver meta.Owner) bool {
+	return c.containsScope(ctx, owner, receiver)
+}
+
 // receiverVisible answers a receiver the caller may not see as one that does not exist.
 func (c Checker) receiverVisible(ctx context.Context, r account.Receiver) error {
 	var visible bool

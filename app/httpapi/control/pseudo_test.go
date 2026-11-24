@@ -81,6 +81,8 @@ func TestPseudoError(t *testing.T) {
 			&pseudoRefusal{APIError: apiErr(409, "conflict", conflictMsg)}},
 		{"a name taken", &pseudo.RowError{Row: keyRow, Err: fmt.Errorf("upsert: %w: service_accounts_name_key", directory.ErrConflict)},
 			&pseudoRefusal{APIError: apiErr(409, "conflict", dupMsg), Pointer: "/spec/key"}},
+		{"an outside write left behind", &pseudo.UndoError{Err: &pseudo.RowError{Row: keyRow, Err: huma.Error403Forbidden("forbidden")}, Left: []string{"the sealed value of host key k"}, Undo: errors.New("connection reset")},
+			&pseudoRefusal{APIError: apiErr(500, "", "nothing was written, but removing what was written before the transaction failed: the sealed value of host key k is left behind")}},
 		{"a store failing under a row", &pseudo.RowError{Row: keyRow, Err: errors.New("connection reset")},
 			&pseudoRefusal{APIError: apiErr(500, "", serverFailed), Pointer: "/spec/key"}},
 		{"a row check failing on the server", &pseudo.RowError{Row: keyRow, Err: huma.Error500InternalServerError("hostkey.Get: dial tcp 10.0.0.5:5432")},
