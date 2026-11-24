@@ -87,9 +87,6 @@ func (s *Snapshot) eachExactAlias(m *model.Model, provSlug string, fn func(key s
 			if !ok {
 				continue
 			}
-			if _, skip := hostPinSkip[h.Meta.Name]; skip {
-				continue
-			}
 			pinned := AliasRef{Model: m, Snapshot: tgt, HostID: hb.Spec.HostID, Name: a}
 			fn(slug.From(a+"@"+h.Meta.Name), pinned)
 			if provSlug != "" {

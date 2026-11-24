@@ -196,7 +196,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		// Embeddings inbound requires an OpenAI-compatible upstream adapter.
 		// Anthropic hosts don't expose /v1/embeddings. This guard is permanent
 		// (Anthropic has no embeddings API to translate to).
-		hops := keepHops(route.Hops, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == adapters.OpenAI })
+		hops := routeHops(route, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == adapters.OpenAI })
 		if len(hops) == 0 {
 			d.fireUsageFailure(ctx, "embeddings_unsupported_host", "host does not support OpenAI-compatible embeddings")
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "embeddings_unsupported_host",
@@ -220,7 +220,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 				"no adapter registered for "+string(in.Inbound))
 			return
 		}
-		hops := keepHops(route.Hops, func(h *plan.RouteHop) bool { return native(h.Binding, h.Host) })
+		hops := routeHops(route, func(h *plan.RouteHop) bool { return native(h.Binding, h.Host) })
 		runBytePass(d, w, r, in, route, hops, upstreamAdapter, inboundSpec.Translator, inboundSpec)
 		return
 	}
@@ -228,7 +228,8 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// Standard dispatch: look up the upstream spec and determine whether
 	// this is a same-shape pass (inbound == upstream adapter) or a cross-
 	// shape canonical translation. The body is built once, so failover
-	// keeps to the hops whose binding speaks the first hop's shape.
+	// keeps to the hops whose binding speaks the first hop's shape and
+	// model name.
 	upstreamName := first.Binding.Spec.Adapter
 	upstreamSpec := d.Specs.Spec(upstreamName)
 	if upstreamSpec == nil {
@@ -244,7 +245,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 			"no adapter registered for "+string(upstreamName))
 		return
 	}
-	hops := keepHops(route.Hops, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == upstreamName })
+	hops := routeHops(route, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == upstreamName })
 
 	if in.Inbound == upstreamName {
 		runBytePass(d, w, r, in, route, hops, upstreamAdapter, upstreamSpec.Translator, inboundSpec)
@@ -315,7 +316,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 			edits, dropped = req.stripParams(edits, u, inboundSpec.ParamPaths)
 			surfaceDroppedParams(w, route.Model.Meta.Name, dropped, metrics.DropUnsupportedByModel)
 		}
-		wireBody = req.upstreamBody(route.UpstreamModel, edits)
+		wireBody = req.upstreamBody(route.UpstreamModelAt(&hops[0]), edits)
 	}
 
 	lc := lifecycle.FromContext(ctx)
@@ -422,7 +423,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
 		return
 	}
-	canonReq.Model = v1.ModelRefs{route.UpstreamModel}
+	canonReq.Model = v1.ModelRefs{route.UpstreamModelAt(&hops[0])}
 	applyOutputDefaults(canonReq, route.Model.Spec.MaxOutputTokens)
 	if u := route.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
 		surfaceDroppedParams(w, route.Model.Meta.Name, stripCanonicalParams(canonReq, u), metrics.DropUnsupportedByModel)

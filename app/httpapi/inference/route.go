@@ -39,6 +39,17 @@ func keepHops(hops []plan.RouteHop, keep func(*plan.RouteHop) bool) []plan.Route
 	return hops
 }
 
+// routeHops returns the route's hops keep accepts that send the first accepted hop's wire model name: the body names one model and is built once for every hop.
+func routeHops(route *plan.Route, keep func(*plan.RouteHop) bool) []plan.RouteHop {
+	for i := range route.Hops {
+		if keep(&route.Hops[i]) {
+			name := route.UpstreamModelAt(&route.Hops[i])
+			return keepHops(route.Hops, func(h *plan.RouteHop) bool { return keep(h) && route.UpstreamModelAt(h) == name })
+		}
+	}
+	return nil
+}
+
 // pipelineRequest is the pipeline input for one dispatched request over hops, its body in shape.
 func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, a pipeline.Adapter, body []byte, shape adapters.Name, lc *lifecycle.Context) *pipeline.Request {
 	return &pipeline.Request{
@@ -51,7 +62,7 @@ func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops 
 		Provider:      route.Provider,
 		Hops:          hops,
 		ModelName:     route.Model.Meta.Name,
-		UpstreamModel: route.UpstreamModel,
+		UpstreamModel: route.UpstreamModelAt(&hops[0]),
 		Stream:        in.Stream,
 		Lifecycle:     lc,
 	}

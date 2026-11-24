@@ -3,7 +3,12 @@ package catalog
 import (
 	"testing"
 
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/slug"
 )
 
@@ -151,6 +156,34 @@ func TestAlias_ReconcileReplacesAndSweepsWithoutTouchingOlderSnapshots(t *testin
 		for ref, want := range tc.want {
 			if got := resolveAlias(tc.s, ref, true); got.Model != want {
 				t.Errorf("%s: %s resolves to %q, want %q", tc.name, ref, got.Model, want)
+			}
+		}
+	}
+}
+
+// Host-pinned keys are built from the snapshot or alias name and the host name, so a host whose bindings send upstream ids slug.From would mangle still gets them.
+func TestResolveModelRef_PinsHostsWhoseBindingsNameTheUpstream(t *testing.T) {
+	system := meta.Owner{Kind: meta.OwnerSystem}
+	prov := &provider.Provider{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", Owner: system}}
+	m := &model.Model{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "m1", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m1"}}, Pointer: "m1", Aliases: []string{"m1-latest"}},
+	}
+	var hosts []*host.Host
+	var bindings []*binding.Binding
+	for name, upstream := range map[string]string{"amazon-bedrock": "global.acme.m1-v1:0", "google-vertex": "acme/m1@001"} {
+		h := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: system}, Spec: host.Spec{BaseURL: "https://" + name + ".example"}}
+		hosts = append(hosts, h)
+		bindings = append(bindings, &binding.Binding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: "m1-on-" + name, Owner: system},
+			Spec: binding.Spec{ModelID: m.Meta.ID, HostID: h.Meta.ID, Adapter: adapters.Anthropic, UpstreamName: upstream},
+		})
+	}
+	s := BuildCatalog([]*provider.Provider{prov}, hosts, []*model.Model{m}, nil, bindings, nil)
+	for _, h := range hosts {
+		for _, ref := range []string{"m1@" + h.Meta.Name, "acme/m1@" + h.Meta.Name, "m1-latest@" + h.Meta.Name, "acme/m1-latest@" + h.Meta.Name} {
+			if res := s.ResolveModelRef(ref); len(res.Models) != 1 || res.Models[0].Meta.ID != m.Meta.ID || res.PinHostID != h.Meta.ID {
+				t.Errorf("%s resolves to %+v, want m1 pinned to %s", ref, res, h.Meta.Name)
 			}
 		}
 	}

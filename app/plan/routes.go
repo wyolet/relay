@@ -48,11 +48,26 @@ type Route struct {
 	Model    *model.Model
 	Snapshot *model.Snapshot
 	Provider string
-	// UpstreamModel is the wire model name: the alias's override when one matched, else the snapshot's upstream name. ResolvedVia tags an alias match for usage rows.
+	// UpstreamModel is the first hop's wire model name (UpstreamModelAt). ResolvedVia tags an alias match for usage rows.
 	UpstreamModel string
 	ResolvedVia   string
 	Hops          []RouteHop
 	Refused       *Refusal
+	// aliasOrSnapshotUpstream is the wire model name through a binding that states none: the alias's override when one matched, else the snapshot's upstream name.
+	aliasOrSnapshotUpstream string
+}
+
+// UpstreamModelAt returns the model name sent upstream through hop h: the binding's upstreamName when it states one, which wins over an alias the host does not know, else the alias's or the snapshot's name.
+func (r *Route) UpstreamModelAt(h *RouteHop) string {
+	return upstreamName(h.Binding, r.aliasOrSnapshotUpstream)
+}
+
+// upstreamName is the model name sent upstream through b: its upstreamName when set, else fallback.
+func upstreamName(b *binding.Binding, fallback string) string {
+	if b.Spec.UpstreamName != "" {
+		return b.Spec.UpstreamName
+	}
+	return fallback
 }
 
 // RouteHop is one pool's slots that may serve the route, with the binding and pricing at the pool's host. Counters[i] is everything slot i's request must fit: the caller rungs' counters, then the slot's upstream ones.
@@ -213,6 +228,7 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 			if u.UpstreamModel == "" && res.Snapshot != nil {
 				u.UpstreamModel = res.Snapshot.Upstream()
 			}
+			u.UpstreamModel = upstreamName(b, u.UpstreamModel)
 			return u
 		}
 		best.note(stepNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
@@ -243,6 +259,7 @@ func (r *Root) ResolveAtHost(h *host.Host, ref string) *Unkeyed {
 				if u.UpstreamModel == "" && res.Snapshot != nil {
 					u.UpstreamModel = res.Snapshot.Upstream()
 				}
+				u.UpstreamModel = upstreamName(b, u.UpstreamModel)
 				return u
 			}
 		}
@@ -281,9 +298,13 @@ func (t *RouteTable) fill(ref string) *Route {
 	}
 	r := t.route(res.Models, res.Snapshot, res.PinHostID)
 	r.Snapshot = res.Snapshot
-	r.ResolvedVia, r.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
-	if r.UpstreamModel == "" && res.Snapshot != nil {
-		r.UpstreamModel = res.Snapshot.Upstream()
+	r.ResolvedVia, r.aliasOrSnapshotUpstream = appcatalog.AliasUpstream(res.Alias, ref)
+	if r.aliasOrSnapshotUpstream == "" && res.Snapshot != nil {
+		r.aliasOrSnapshotUpstream = res.Snapshot.Upstream()
+	}
+	r.UpstreamModel = r.aliasOrSnapshotUpstream
+	if len(r.Hops) > 0 {
+		r.UpstreamModel = r.UpstreamModelAt(&r.Hops[0])
 	}
 	return r
 }

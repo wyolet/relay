@@ -414,6 +414,81 @@ func TestRoute_AliasCarriesItsWireName(t *testing.T) {
 	}
 }
 
+// A binding's upstreamName is the wire model name through it, over the snapshot's name and over an alias the host does not know; ResolvedVia still tags the alias. A hop through a binding without one keeps the alias's or the snapshot's name.
+func TestRoute_BindingUpstreamNameIsTheWireName(t *testing.T) {
+	const wire = "global.acme/m1-v1:0"
+	for _, named := range []bool{true, false} {
+		b := newBasic()
+		b.m1.Spec.Aliases = []string{"m1-latest", "m1[*]"}
+		if named {
+			for _, bd := range b.w.bindings {
+				if bd.Spec.HostID == b.hostA.Meta.ID {
+					bd.Spec.UpstreamName = wire
+				}
+			}
+		}
+		h := b.w.start(t)
+		for _, tc := range []struct {
+			ref, fallback, via string
+			firstAtA           bool
+		}{
+			{ref: "m1", fallback: "m1", firstAtA: true},
+			{ref: "acme/m1", fallback: "m1", firstAtA: true},
+			{ref: "m1@host-a", fallback: "m1", firstAtA: true},
+			{ref: "m1@host-b", fallback: "m1"},
+			{ref: "m1-latest", fallback: "m1-latest", via: "alias:m1-latest", firstAtA: true},
+			{ref: "m1-latest@host-a", fallback: "m1-latest", via: "alias:m1-latest", firstAtA: true},
+			{ref: "m1[1m]", fallback: "m1[1m]", via: "alias:m1[*]", firstAtA: true},
+		} {
+			sentAtA := tc.fallback
+			if named {
+				sentAtA = wire
+			}
+			want := tc.fallback
+			if tc.firstAtA {
+				want = sentAtA
+			}
+			r := h.route(b.key, tc.ref)
+			if r.Refused != nil || r.UpstreamModel != want || r.ResolvedVia != tc.via {
+				t.Errorf("named=%v %s: route sends %q via %q (refused %v), want %q via %q", named, tc.ref, r.UpstreamModel, r.ResolvedVia, r.Refused, want, tc.via)
+			}
+			for i := range r.Hops {
+				hop := &r.Hops[i]
+				hopWant := tc.fallback
+				if hop.Host.Meta.ID == b.hostA.Meta.ID {
+					hopWant = sentAtA
+				}
+				if got := r.UpstreamModelAt(hop); got != hopWant {
+					t.Errorf("named=%v %s: hop %d at %s sends %q, want %q", named, tc.ref, i, hop.Host.Meta.Name, got, hopWant)
+				}
+			}
+		}
+		table := h.keyPlan(b.key).Caller.Routes
+		root := h.holder.Load()
+		for _, tc := range []struct {
+			name     string
+			u        *Unkeyed
+			fallback string
+			atA      bool
+		}{
+			{"unkeyed at host-a", table.ResolveUnkeyed("m1@host-a"), "m1", true},
+			{"unkeyed alias at host-a", table.ResolveUnkeyed("m1-latest@host-a"), "m1-latest", true},
+			{"unkeyed at host-b", table.ResolveUnkeyed("m1@host-b"), "m1", false},
+			{"proxy at host-a", root.ResolveAtHost(b.hostA, "m1"), "m1", true},
+			{"proxy alias at host-a", root.ResolveAtHost(b.hostA, "m1-latest"), "m1-latest", true},
+			{"proxy at host-b", root.ResolveAtHost(b.hostB, "m1"), "m1", false},
+		} {
+			want := tc.fallback
+			if named && tc.atA {
+				want = wire
+			}
+			if tc.u.Refused != nil || tc.u.UpstreamModel != want {
+				t.Errorf("named=%v %s: sends %q (refused %v), want %q", named, tc.name, tc.u.UpstreamModel, tc.u.Refused, want)
+			}
+		}
+	}
+}
+
 // An alias resolves to its model but the ladder still gates it.
 func TestRoute_AliasStillPassesTheGate(t *testing.T) {
 	b := newBasic()
