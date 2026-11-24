@@ -260,8 +260,14 @@ func proxyPinAllowed(p *Principal, h *apphost.Host) bool {
 func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Host) string {
 	// The host's own path wins verbatim (explicit "" = baseURL is the whole
 	// endpoint), mirroring the pipeline flow's Host.Spec.Path semantics.
-	if host != nil && host.Spec.Path != nil {
-		return *host.Spec.Path
+	if host != nil {
+		var shape adapters.Name
+		if spec != nil {
+			shape = spec.Name
+		}
+		if p := host.Spec.PathFor(shape); p != nil {
+			return *p
+		}
 	}
 	if spec != nil && spec.DefaultPath != "" {
 		return spec.DefaultPath

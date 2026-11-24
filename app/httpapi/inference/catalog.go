@@ -98,6 +98,7 @@ func renderCatalog(cat *sdkcatalog.Catalog, version string, at time.Time) (*cata
 	for i := range cat.Hosts {
 		cat.Hosts[i].BaseURL = ""
 		cat.Hosts[i].Path = nil
+		cat.Hosts[i].Paths = nil
 		cat.Hosts[i].ConsoleURL = ""
 	}
 	cat.Version = version

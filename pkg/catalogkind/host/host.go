@@ -81,6 +81,11 @@ type Spec struct {
 	// endpoint URL and nothing is appended. Unset (nil) keeps the shape default.
 	Path *string `json:"path,omitempty" yaml:"path,omitempty" doc:"Upstream path used instead of the wire shape's default. An empty string means baseURL is the complete endpoint; omitted keeps the default."`
 
+	// Paths overrides Path for single wire shapes, on a host that serves
+	// several under one BaseURL at different locations. Same verbatim
+	// semantics as Path; a shape it doesn't name falls back to Path.
+	Paths map[adapters.Name]string `json:"paths,omitempty" yaml:"paths,omitempty" doc:"Upstream path per wire shape (adapter name, such as openai), used instead of path for that shape: {openai: /v1beta/openai/chat/completions}. A shape not listed uses path."`
+
 	// Backend is the free-form bag of backend-specific config (Bedrock region,
 	// Azure deployment, Vertex project/location, etc.). Each provider client
 	// reads the keys it needs and ignores the rest. Optional.
@@ -123,6 +128,15 @@ func (h *Host) IsEnabled() bool { return h.Spec.Enabled == nil || *h.Spec.Enable
 
 // Routable reports whether the host has an upstream to dial.
 func (h *Host) Routable() bool { return h.Spec.BaseURL != "" }
+
+// PathFor returns the host's upstream path override for shape: its Paths
+// entry, else Path. nil keeps the shape's default path.
+func (s Spec) PathFor(shape adapters.Name) *string {
+	if p, ok := s.Paths[shape]; ok {
+		return &p
+	}
+	return s.Path
+}
 
 // Strategies returns the host's offered billing modes, defaulting an empty
 // menu to ["api"].
@@ -178,6 +192,9 @@ func (h *Host) Validate() error {
 	case "", meta.OwnerSystem:
 	default:
 		return fmt.Errorf("host %q: hosts are shared catalog data: owner.kind must be system or omitted, got %q", h.Meta.Name, h.Meta.Owner.Kind)
+	}
+	if _, ok := h.Spec.Paths[""]; ok {
+		return fmt.Errorf("host %q: paths: adapter name must not be empty", h.Meta.Name)
 	}
 	if err := validateParamRenames(h.Spec.RequestParamRenames); err != nil {
 		return fmt.Errorf("host %q: %w", h.Meta.Name, err)

@@ -242,7 +242,7 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 	for {
 		req.Lifecycle.MarkUpstreamStart()
 		call := newUpstreamCall(ctx, callTimeout(req.Adapter, req.Stream))
-		resp, err := req.Adapter.Call(call.ctx, hop.Host.Spec.BaseURL, hop.Host.Spec.Path, keyValue, st.body, req.Headers, req.UpstreamModel, req.Stream, oauth)
+		resp, err := req.Adapter.Call(call.ctx, hop.Host.Spec.BaseURL, hop.Host.Spec.PathFor(req.BodyShape), keyValue, st.body, req.Headers, req.UpstreamModel, req.Stream, oauth)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			call.accepted.Store(true)
 			st.cur.reached, st.callerReached = true, true
