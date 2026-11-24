@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -36,7 +37,7 @@ type AgentMetadata struct {
 
 // AgentSpec is what the service account may use, through an existing policy or one made for it, and its first key.
 type AgentSpec struct {
-	PolicyID string       `json:"policyId,omitempty" format:"uuid" doc:"Id of an existing policy to bind the service account's account to. Exactly one of policyId and access."`
+	PolicyID string       `json:"policyId,omitempty" doc:"Id (metadata.id) of an existing policy to bind the service account's account to; a slug answers 400. Exactly one of policyId and access."`
 	Access   *AgentAccess `json:"access,omitempty"   doc:"What the service account may use, made into a policy of its own. Exactly one of policyId and access."`
 	Key      *AgentKey    `json:"key,omitempty"      doc:"The service account's first key. Omitted makes no key."`
 }
@@ -103,10 +104,13 @@ func ExpandAgent(body Agent, in AgentReads) ([]Row, error) {
 	return x.rows, nil
 }
 
-// checkAgent refuses a spec that names its access twice, not at all, or half.
+// checkAgent refuses a spec that names its access twice, not at all, or half, or names a row by anything but its id.
 func checkAgent(s AgentSpec) error {
 	if (s.PolicyID == "") == (s.Access == nil) {
 		return &BodyError{Pointer: "/spec", Message: "exactly one of spec.policyId and spec.access is required"}
+	}
+	if s.PolicyID != "" && !ids.Valid(s.PolicyID) {
+		return &BodyError{Pointer: "/spec/policyId", Message: fmt.Sprintf("policy %q is not an id; name the policy by its metadata.id", s.PolicyID)}
 	}
 	a := s.Access
 	switch {
@@ -125,10 +129,13 @@ func checkAgent(s AgentSpec) error {
 	return listedOnce("pool", "poolIds", a.PoolIDs)
 }
 
-// listedOnce refuses an id the list at field names twice.
-func listedOnce(kind, field string, ids []string) error {
+// listedOnce refuses an entry of the list at field that is not an id, or names a row twice.
+func listedOnce(kind, field string, list []string) error {
 	seen := map[string]bool{}
-	for i, id := range ids {
+	for i, id := range list {
+		if !ids.Valid(id) {
+			return &BodyError{Pointer: fmt.Sprintf("/spec/access/%s/%d", field, i), Message: fmt.Sprintf("%s %q is not an id; name the %s by its metadata.id", kind, id, kind)}
+		}
 		if seen[id] {
 			return &BodyError{Pointer: fmt.Sprintf("/spec/access/%s/%d", field, i), Message: fmt.Sprintf("%s %q is listed twice", kind, id)}
 		}
