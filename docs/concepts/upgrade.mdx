@@ -41,7 +41,7 @@ Each migration waits at most `RELAY_MIGRATE_LOCK_TIMEOUT_S` seconds (default `10
 
 ### Rolling back the auth module
 
-The auth module's migrations only add: the `identities` table, `external_source` / `external_id` on users and groups, `scim_clients`, and `users.resource_version`. A binary from before them ignores all of it, and a trigger copies the sign-in identity such a binary writes into `identities`, so the safe default is to roll back the image and leave the schema where it is. Run the module's down-migrations only when you need the schema itself back:
+The auth module's migrations 2 to 5 only add: the `identities` table, `external_source` / `external_id` on users and groups, `scim_clients`, and `users.resource_version`. A binary from before them ignores all of it, and a trigger copies the sign-in identity such a binary writes into `identities`. Migrations 6 and 7 let a team and a user own a service account, which then has no `project_id`; a binary from before them cannot read such a row (see the [release notes](#release-notes)), and their down-migrations refuse while one remains, leaving the module's version clean. So the safe default is to delete the team- and user-owned service accounts, roll back the image and leave the schema where it is. Run the module's down-migrations only when you need the schema itself back:
 
 ```bash
 relay migrate auth down <version>
