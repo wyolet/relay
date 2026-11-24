@@ -435,6 +435,28 @@ func TestDeleteTeam_ProjectsAndScopedBindingsBlock(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "teams", empty.Meta.ID, false), http.StatusNoContent)
 }
 
+// A service account a team owns blocks the team's delete as its projects do; without the references scan the store refuses it too.
+func TestDeleteTeam_ItsServiceAccountsBlock(t *testing.T) {
+	f, ctx := newPolicyDeleteFixture(t)
+	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "bot-team", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	must(t, "upsert team", f.stores.Team.Upsert(ctx, tm))
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "team-bot", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}}}
+	must(t, "upsert service account", f.stores.ServiceAccount.Upsert(ctx, bot))
+
+	wantBlockers(t, f.deleteRow(t, "teams", tm.Meta.ID, false),
+		wantGroup{"service-account", "metadata.owner.id", false, 1},
+	)
+	if err := f.stores.Team.Delete(ctx, tm.Meta.ID); err == nil {
+		t.Fatal("store deleted a team that owns a service account")
+	}
+	if got, err := f.stores.ServiceAccount.Get(ctx, bot.Meta.ID); err != nil || got == nil || got.Spec.TeamID != tm.Meta.ID || got.Meta.Owner != bot.Meta.Owner {
+		t.Fatalf("service account after refused deletes = %+v, %v", got, err)
+	}
+
+	must(t, "delete service account", f.stores.ServiceAccount.Delete(ctx, bot.Meta.ID))
+	wantStatus(t, f.deleteRow(t, "teams", tm.Meta.ID, false), http.StatusNoContent)
+}
+
 func TestDeleteProject_RowsUnderItBlock(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	f.policy(t, ctx, "project-policy", f.projectOwner())

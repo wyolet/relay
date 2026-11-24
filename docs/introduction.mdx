@@ -51,7 +51,7 @@ The catalog describes what can be called. Credentials and policies describe who 
     Rate limits are named rule sets (requests, tokens, concurrency per window); budgets cap spend in dollars per day, week or month. On a caller's policy they cap that caller; on a provider account's tier policy they cap every key of the account. See [Rate limits](/concepts/rate-limits) and [Budgets](/concepts/budgets).
   </Accordion>
   <Accordion title="Teams, projects, service accounts, users" icon="users">
-    The tenancy layer. Teams contain projects; projects contain service accounts; users join through groups and role bindings. Keys, policies and usage are attributed to this hierarchy, and RBAC scopes on it. See [Authentication](/concepts/auth#authorization).
+    The tenancy layer. Teams contain projects; a project or a team owns service accounts; users join through groups and role bindings. Keys, policies and usage are attributed to this hierarchy, and RBAC scopes on it. See [Authentication](/concepts/auth#authorization).
   </Accordion>
 </AccordionGroup>
 

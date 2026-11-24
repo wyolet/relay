@@ -15,7 +15,7 @@ A service account has one account. A user has several: a personal account, a mem
 | `project` | The project's own account, a rung above every lane in the project | The project | Nobody | With the project |
 | `personal` | A user's own account | The user | The user | With the user |
 | `member` | A user inside one team or project | That team or project | The user | When a role binding at that team or project names the user, or when the user mints an inference token for a project |
-| `service` | A service account's account | The service account's project | The service account | With the service account |
+| `service` | A service account's account | The service account's owner: its project, or its team when the team owns it directly | The service account | With the service account |
 | `provider` | One provider organization at one host | The system, a team, a project or a user | Nobody; a share with a service account is held by it | Created explicitly, before the host keys that name it, or by [sharing](/concepts/key-pooling#sharing-an-account) another provider account with the owner |
 
 `spec.kind` is derived from `spec.hostId`, `spec.holder` and the owner, and is read-only. `spec.holder` (`{kind: user | serviceaccount, id}`) names the principal of a personal, member or service account, and the service account a share was made with. Provider accounts are described on [Key pooling](/concepts/key-pooling#accounts).
@@ -77,7 +77,7 @@ A relay key belongs to a principal and runs in one of that principal's accounts 
 
 Naming any other account answers `403 account_not_held`, and naming a closed account answers `400`. A key cannot land in a team or project account, in a token-only member account, or in a provider account owned by the system, a team or a project. `PUT /api/keys/by-id/{id}` may move a key to another account under the same rules.
 
-A key's lane decides its ladder. A service account's key climbs its team's account, its project's account and its own. A user's key in the personal account climbs nothing above it; the same user's key in a member account climbs that team's (and project's) accounts. A key in a provider account uses that account's host keys directly, under that account's own policy. See [The ladder](/concepts/policies#the-ladder).
+A key's lane decides its ladder. A service account's key climbs its team's account, its project's account and its own; a service account a team owns directly has no project rung, so its key climbs the team's account and its own. A user's key in the personal account climbs nothing above it; the same user's key in a member account climbs that team's (and project's) accounts. A key in a provider account uses that account's host keys directly, under that account's own policy. See [The ladder](/concepts/policies#the-ladder).
 
 ### Switching lanes per request
 

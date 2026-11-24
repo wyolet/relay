@@ -901,7 +901,7 @@ func TestUpdateIntoAnotherScopeNeedsCreateThere(t *testing.T) {
 		wantAPIError(t, scopeReq(t, f.h, "caller", "PUT", byID, `{"metadata":{"name":"bot"},"spec":{"projectId":"`+f.p2.ID+`"}}`), 400, "",
 			fmt.Sprintf("serviceaccount \"bot\": owner.id %q does not match spec.projectId %q", f.p1.ID, f.p2.ID))
 		wantAPIError(t, scopeReq(t, f.h, "caller", "PUT", byID, `{"metadata":{"name":"bot","owner":{"kind":"project","id":"`+f.p2.ID+`"}},"spec":{"projectId":"`+f.p2.ID+`"}}`), 409, "resource_in_use",
-			`service account "bot" stays in the project it was made in: its account and keys belong there; create a new service account in the other project`)
+			`service account "bot" stays in the project it was made in: its account and keys belong there; create a new service account in the other team or project`)
 		if got := f.accounts.items[f.saAtP1.Meta.ID]; got != f.saAtP1 || got.Meta.Owner != f.p1 {
 			t.Fatalf("stored account moved to %+v", got.Meta.Owner)
 		}

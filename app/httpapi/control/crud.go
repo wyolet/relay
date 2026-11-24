@@ -378,7 +378,7 @@ func registerKind[T any](
 				return nil, huma.Error400BadRequest(err.Error())
 			}
 			// The guard runs first: on kinds whose owner mirrors a spec field
-			// (Project, ServiceAccount) it is what re-derives
+			// (Project, ServiceAccount) it is what re-derives or completes
 			// the owner, and the owner is what the decision below turns on.
 			if err := checks.guarded(ctx, "create", nil, v); err != nil {
 				return nil, err
@@ -420,7 +420,7 @@ func registerKind[T any](
 		Method:      http.MethodPut,
 		Path:        base + "/by-id/{id}",
 		Summary:     "Update " + singular + " by id",
-		Description: "Replaces the " + singular + ". When metadata.resourceVersion is set, the update applies only while the stored row still has that version; otherwise it fails with 409 and error code stale_resource_version. Without it the update is unconditional. A metadata.owner different from the stored one moves the row to that scope: it needs create permission there, and fails with 409 resource_in_use while rows that reference it could not do so from the new scope. An omitted owner keeps the stored one; kinds whose owner follows a spec field (spec.projectId, spec.teamId, spec.scope) take it from that field.",
+		Description: "Replaces the " + singular + ". When metadata.resourceVersion is set, the update applies only while the stored row still has that version; otherwise it fails with 409 and error code stale_resource_version. Without it the update is unconditional. A metadata.owner different from the stored one moves the row to that scope: it needs create permission there, and fails with 409 resource_in_use while rows that reference it could not do so from the new scope. An omitted owner keeps the stored one; kinds whose owner follows a spec field (spec.teamId on a project, spec.scope on a role binding) take it from that field. A service account keeps the project or team it was made in: a spec.projectId that contradicts its owner answers 400, a new owner 409 resource_in_use.",
 		Tags:        []string{tag},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 403, 404, 500},
