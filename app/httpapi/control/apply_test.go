@@ -11,10 +11,12 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -73,5 +75,31 @@ func TestPlanFailure(t *testing.T) {
 	var ae *httpapi.APIError
 	if err := planFailure(scoped, testRBAC(), inUse); !errors.As(err, &ae) || ae.Err.Code != "resource_in_use" || ae.Err.Type != "invalid_request_error" {
 		t.Fatalf("refusal with a code = %#v, want the envelope with resource_in_use", err)
+	}
+}
+
+// A write that fails during Execute answers as the control API's own write would; a refused oauth value is the caller's 400 and keeps its reason.
+func TestStoreFailure(t *testing.T) {
+	refused := &hostkey.ValueRefusedError{Err: errors.New("the token endpoint rejected the credential with HTTP 400: invalid_grant")}
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"managed row", &directory.ManagedError{Kind: "group", Name: "g", Source: "scim"}, http.StatusConflict},
+		{"stale version", directory.ErrStaleResourceVersion, http.StatusConflict},
+		{"denied write", fmt.Errorf("team x: %w", authz.ErrForbidden), http.StatusForbidden},
+		{"refused oauth value", refused, http.StatusBadRequest},
+		{"anything else", errors.New("pool closed"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, msg := storeFailure(&apply.StoreError{Entry: apply.Entry{Kind: "HostKey", Name: "k"}, Err: tc.err})
+			if status != tc.status {
+				t.Fatalf("status = %d, want %d (%s)", status, tc.status, msg)
+			}
+		})
+	}
+	if _, msg := storeFailure(&apply.StoreError{Entry: apply.Entry{Kind: "HostKey", Name: "k"}, Err: refused}); !strings.Contains(msg, "invalid_grant") {
+		t.Fatalf("message = %q, want the refusal's reason", msg)
 	}
 }
