@@ -379,7 +379,7 @@ func TestPseudoAgentRemoval_Refused(t *testing.T) {
 			if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
 				t.Errorf("a refused removal deleted rows (-before +after):\n%s", diff)
 			}
-			if diff := cmp.Diff([]string{"pseudo-agent-removals.create"}, w.removalAudit()); diff != "" {
+			if diff := cmp.Diff([]string{"pseudo-agent-removals.delete"}, w.removalAudit()); diff != "" {
 				t.Errorf("audit (-want +got):\n%s", diff)
 			}
 		})

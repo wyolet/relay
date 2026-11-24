@@ -6,9 +6,11 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/plan"
@@ -108,6 +110,11 @@ func registerPseudoAgentRemoval(api huma.API, d Deps, protect huma.Middlewares) 
 		}
 		w, rows, err := d.runPseudo(ctx, expand, in.DryRun)
 		if err != nil {
+			if !in.DryRun {
+				row := refusedRow(ctx, err)
+				row.Action = strings.TrimSuffix(row.Action, ".create") + ".delete"
+				audit.RecordEach(ctx, []audit.Row{row})
+			}
 			return nil, err
 		}
 		out := PseudoAgentRemovalAnswer{Warnings: w.warnings}
