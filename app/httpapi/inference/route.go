@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/adapters"
@@ -39,11 +40,12 @@ func keepHops(hops []plan.RouteHop, keep func(*plan.RouteHop) bool) []plan.Route
 	return hops
 }
 
-// pipelineRequest is the pipeline input for one dispatched request over hops, its body in shape and naming the first hop's model.
-func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, a pipeline.Adapter, body []byte, shape adapters.Name, lc *lifecycle.Context) *pipeline.Request {
-	return &pipeline.Request{
+// pipelineRequest is the pipeline input for one dispatched request over hops, its body in shape and naming the first hop's model. With perHop set each hop is called with its own binding's adapter from specs instead of a.
+func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, a pipeline.Adapter, body []byte, shape adapters.Name, lc *lifecycle.Context, specs *adapter.Registry, perHop bool) *pipeline.Request {
+	perHop = perHop && specs != nil
+	req := &pipeline.Request{
 		Body:          body,
-		HopBody:       HopBodyFor(hops, hops[0].UpstreamModel),
+		HopBody:       HopBodyFor(specs, hops, hops[0].UpstreamModel, shape, perHop),
 		BodyShape:     shape,
 		Headers:       forwardHeaders(r.Header),
 		Adapter:       a,
@@ -55,6 +57,10 @@ func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops 
 		Stream:        in.Stream,
 		Lifecycle:     lc,
 	}
+	if perHop {
+		req.HopAdapters = specs
+	}
+	return req
 }
 
 // applyRouteIdentity stamps what the route decided onto lc: the model, the innermost caller policy, and the first hop's host and pricing (the pipeline restamps them per attempt).

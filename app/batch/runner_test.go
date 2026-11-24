@@ -431,6 +431,47 @@ func TestRun_KeepsThePlanItStartedWith(t *testing.T) {
 	}
 }
 
+// An item in the family's shape, or in the member's own, runs on a route whose first hop binds a member of the family, failing over to a hop of the family's shape: each hop is sent the item in its own form, path and auth.
+func TestRun_FamilyRoute(t *testing.T) {
+	for _, inbound := range []adapters.Name{"shape-base", "shape-member"} {
+		t.Run(string(inbound), func(t *testing.T) { runFamilyRoute(t, inbound) })
+	}
+}
+
+func runFamilyRoute(t *testing.T, inbound adapters.Name) {
+	member := newUpstream(t, answering(http.StatusInternalServerError, `{"error":{"message":"down"}}`))
+	base := newUpstream(t, answering(http.StatusOK, `{"id":"x"}`))
+
+	var w plantest.World
+	m := w.Model(w.Provider("vendor"), "test-model")
+	memberHost, baseHost := w.Host("member", member.URL), w.Host("base", base.URL)
+	w.Bind(m, memberHost, "shape-member")
+	w.Bind(m, baseHost, "shape-base")
+	w.Credential(memberHost, nil, plantest.System, "sk-member")
+	w.Credential(baseHost, nil, plantest.System, "sk-base")
+	u := w.User()
+	k := w.UserKey(u, "rk-secret")
+	rn, _, _ := runnerOver(t, w.Load(t))
+	rn.Specs = adapter.NewRegistry(
+		(&adapter.Spec{Name: "shape-base", DefaultPath: "/base/generate", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}}).Build(),
+		(&adapter.Spec{Name: "shape-member", Family: "shape-base", DefaultPath: "/member/generate", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Token"}, Envelope: &adapter.RequestEnvelope{
+			DropMembers:    []string{"model"},
+			DefaultMembers: []adapter.BodyMember{{Key: "version", Value: []byte(`"v1"`)}},
+		}}).Build(),
+	)
+
+	attr := Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: u.ID, CredentialKind: inference.CredentialKey, CredentialID: k.Meta.ID}
+	if status, _, err := rn.Run(context.Background(), "item-1", k.Spec.KeyHash, TokenClaims{}, attr, inbound, []byte(itemBody)); err != nil || status != http.StatusOK {
+		t.Fatalf("Run: status %d, err %v; want the base hop's 200", status, err)
+	}
+	if d := cmp.Diff([]sent{{"/member/generate", "Token sk-member", `{"version":"v1"}`}}, member.sent()); d != "" {
+		t.Errorf("member hop (-want +got):\n%s", d)
+	}
+	if d := cmp.Diff([]sent{{"/base/generate", "Bearer sk-base", itemBody}}, base.sent()); d != "" {
+		t.Errorf("base hop (-want +got):\n%s", d)
+	}
+}
+
 // A failover between hosts that name the model differently sends each its own name: the body is built for the first hop and reset for the next.
 func TestRun_FailoverSendsEachHopItsUpstreamName(t *testing.T) {
 	const wire = "global.vendor/test-model-v1:0"

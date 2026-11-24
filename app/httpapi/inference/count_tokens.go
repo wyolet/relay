@@ -127,7 +127,7 @@ func exactCounter(d Deps, profile clientprofile.Profile, route *plan.Route) (ada
 	return counter, keepHops(route.Hops, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == shape }), true
 }
 
-// countUpstream asks the upstream to count through the admission step and pipeline a generation takes. The model field is rewritten to the binding's upstream name, exactly as the byte-pass generation path does. Reports false after writing the error.
+// countUpstream asks the upstream to count through the admission step and pipeline a generation takes. The model field is rewritten to the binding's upstream name, exactly as the byte-pass generation path does. A shape's envelope edits a generation body, so its body edits are not applied to the count body; its joined header lines are, as the count call shares the generation call's header handling. Reports false after writing the error.
 func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, route *plan.Route, hops []plan.RouteHop, counter adapter.TokenCounter, req *ParsedRequest, requested string) (int, bool) {
 	ctx := r.Context()
 	lc := mintLifecycle(ctx, sourceCount, ClassificationFrom(ctx).ClientIP)
@@ -143,7 +143,7 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, route *plan.R
 
 	result, err := d.Pipeline.Run(ctx, &pipeline.Request{
 		Body:          req.upstreamBody(hops[0].UpstreamModel, nil),
-		HopBody:       HopBodyFor(hops, hops[0].UpstreamModel),
+		HopBody:       HopBodyFor(nil, hops, hops[0].UpstreamModel, "", false),
 		Headers:       forwardHeaders(r.Header),
 		Adapter:       counter.CountAdapter(),
 		Model:         route.Model,

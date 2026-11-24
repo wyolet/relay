@@ -79,14 +79,16 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 		return 0, nil, fmt.Errorf("batch: adapter not registered for %s/%s", inbound, shape)
 	}
 	native := inboundSpec.IsNativePath
-	sameShape := inbound == shape || inboundSpec.BytePass || (native != nil && native(first.Binding, first.Host))
+	family := upstreamSpec.FamilyName()
+	sameFamily := inbound == shape || inbound == family
+	sameShape := sameFamily || inboundSpec.BytePass || (native != nil && native(first.Binding, first.Host))
 	if !sameShape {
 		return 0, nil, fmt.Errorf("%w (%s→%s)", ErrCrossShape, inbound, shape)
 	}
-	// One body serves every hop, so failover keeps to the hops that speak the first hop's shape.
+	// One body serves every hop, so failover keeps to the hops of the first hop's shape family.
 	hops := make([]plan.RouteHop, 0, len(route.Hops))
 	for _, h := range route.Hops {
-		if h.Binding.Spec.Adapter == shape {
+		if rn.Specs.Spec(h.Binding.Spec.Adapter).FamilyName() == family {
 			hops = append(hops, h)
 		}
 	}
@@ -128,9 +130,9 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 	// the inbound spec's ParamPaths address it — mirrors runBytePass.
 	wireBody, _ := inference.UpstreamBody(req, route.UpstreamModel, route.Model, inboundSpec.ParamPaths)
 
-	result, err := rn.Pipeline.Run(ctx, &pipeline.Request{
+	preq := &pipeline.Request{
 		Body:          wireBody,
-		HopBody:       inference.HopBodyFor(hops, route.UpstreamModel),
+		HopBody:       inference.HopBodyFor(rn.Specs, hops, route.UpstreamModel, inbound, sameFamily),
 		BodyShape:     inbound,
 		Headers:       http.Header{},
 		Adapter:       upstreamAdapter,
@@ -140,7 +142,12 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 		ModelName:     route.Model.Meta.Name,
 		UpstreamModel: route.UpstreamModel,
 		Lifecycle:     lc,
-	})
+	}
+	// A byte-pass-only or native item keeps the inbound shape's path and renames on every hop.
+	if sameFamily {
+		preq.HopAdapters = rn.Specs
+	}
+	result, err := rn.Pipeline.Run(ctx, preq)
 	if err != nil {
 		return 0, nil, err
 	}

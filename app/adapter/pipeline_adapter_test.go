@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/pkg/adapters"
 )
 
@@ -38,6 +40,27 @@ func TestNewRequestCopiesHeadersPerAttempt(t *testing.T) {
 		t.Errorf("second Accept = %q, want application/json", got)
 	}
 	if len(hdr) != 2 || hdr.Get("Authorization") != "" || hdr.Get("Content-Type") != "" || len(hdr["X-Multi"]) != 2 || hdr.Get("Accept") != "application/json" {
+		t.Errorf("forwarded headers changed: %v", hdr)
+	}
+}
+
+// A header the envelope joins goes out on one line when the caller sent it on several; a single line and every other header are left as sent, and the forwarded headers are not touched.
+func TestNewRequestJoinsEnvelopeHeaders(t *testing.T) {
+	s := (&Spec{Name: "shape", Envelope: &RequestEnvelope{JoinHeaders: []string{"x-multi", "X-Single"}}}).Build()
+	a := &specAdapter{spec: s}
+	hdr := http.Header{"X-Multi": {"a", "b,c"}, "X-Single": {"d"}, "X-Other": {"e", "f"}}
+
+	req, release, err := a.newRequest(context.Background(), "http://up.invalid/", "", []byte(`{}`), hdr, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	want := http.Header{"X-Multi": {"a,b,c"}, "X-Single": {"d"}, "X-Other": {"e", "f"}, "Content-Type": {"application/json"}}
+	if diff := cmp.Diff(want, req.Header); diff != "" {
+		t.Errorf("upstream headers (-want +got):\n%s", diff)
+	}
+	if len(hdr["X-Multi"]) != 2 {
 		t.Errorf("forwarded headers changed: %v", hdr)
 	}
 }
