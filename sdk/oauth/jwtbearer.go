@@ -194,20 +194,44 @@ type serviceAccountKeyFile struct {
 }
 
 // ParseCredential reads a stored or submitted credential in one of three
-// forms: a token blob (access_token or refresh_token), the Credential shape
-// with jwtBearer, or a service-account key file ("type": "service_account")
-// with an added scopes array. A JWT-bearer grant is validated; errors never
-// include the input.
+// forms, told apart by its exact top-level members: the Credential shape
+// (jwtBearer), a token blob (access_token or refresh_token; nothing else in it
+// is decoded), or a service-account key file ("type": "service_account") with
+// an added scopes array. A JWT-bearer grant is validated; errors never include
+// the input.
 func ParseCredential(raw []byte) (*Credential, error) {
 	// JSON decode errors quote the offending input, so they are not passed on.
 	if !json.Valid(raw) {
 		return nil, errors.New("oauth: the credential is not valid JSON")
 	}
-	var keyFile serviceAccountKeyFile
-	if err := json.Unmarshal(raw, &keyFile); err != nil {
-		return nil, errNotCredential
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return nil, errors.New("oauth: the credential is not a JSON object")
 	}
-	if keyFile.Type == "service_account" {
+	_, hasAccess := members["access_token"]
+	_, hasRefresh := members["refresh_token"]
+	switch {
+	case members["jwtBearer"] != nil:
+		var c Credential
+		if err := json.Unmarshal(raw, &c); err != nil || c.JWTBearer == nil {
+			return nil, errNotCredential
+		}
+		if err := c.JWTBearer.Validate(); err != nil {
+			return nil, err
+		}
+		return &c, nil
+	case hasAccess || hasRefresh:
+		var c Credential
+		if hasAccess && json.Unmarshal(members["access_token"], &c.AccessToken) != nil ||
+			hasRefresh && json.Unmarshal(members["refresh_token"], &c.RefreshToken) != nil {
+			return nil, errors.New("oauth: access_token and refresh_token must be strings")
+		}
+		return &c, nil
+	case string(members["type"]) == `"service_account"`:
+		var keyFile serviceAccountKeyFile
+		if err := json.Unmarshal(raw, &keyFile); err != nil {
+			return nil, errNotCredential
+		}
 		g := &JWTBearer{
 			Issuer:       keyFile.ClientEmail,
 			PrivateKey:   keyFile.PrivateKey,
@@ -219,19 +243,7 @@ func ParseCredential(raw []byte) (*Credential, error) {
 			return nil, err
 		}
 		return &Credential{JWTBearer: g}, nil
+	default:
+		return nil, errors.New("oauth: the credential has no access_token, refresh_token or jwtBearer and is not a service-account key file")
 	}
-	var c Credential
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return nil, errNotCredential
-	}
-	if c.JWTBearer != nil {
-		if err := c.JWTBearer.Validate(); err != nil {
-			return nil, err
-		}
-		return &c, nil
-	}
-	if c.AccessToken == "" && c.RefreshToken == "" {
-		return nil, errors.New("oauth: credential has no access_token, refresh_token or jwtBearer")
-	}
-	return &c, nil
 }

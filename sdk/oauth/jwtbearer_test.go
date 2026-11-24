@@ -246,6 +246,19 @@ func TestParseCredential(t *testing.T) {
 			t.Fatalf("got %+v, %v", c, err)
 		}
 	})
+	// A token blob is recognised by its own members; nothing else in it is decoded or checked.
+	for _, raw := range []string{
+		`{"refresh_token":"rt","scopes":"not-an-array"}`,
+		`{"refresh_token":"rt","type":5}`,
+		`{"access_token":"at","type":"service_account"}`,
+	} {
+		t.Run("token blob "+raw, func(t *testing.T) {
+			c, err := oauth.ParseCredential([]byte(raw))
+			if err != nil || c.JWTBearer != nil {
+				t.Fatalf("got %+v, %v; want a token blob", c, err)
+			}
+		})
+	}
 	t.Run("credential shape", func(t *testing.T) {
 		raw, _ := json.Marshal(oauth.Credential{
 			Token:     oauth.Token{AccessToken: "at"},
@@ -276,6 +289,7 @@ func TestParseCredential(t *testing.T) {
 		{"non-RSA key", keyFile(func(m map[string]any) { m["private_key"] = pkcs8PEM(t, ecKey) })},
 		{"http token URL", keyFile(func(m map[string]any) { m["token_uri"] = "http://token.example.test/token" })},
 		{"no token and no grant", []byte(`{"token_type":"Bearer"}`)},
+		{"type differs in case", keyFile(func(m map[string]any) { delete(m, "type"); m["Type"] = "service_account" })},
 		{"not JSON", []byte(`{"private_key":"VALUE-MARKER`)},
 		{"field of the wrong type", []byte(`{"type":"service_account","scopes":"VALUE-MARKER"}`)},
 	} {
