@@ -63,6 +63,13 @@ func serviceAccount(name, projectName string) manifest.Document {
 	}}
 }
 
+func teamServiceAccount(name, teamName string) manifest.Document {
+	return manifest.Document{ServiceAccount: &manifest.ServiceAccountDTO{
+		Metadata: manifest.WireMeta{Name: name, Owner: manifest.WireOwner{Kind: "team", Name: teamName}},
+		Spec:     manifest.ServiceAccountSpec{Team: teamName},
+	}}
+}
+
 func key(name, principalKind, principalName string) manifest.Document {
 	return manifest.Document{Key: &manifest.KeyDTO{
 		Metadata: manifest.WireMeta{Name: name},
@@ -197,6 +204,11 @@ var graphCases = []struct {
 		budget("bd", inSearch),
 	}},
 	{name: "service account in a missing project, and in none", add: []manifest.Document{serviceAccount("indexer", "ghost"), serviceAccount("drifter", "")}},
+	{name: "service account of a present team", add: []manifest.Document{teamServiceAccount("deployer", "platform")}},
+	{name: "service account of a missing team, and of a project and a team", add: []manifest.Document{
+		teamServiceAccount("deployer", "ghost-team"),
+		{ServiceAccount: &manifest.ServiceAccountDTO{Metadata: manifest.WireMeta{Name: "both"}, Spec: manifest.ServiceAccountSpec{Project: "ml-search", Team: "platform"}}},
+	}},
 	{name: "keys of a present, a missing and a user principal", add: []manifest.Document{
 		serviceAccount("indexer", "ml-search"),
 		key("indexer-prod", "serviceaccount", "indexer"),
@@ -482,8 +494,13 @@ var wantReports = map[string][]string{
 	},
 	"rows owned by a present project": nil,
 	"service account in a missing project, and in none": {
-		"error incomplete ServiceAccount/drifter.spec.project: project is required",
+		"error incomplete ServiceAccount/drifter.spec: exactly one of project and team is required",
 		"error ref_missing ServiceAccount/indexer.spec.project → Project/ghost: project \"ghost\" not found",
+	},
+	"service account of a present team": nil,
+	"service account of a missing team, and of a project and a team": {
+		"error incomplete ServiceAccount/both.spec: exactly one of project and team is required",
+		"error ref_missing ServiceAccount/deployer.spec.team → Team/ghost-team: team \"ghost-team\" not found",
 	},
 	"tier policy linking pools": {
 		"error invariant Policy/tier.spec.pools: a host-owned tier policy links no pools",

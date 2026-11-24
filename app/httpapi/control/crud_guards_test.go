@@ -100,15 +100,18 @@ func TestMergeHostKeyPreserveValue(t *testing.T) {
 	mergeHostKeyPreserveValue(&hostkey.HostKey{}, nil)
 }
 
-// Spec is the source of truth for a scoped row's owner: a caller who sends a mismatched owner must not end up with a row filed under it.
+// Spec is the source of truth for a scoped row's owner: a caller who sends a mismatched owner must not end up with a row filed under it. A service account's owner is metadata.owner, completed from spec.projectId when the default project owner has no id; a mismatched one is refused instead.
 func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 	teamID, projectID := meta.NewID(), meta.NewID()
 	wrong := meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
 
 	proj := &project.Project{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: wrong}}
 	proj.Spec.TeamID = teamID
-	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "sa", Owner: wrong}}
+	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "sa", Owner: meta.Owner{Kind: meta.OwnerProject}}}
 	sa.Spec.ProjectID = projectID
+	teamSA := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "team-sa", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}}
+	mismatched := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "sa", Owner: wrong}}
+	mismatched.Spec.ProjectID = projectID
 	rb := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "rb", Owner: wrong}}
 	rb.Spec.RoleID = meta.NewID()
 	rb.Spec.Scope = meta.Owner{Kind: meta.OwnerTeam, ID: teamID}
@@ -124,11 +127,19 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 	}{
 		{"project takes its team", guardProject(Deps{})(ctx, "create", nil, proj), proj.Meta.Owner, meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, proj.Validate()},
 		{"service account takes its project", guardServiceAccount(Deps{})(ctx, "create", nil, sa), sa.Meta.Owner, meta.Owner{Kind: meta.OwnerProject, ID: projectID}, sa.Validate()},
+		{"service account keeps its team", guardServiceAccount(Deps{})(ctx, "create", nil, teamSA), teamSA.Meta.Owner, meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, teamSA.Validate()},
 		{"role binding takes its scope", guardRoleBinding(Deps{})(ctx, "create", nil, rb), rb.Meta.Owner, meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, rb.Validate()},
 	} {
 		if tc.err != nil || tc.owner != tc.want || tc.valid != nil {
 			t.Errorf("%s: guard %v, owner %+v (want %+v), then Validate %v", tc.name, tc.err, tc.owner, tc.want, tc.valid)
 		}
+	}
+	if teamSA.Spec.TeamID != teamID || teamSA.Spec.ProjectID != "" {
+		t.Errorf("team-owned service account spec = %+v, want spec.teamId mirroring its team", teamSA.Spec)
+	}
+	err := guardServiceAccount(Deps{})(ctx, "create", nil, mismatched)
+	if want := `serviceaccount "sa": owner.kind must be project or team, got "user"`; err != nil || mismatched.Validate() == nil || mismatched.Validate().Error() != want {
+		t.Errorf("service account with a mismatched owner: guard %v, then Validate %v; want Validate %q", err, mismatched.Validate(), want)
 	}
 }
 

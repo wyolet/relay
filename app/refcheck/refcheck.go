@@ -347,7 +347,7 @@ func (c Checker) Key(ctx context.Context, k *key.Key) error {
 }
 
 // KeyOwner derives the key's owner from its principal — a service account's
-// project, or the user it names. An account the caller may not see is
+// owner, or the user it names. An account the caller may not see is
 // reported as absent.
 func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 	switch k.Spec.Principal.Kind {
@@ -359,7 +359,7 @@ func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 		if sa == nil || !Visible(ctx, c.Authz, "service-account", sa.Meta.ID, sa.Meta.Owner) {
 			return notVisible("service-account", k.Spec.Principal.ID)
 		}
-		k.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}
+		k.Meta.Owner = sa.Meta.Owner
 	case key.PrincipalUser:
 		k.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: k.Spec.Principal.ID}
 		if err := StampOwnerID(ctx, &k.Meta.Owner); err != nil {
@@ -378,11 +378,11 @@ func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 	return nil
 }
 
-// ServiceAccount re-derives the owner from spec.projectId and checks the
-// project.
+// ServiceAccount stamps the owner (metadata.owner, or the project
+// spec.projectId names) and checks the project or team it names.
 func (c Checker) ServiceAccount(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
 	sa.StampOwner()
-	return c.projectRef(ctx, sa.Spec.ProjectID)
+	return c.ownerScopeRef(ctx, sa.Meta.Owner)
 }
 
 // Project re-derives the owner from spec.teamId and checks the team.

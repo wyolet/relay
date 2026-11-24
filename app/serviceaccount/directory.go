@@ -9,7 +9,7 @@ import (
 func (s *ServiceAccount) ToDirectory() (*directory.ServiceAccount, error) {
 	return &directory.ServiceAccount{
 		Meta: meta.ToDirectory(s.Meta),
-		Spec: directory.ServiceAccountSpec{ProjectID: s.Spec.ProjectID, Enabled: s.Spec.Enabled},
+		Spec: directory.ServiceAccountSpec{ProjectID: s.Spec.ProjectID, TeamID: s.Spec.TeamID, Enabled: s.Spec.Enabled},
 	}, nil
 }
 
@@ -18,7 +18,7 @@ func (s *ServiceAccount) ToDirectory() (*directory.ServiceAccount, error) {
 func FromDirectory(r *directory.ServiceAccount) (*ServiceAccount, error) {
 	sa := &ServiceAccount{
 		Meta: meta.FromDirectory(r.Meta),
-		Spec: Spec{ProjectID: r.Spec.ProjectID, Enabled: r.Spec.Enabled},
+		Spec: Spec{ProjectID: r.Spec.ProjectID, TeamID: r.Spec.TeamID, Enabled: r.Spec.Enabled},
 	}
 	sa.StampOwner()
 	return sa, nil

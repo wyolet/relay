@@ -54,8 +54,10 @@ func TestTakesKeysOf(t *testing.T) {
 		{"personal, its user", Personal(userID, "alice"), alice, true},
 		{"personal, another user", Personal(userID, "alice"), other, false},
 		{"personal, a service account of the same id", Personal(userID, "alice"), saNamedLikeUser, false},
-		{"service, its service account", ForServiceAccount(saID, "ci", "", projID), sa, true},
-		{"service, a user", ForServiceAccount(saID, "ci", "", projID), alice, false},
+		{"service, its service account", ForServiceAccount(saID, "ci", "", project), sa, true},
+		{"service, a user", ForServiceAccount(saID, "ci", "", project), alice, false},
+		{"service in a team, its service account", ForServiceAccount(saID, "ci", "", team), sa, true},
+		{"service in a team, a user", ForServiceAccount(saID, "ci", "", team), alice, false},
 		{"member following role bindings, its user", follows, alice, true},
 		{"member following role bindings, another user", follows, other, false},
 		{"member opened on first use, its user", Member(userID, "alice", project, "ml", ""), alice, false},
@@ -84,7 +86,8 @@ func TestKindsAndPlaces(t *testing.T) {
 		{ForTeam(teamID, "acme", "Acme Inc"), KindTeam, "team:" + teamID, "team-acme", "Acme Inc"},
 		{ForProject(projID, "ml", ""), KindProject, "project:" + projID, "project-ml", "ml"},
 		{Personal(userID, "Alice@Example.com"), KindPersonal, "personal:" + userID, "user-alice-example-com", "Alice@Example.com"},
-		{ForServiceAccount(saID, "ci", "", projID), KindService, "service:" + saID, "sa-ci", "ci"},
+		{ForServiceAccount(saID, "ci", "", project), KindService, "service:" + saID, "sa-ci", "ci"},
+		{ForServiceAccount(saID, "ci", "CI", team), KindService, "service:" + saID, "sa-ci", "CI"},
 		{Member(userID, "alice", project, "ml", ""), KindMember, "member:project:" + projID + ":" + userID, "alice-project-ml", "alice in ml"},
 		{Member(userID, "alice", team, "acme", "Acme Inc"), KindMember, "member:team:" + teamID + ":" + userID, "alice-team-acme", "alice in Acme Inc"},
 		{fix(), KindProvider, "", "acme-openai", ""},
@@ -129,7 +132,7 @@ func TestValidate(t *testing.T) {
 		{"project owner without id", func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerProject} }, `account "acme-openai": owner.kind "project" requires an id`},
 		{"host owner", func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: hostID} }, `account "acme-openai": owner.kind must be organization, system, team, project or user, got "host"`},
 		{"no owner", func(a *Account) { a.Meta.Owner = meta.Owner{} }, `account "acme-openai": owner.kind must be organization, system, team, project or user, got ""`},
-		{"a provider account has no holder", func(a *Account) { a.Spec.Holder = holder }, `account "acme-openai": a provider account (spec.hostId set) has no holder, except a service account's share, owned by its project`},
+		{"a provider account has no holder", func(a *Account) { a.Spec.Holder = holder }, `account "acme-openai": a provider account (spec.hostId set) has no holder, except a service account's share, owned by the service account's owner`},
 		{"a holder that is no id", func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderUser, ID: "alice"} }, "Key: 'Account.Spec.Holder.ID' Error:Field validation for 'ID' failed on the 'uuid' tag"},
 		{"a holder of an unknown kind", func(a *Account) { a.Spec.Holder = &Holder{Kind: "group", ID: userID} }, "Key: 'Account.Spec.Holder.Kind' Error:Field validation for 'Kind' failed on the 'oneof' tag"},
 		{"a system account needs a host", func(a *Account) {
@@ -138,8 +141,14 @@ func TestValidate(t *testing.T) {
 		{"a user's account held by another user fits no kind", func(a *Account) {
 			a.Spec.HostID, a.Spec.OrgID, a.Meta.Owner, a.Spec.Holder = "", "", meta.Owner{Kind: meta.OwnerUser, ID: teamID}, holder
 		}, `account "acme-openai": spec.hostId is required unless the account is a team's, a project's, a user's personal account, a member account or a service account's`},
-		{"a team's account held by a service account fits no kind", func(a *Account) {
+		{"a team's account held by a service account is the service account's", func(a *Account) {
 			a.Spec.HostID, a.Spec.OrgID, a.Spec.Holder = "", "", &Holder{Kind: HolderServiceAccount, ID: saID}
+		}, ""},
+		{"the organization's account held by a service account fits no kind", func(a *Account) {
+			a.Spec.HostID, a.Spec.OrgID, a.Spec.Holder, a.Meta.Owner = "", "", &Holder{Kind: HolderServiceAccount, ID: saID}, meta.Global
+		}, `account "acme-openai": spec.hostId is required unless the account is a team's, a project's, a user's personal account, a member account or a service account's`},
+		{"the system's account held by a service account fits no kind", func(a *Account) {
+			a.Spec.HostID, a.Spec.OrgID, a.Spec.Holder, a.Meta.Owner = "", "", &Holder{Kind: HolderServiceAccount, ID: saID}, meta.Owner{Kind: meta.OwnerSystem}
 		}, `account "acme-openai": spec.hostId is required unless the account is a team's, a project's, a user's personal account, a member account or a service account's`},
 	} {
 		a := fix()
@@ -153,7 +162,7 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// A share is a provider account owned by its receiver, a service account's by its project and held by it, and keyed by receiver so one account is shared with one receiver once.
+// A share is a provider account owned by its receiver, a service account's by the service account's owner and held by it, and keyed by receiver so one account is shared with one receiver once.
 func TestShare(t *testing.T) {
 	src := fix()
 	for _, tc := range []struct {
@@ -165,6 +174,7 @@ func TestShare(t *testing.T) {
 		{"team", Receiver{Kind: ReceiverTeam, ID: teamID}, team, nil},
 		{"user", Receiver{Kind: ReceiverUser, ID: userID}, user, nil},
 		{"service account", Receiver{Kind: ReceiverServiceAccount, ID: saID}, project, &Holder{Kind: HolderServiceAccount, ID: saID}},
+		{"service account of a team", Receiver{Kind: ReceiverServiceAccount, ID: saID}, team, &Holder{Kind: HolderServiceAccount, ID: saID}},
 	} {
 		a := Share(src, tc.r, tc.owner, "Platform")
 		a.Meta.ID = projID
@@ -205,8 +215,11 @@ func TestValidateShare(t *testing.T) {
 		{"a team's share", func(*Account) {}, ""},
 		{"org id stays on the real account", func(a *Account) { a.Spec.OrgID = "org" }, `account "acme-openai-for-t": a shared account takes its org and keys from the real account; orgId stays on that one`},
 		{"the system receives no share", func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem} }, `account "acme-openai-for-t": a shared account is owned by the user, team or project it was shared with`},
-		{"a user holder is no share's", func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderUser, ID: userID} }, `account "acme-openai-for-t": a provider account (spec.hostId set) has no holder, except a service account's share, owned by its project`},
-		{"a service account's share outside a project", func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderServiceAccount, ID: saID} }, `account "acme-openai-for-t": a provider account (spec.hostId set) has no holder, except a service account's share, owned by its project`},
+		{"a user holder is no share's", func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderUser, ID: userID} }, `account "acme-openai-for-t": a provider account (spec.hostId set) has no holder, except a service account's share, owned by the service account's owner`},
+		{"a service account's share owned by a team", func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderServiceAccount, ID: saID} }, ""},
+		{"a service account's share owned by the organization", func(a *Account) {
+			a.Spec.Holder, a.Meta.Owner = &Holder{Kind: HolderServiceAccount, ID: saID}, meta.Global
+		}, `account "acme-openai-for-t": a shared account is owned by the user, team or project it was shared with`},
 		{"not shared with itself", func(a *Account) { a.Spec.SourceAccountID = a.Meta.ID }, `account "acme-openai-for-t": an account cannot be shared with itself`},
 		{"a source that is no id", func(a *Account) { a.Spec.SourceAccountID = "acme-openai" }, "Key: 'Account.Spec.SourceAccountID' Error:Field validation for 'SourceAccountID' failed on the 'uuid' tag"},
 		{"a caller account is never a share", func(a *Account) { a.Spec.HostID = "" }, `account "acme-openai-for-t": only a provider account is shared`},

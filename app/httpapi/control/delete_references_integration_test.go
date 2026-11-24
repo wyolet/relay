@@ -189,7 +189,7 @@ func (f policyDeleteFixture) policyBinding(t *testing.T, ctx context.Context, na
 // accountOf is the id of the service account's own account, made as relay makes it.
 func (f policyDeleteFixture) accountOf(t *testing.T, ctx context.Context, sa *serviceaccount.ServiceAccount) string {
 	t.Helper()
-	id, err := f.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID))
+	id, err := f.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner))
 	must(t, "ensure the service account's account", err)
 	return id
 }

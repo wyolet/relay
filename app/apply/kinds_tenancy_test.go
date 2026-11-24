@@ -235,7 +235,7 @@ func accountRoleBinding(rows *Rows, sa *serviceaccount.ServiceAccount, labels ma
 func accountPolicyBinding(rows *Rows, sa *serviceaccount.ServiceAccount, labels map[string]string) *policybinding.PolicyBinding {
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-policy", Owner: sa.Meta.Owner}}
 	rows.Policies = append(rows.Policies, pol)
-	acct := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID)
+	acct := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner)
 	acct.Meta.ID = meta.NewID()
 	rows.Accounts = append(rows.Accounts, acct)
 	pb := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-policy", Owner: sa.Meta.Owner, Labels: labels}}

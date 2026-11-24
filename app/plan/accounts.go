@@ -101,7 +101,7 @@ func (c *controllers) managedAccount(tx *engine.Txn, key string) error {
 		}
 	case "service":
 		if sa := engine.Get[serviceaccount.ServiceAccount](tx, rest); sa != nil {
-			m.Want = account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Spec.ProjectID)
+			m.Want = account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Owner)
 		}
 	case "member":
 		m.member = true

@@ -129,7 +129,7 @@ func (b *builder) ownAccount(ctx context.Context, p key.Principal) (string, erro
 		if err != nil || sa == nil {
 			return "", fmt.Errorf("service account %q: %w", p.ID, err)
 		}
-		return s.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Spec.ProjectID))
+		return s.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Owner))
 	}
 	return "", fmt.Errorf("principal kind %q has no account of its own", p.Kind)
 }
