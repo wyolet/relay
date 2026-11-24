@@ -165,6 +165,53 @@ func TestRoute_UserAndTheirBotsCountAsOneLaneUpstream(t *testing.T) {
 	})
 }
 
+// The reach preview reads a user's service account through its owner's personal rung, and a team's own service account through its team alone, for every snapshot name: a model the personal policy leaves out is excluded on the personal rung, and the team's key comes before the deployment's.
+func TestReach_UserAndTeamServiceAccountsPerSnapshot(t *testing.T) {
+	b, m2 := reachWorld()
+	u := b.w.user()
+	bot := b.w.userSA(u)
+	b.w.bindPolicy(b.w.policy("only-m1", policy.Spec{Models: []string{"acme/m1"}}), b.w.personal(u))
+	deployer := b.w.teamSA(b.team)
+	b.w.cred(b.hostB, b.acctB, meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID})
+	h := b.w.start(t)
+	v := h.e.View()
+
+	r := ReachOf(v, b.w.saAccount(bot).Meta.ID, nil)
+	if r == nil || r.Refused != nil || !slices.Equal(modelNames(r.Models), []string{"m1"}) {
+		t.Fatalf("bot reach = %+v, want m1 alone", r)
+	}
+	for _, s := range r.Models[0].Snapshots {
+		if s.Refused != nil || len(s.Hosts) == 0 {
+			t.Errorf("bot: snapshot %s = %+v, want it served", s.Name, s)
+		}
+	}
+	if ex := excludedBy(r, m2.Meta.Name); ex == nil || ex.Refused == nil || ex.Refused.Rung != limits.RungPersonal || ex.Refused.SubjectID != accountSubject(b.w.personal(u).Meta.ID) {
+		t.Errorf("bot: m2 excluded %+v, want refused on the personal rung of %s", ex, b.w.personal(u).Meta.Name)
+	}
+
+	r = ReachOf(v, b.w.saAccount(deployer).Meta.ID, nil)
+	if r == nil || r.Refused != nil {
+		t.Fatalf("team service account reach = %+v", r)
+	}
+	var m1 *ModelReach
+	for i := range r.Models {
+		if r.Models[i].Model.Meta.ID == b.m1.Meta.ID {
+			m1 = &r.Models[i]
+		}
+	}
+	if m1 == nil || len(m1.Snapshots) == 0 {
+		t.Fatalf("team service account: m1 = %+v, want it reached", m1)
+	}
+	for _, s := range m1.Snapshots {
+		if len(s.Hosts) == 0 || s.Hosts[0].Meta.ID != b.hostB.Meta.ID || len(s.Via) == 0 || s.Via[0].Pool != nil {
+			t.Errorf("team service account: snapshot %s = %+v, want the team's own key at %s first", s.Name, s, b.hostB.Meta.Name)
+		}
+	}
+	if cp := LanePlan(v, b.w.saAccount(deployer).Meta.ID); cp == nil || cp.Team().SubjectID != accountSubject(b.w.teamAccount(b.team).Meta.ID) || cp.Project().SubjectID != "" {
+		t.Errorf("team service account lane = %+v, want the team's rung and no project", cp)
+	}
+}
+
 // Service accounts a team or a project owns keep a lane each: a per-lane limit above them counts once per service account.
 func TestLane_TeamAndProjectServiceAccountsKeepTheirOwnLanes(t *testing.T) {
 	b := newBasic()
