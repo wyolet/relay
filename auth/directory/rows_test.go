@@ -131,3 +131,32 @@ func TestTenancy(t *testing.T) {
 	must(t, h.d.CreateProject(ctx, p2))
 	must(t, h.d.DeleteProject(ctx, p2.Meta.ID))
 }
+
+func TestTeamOwnedServiceAccount(t *testing.T) {
+	h := newHarness(t)
+	team := &directory.Team{Meta: directory.Metadata{Name: "core"}}
+	must(t, h.d.CreateTeam(ctx, team))
+	p := &directory.Project{Meta: directory.Metadata{Name: "api"}, Spec: directory.ProjectSpec{TeamID: team.Meta.ID}}
+	must(t, h.d.CreateProject(ctx, p))
+
+	sa := &directory.ServiceAccount{Meta: directory.Metadata{Name: "bot", Owner: authz.Owner{Kind: directory.OwnerProject, ID: p.Meta.ID}},
+		Spec: directory.ServiceAccountSpec{TeamID: team.Meta.ID}}
+	must(t, h.d.CreateServiceAccount(ctx, sa))
+	if sa.Meta.Owner != (authz.Owner{Kind: directory.OwnerTeam, ID: team.Meta.ID}) {
+		t.Fatalf("service account owner = %+v, want its team", sa.Meta.Owner)
+	}
+	got, err := h.s.ServiceAccounts.Get(ctx, sa.Meta.ID)
+	must(t, err)
+	if got.Spec.TeamID != team.Meta.ID || got.Spec.ProjectID != "" || got.Meta.Owner != sa.Meta.Owner {
+		t.Fatalf("stored service account = %+v %+v", got.Meta.Owner, got.Spec)
+	}
+
+	wantErr(t, "account in a missing team", h.d.CreateServiceAccount(ctx, &directory.ServiceAccount{Meta: directory.Metadata{Name: "x"},
+		Spec: directory.ServiceAccountSpec{TeamID: "nope"}}), directory.ErrInvalid)
+	wantErr(t, "account with a project and a team", h.d.CreateServiceAccount(ctx, &directory.ServiceAccount{Meta: directory.Metadata{Name: "x"},
+		Spec: directory.ServiceAccountSpec{ProjectID: p.Meta.ID, TeamID: team.Meta.ID}}), directory.ErrInvalid)
+	wantErr(t, "delete of a team owning an account", h.d.DeleteTeam(ctx, team.Meta.ID), directory.ErrInvalid)
+
+	must(t, h.d.DeleteServiceAccount(ctx, sa.Meta.ID))
+	must(t, h.d.DeleteTeam(ctx, team.Meta.ID))
+}

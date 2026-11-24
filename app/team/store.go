@@ -58,7 +58,7 @@ func (s *Store) Upsert(ctx context.Context, t *Team) error {
 	return meta.FromDirectoryError(s.rows.Upsert(ctx, r))
 }
 
-// Delete relies on the FK to cascade the team's projects.
+// Delete relies on the FKs: the team's projects cascade, and a service account the team owns refuses the delete.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.rows.Delete(ctx, id)
 }

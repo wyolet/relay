@@ -54,7 +54,7 @@ func TestRollbackBelowSharedTablesRestoresAuthSchema(t *testing.T) {
 }
 
 // authHead is the auth module's newest migration.
-const authHead = 5
+const authHead = 6
 
 func authVersion(t *testing.T, dsn string) int64 {
 	t.Helper()

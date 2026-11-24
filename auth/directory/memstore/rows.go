@@ -20,13 +20,14 @@ func newTable[T any](meta func(*T) *directory.Metadata, clone func(*T) *T) *tabl
 	return &table[T]{rows: map[string]*T{}, meta: meta, clone: clone}
 }
 
-// kindStore is the directory.Store of one kind. prepare runs on the caller's row before the write, check on the copy about to be stored, onDelete after the row is gone.
+// kindStore is the directory.Store of one kind. prepare runs on the caller's row before the write, check on the copy about to be stored, checkDelete before a delete, onDelete after the row is gone.
 type kindStore[T any] struct {
-	s        *Store
-	t        *table[T]
-	prepare  func(*T)
-	check    func(*T) error
-	onDelete func(id string)
+	s           *Store
+	t           *table[T]
+	prepare     func(*T)
+	check       func(*T) error
+	checkDelete func(id string) error
+	onDelete    func(id string)
 }
 
 func (k kindStore[T]) Get(_ context.Context, id string) (*T, error) {
@@ -97,6 +98,11 @@ func (k kindStore[T]) Delete(_ context.Context, id string) error {
 	defer k.s.mu.Unlock()
 	if _, ok := k.t.rows[id]; !ok {
 		return nil
+	}
+	if k.checkDelete != nil {
+		if err := k.checkDelete(id); err != nil {
+			return err
+		}
 	}
 	delete(k.t.rows, id)
 	if k.onDelete != nil {

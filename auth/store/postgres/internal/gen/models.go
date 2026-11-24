@@ -95,12 +95,13 @@ type ServiceAccount struct {
 	ID              string
 	Name            string
 	DisplayName     string
-	ProjectID       string
+	ProjectID       pgtype.Text
 	Metadata        []byte
 	Spec            []byte
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 	ResourceVersion int64
+	TeamID          pgtype.Text
 }
 
 type Team struct {

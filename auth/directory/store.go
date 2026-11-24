@@ -42,7 +42,7 @@ type UserStore interface {
 	RemoveIdentities(ctx context.Context, userID string) error
 }
 
-// Stores is every store the directory reads and writes. A delete cascades in the store, in the delete's transaction: a team takes its projects, a team or project its service accounts and the bindings scoped to it, a role its bindings, and a user or service account leaves every group and binding it was in.
+// Stores is every store the directory reads and writes. A delete cascades in the store, in the delete's transaction: a team takes its projects, a project its service accounts, a team or project the bindings scoped to it, a role its bindings, and a user or service account leaves every group and binding it was in. A team that owns a service account itself is not deleted (ErrInvalid).
 type Stores struct {
 	Users           UserStore
 	Groups          Store[Group]
