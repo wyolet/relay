@@ -15,13 +15,13 @@ import (
 	"github.com/wyolet/relay/pkg/engine"
 )
 
-// unservableModel is an enabled model with bindings, none of them enabled at a host requests are routed to; hosts names its bindings' hosts, for the message.
+// unservableModel is an enabled model with bindings, none of them enabled at a host requests are routed to and serving one of its snapshots; hosts names its bindings' hosts, for the message.
 type unservableModel struct {
 	model *model.Model
 	hosts string
 }
 
-// unservableModels lists the enabled models whose bindings, of which each has at least one, are all disabled or at hosts requests are not routed to. The policies granting one report it (checkGrantedModels): a model nobody grants is no fault.
+// unservableModels lists the enabled models whose bindings, of which each has at least one, are all disabled, at hosts requests are not routed to, or listing none of the model's snapshots. The policies granting one report it (checkGrantedModels): a model nobody grants is no fault.
 func unservableModels(snap *appcatalog.Snapshot, rows []*model.Model) []unservableModel {
 	var out []unservableModel
 	for _, row := range rows {
@@ -40,7 +40,7 @@ func unservableModels(snap *appcatalog.Snapshot, rows []*model.Model) []unservab
 			if !ok {
 				continue
 			}
-			if b.IsEnabled() && servesRequests(h) {
+			if b.IsEnabled() && servesRequests(h) && servesSnapshotOf(b, m) {
 				served = true
 				break
 			}

@@ -134,7 +134,7 @@ func TestCarryOver_BindingServesOnlyItsSnapshots(t *testing.T) {
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
 	wantHops(t, h.route(b.key, "m1-2026"), ids(b.a1), ids(b.a2))
-	_ = wantRefused(t, h.route(b.key, "m1-2026@host-b"), CodeNoBinding, "")
+	_ = wantRefused(t, h.route(b.key, "m1-2026@host-b"), CodeModelNotFound, "")
 }
 
 func TestCarryOver_DisabledUnknownAndUnroutable(t *testing.T) {

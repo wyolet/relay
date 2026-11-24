@@ -37,6 +37,9 @@ func (s *Snapshot) ResolveModelRef(name string) ResolvedRef {
 	if m, sn, hostID, ok := s.ResolveSnapshot(key); ok {
 		return ResolvedRef{Models: []*model.Model{m}, Snapshot: sn, PinHostID: hostID}
 	}
+	if _, ok := s.UnservedPin(key); ok {
+		return ResolvedRef{}
+	}
 	if ref, ok := s.ResolveAlias(key, !strings.ContainsRune(name, '@')); ok {
 		return ResolvedRef{Models: []*model.Model{ref.Model}, Snapshot: ref.Snapshot, PinHostID: ref.HostID, Alias: &ref}
 	}
