@@ -303,15 +303,12 @@ func (r *Resolver) refreshTok(ctx context.Context, ref secret.Ref, cur *sdkoauth
 	var nt *sdkoauth.Token
 	if cur.JWTBearer != nil {
 		var err error
-		if nt, err = r.exchange(ctx, cur.JWTBearer); err != nil {
-			if refusedURL(err) {
-				// The dial error names the address the URL resolved to; the status a reader sees must not.
-				err = rejectedError{err}
-			}
-			return nil, false, fmt.Errorf("secret/oauth: token exchange %q: %w", ref.ID, err)
+		if nt, err = r.exchange(ctx, cur.JWTBearer); err == nil && r.shortLived(nt) {
+			err = errShortLifetime
 		}
-		if r.shortLived(nt) {
-			return nil, false, fmt.Errorf("secret/oauth: token exchange %q: %w", ref.ID, errShortLifetime)
+		if err != nil {
+			slog.Warn("secret/oauth: token exchange failed", "id", ref.ID, "err", err)
+			return nil, false, fmt.Errorf("secret/oauth: %q: %w", ref.ID, exchangeError{err})
 		}
 		r.forget(ref.ID)
 	} else {
@@ -429,6 +426,43 @@ func IsPermanent(err error) bool {
 
 func refusedURL(err error) bool {
 	return errors.Is(err, publicaddr.ErrRefused) || errors.Is(err, errRedirect)
+}
+
+// exchangeError is a failed JWT-bearer exchange of a stored credential as
+// anyone reading the key sees it (its unresolved reason, its renewal error):
+// a short classified reason, never the network error text, which can name the
+// addresses a host resolved to.
+type exchangeError struct{ err error }
+
+func (e exchangeError) Error() string { return "token exchange failed: " + exchangeReason(e.err) }
+func (e exchangeError) Unwrap() error { return e.err }
+
+func exchangeReason(err error) string {
+	var unlisted unlistedHostError
+	var re *oauth2.RetrieveError
+	var netErr net.Error
+	switch {
+	case errors.As(err, &unlisted):
+		return unlisted.Error()
+	case errors.Is(err, publicaddr.ErrRefused):
+		return "the token URL does not resolve to a public address"
+	case errors.Is(err, errRedirect):
+		return "the token endpoint answered with a redirect"
+	case errors.Is(err, sdkoauth.ErrNoAccessToken):
+		return "the token endpoint returned no access token"
+	case errors.Is(err, errShortLifetime):
+		return errShortLifetime.Error()
+	case errors.As(err, &re) && re.Response != nil:
+		reason := fmt.Sprintf("the token endpoint answered HTTP %d", re.Response.StatusCode)
+		if re.ErrorCode != "" {
+			reason += " (" + re.ErrorCode + ")"
+		}
+		return reason
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return "the token endpoint timed out"
+	default:
+		return "the token endpoint could not be reached or gave no usable answer"
+	}
 }
 
 // rejectedError is the refusal of a new credential, worded for the operator: for a token endpoint's answer, its HTTP status and RFC 6749 error fields; never an address the URL resolved to.

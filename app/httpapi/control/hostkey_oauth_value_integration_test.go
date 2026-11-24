@@ -142,9 +142,14 @@ func TestHostKeyCreateRefusesABadOAuthValue(t *testing.T) {
 			t.Fatalf("the create answer carries key material: %s", w.Body)
 		}
 		var created struct {
-			Metadata meta.Metadata `json:"metadata"`
+			Metadata meta.Metadata  `json:"metadata"`
+			Status   hostkey.Status `json:"status"`
 		}
 		must(t, "decode host key", json.Unmarshal(w.Body.Bytes(), &created))
+		// The key shows why it has no token in a short classified reason, not the network error.
+		if u := created.Status.Unresolved; u == nil || !strings.Contains(u.Reason, "token exchange failed: the token endpoint answered HTTP 503") || strings.Contains(u.Reason, "127.0.0.1") {
+			t.Fatalf("unresolved reason = %+v", u)
+		}
 
 		// The key has no token yet; a metadata-only edit keeps its stored credential.
 		body, _ := json.Marshal(map[string]any{
