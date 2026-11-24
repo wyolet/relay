@@ -117,10 +117,26 @@ func pseudoResponses(api huma.API, conflicts string) map[string]*huma.Response {
 	}
 }
 
-// documentPlanIssue documents the 422 of the pseudo route at path once it is registered: huma writes its own 422 for a body over the operation's responses.
+// documentPlanIssue documents the answers of the pseudo route at path once it is registered, over what huma writes for its errors list: every refusal carries the pseudo refusal body, and a dry run answers 200 with the body a write answers 201 with.
 func documentPlanIssue(api huma.API, path string) {
-	if item := api.OpenAPI().Paths[path]; item != nil && item.Post != nil {
-		item.Post.Responses["422"] = jsonResponse(api, "plan_issue: every row passes its own checks, but together they would raise errors in the plans that are not there now; issues lists them, each with the pointer of the part of the body it came from. Nothing was written. Also a body that does not match the schema, with error.details.", pseudoRefusal{})
+	item := api.OpenAPI().Paths[path]
+	if item == nil || item.Post == nil {
+		return
+	}
+	responses := item.Post.Responses
+	for code, desc := range map[string]string{
+		"400": "The body, or a row it makes, breaks a rule the schema cannot express; error.message says which and pointer names the part of the body.",
+		"403": "A row's own grant refuses it, as its own create call would; pointer names the part of the body it came from.",
+		"404": "The body names a row the caller may not see; pointer names where.",
+		"422": "plan_issue: every row passes its own checks, but together they would raise errors in the plans that are not there now, or a lane they make or bind would refuse every request; issues lists them, each with the pointer of the part of the body it came from. Nothing was written. Also a body that does not match the schema, with error.details.",
+		"500": "The write failed on the server; nothing was written.",
+	} {
+		responses[code] = jsonResponse(api, desc, pseudoRefusal{})
+	}
+	if made := responses["201"]; made != nil {
+		dry := *made
+		dry.Description = "dryRun=true: what the write would make, ids included and key plaintexts left out. Nothing was written."
+		responses["200"] = &dry
 	}
 }
 

@@ -147,8 +147,16 @@ func TestPseudoKinds_FlagGatesTheRoutes(t *testing.T) {
 				for _, p := range openapitest.Problems(doc) {
 					t.Error(p)
 				}
-				if ref := responseRef(operation(t, doc, "/pseudo-agents", "post"), "422"); ref != "#/components/schemas/pseudoRefusal" {
-					t.Errorf("422 answers %q, want pseudoRefusal", ref)
+				op := operation(t, doc, "/pseudo-agents", "post")
+				for _, code := range []string{"400", "403", "404", "409", "422", "500", "503"} {
+					if ref := responseRef(op, code); ref != "#/components/schemas/pseudoRefusal" {
+						t.Errorf("%s answers %q, want pseudoRefusal", code, ref)
+					}
+				}
+				for _, code := range []string{"200", "201"} {
+					if ref := responseRef(op, code); ref != "#/components/schemas/PseudoAgentCreated" {
+						t.Errorf("%s answers %q, want PseudoAgentCreated", code, ref)
+					}
 				}
 			}
 			rec := httptest.NewRecorder()
