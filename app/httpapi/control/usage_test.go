@@ -204,6 +204,29 @@ func viewerFixture(t *testing.T) (cat *appcatalog.Catalog, viewer *actor.Actor, 
 	return cat, &actor.Actor{UserID: viewerUserID, Subjects: appcatalog.UserSubjects(viewerUserID, nil, nil)}, p1
 }
 
+// A user reads the traffic of the service accounts they own, their bots, by principal; another user does not.
+func TestScopeOf_UserServiceAccounts(t *testing.T) {
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: "alice-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}}
+	bot.StampOwner()
+	cat := catalogtest.Catalog{ServiceAccounts: []*serviceaccount.ServiceAccount{bot}}.Load(t)
+	botEvent := usagelog.Event{PrincipalKind: "serviceaccount", PrincipalID: bot.Meta.ID, LaneAccountID: ids.New()}
+	for who, want := range map[string]readScope{
+		"alice": {principalIDs: []string{"u-alice", bot.Meta.ID}},
+		"bob":   {principalIDs: []string{"u-bob"}},
+	} {
+		got, err := scopeOf(actor.WithActor(context.Background(), scopeActors[who]), testRBAC(), cat, "usage")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(want, got, cmp.AllowUnexported(readScope{}), cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("scope of %s (-want +got):\n%s", who, diff)
+		}
+		if got.allows(botEvent) != (who == "alice") {
+			t.Errorf("%s reads alice's bot's event: %v", who, got.allows(botEvent))
+		}
+	}
+}
+
 // A service account a team owns itself carries no project, so its traffic reads by principal: a reader at the team gets it, a reader at one of the team's projects does not.
 func TestScopeOf_TeamServiceAccounts(t *testing.T) {
 	builtins, err := role.Builtins()

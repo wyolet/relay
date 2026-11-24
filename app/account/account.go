@@ -87,7 +87,7 @@ func (a *Account) Receiver() Receiver {
 	return Receiver{Kind: ReceiverKind(a.Meta.Owner.Kind), ID: a.Meta.Owner.ID}
 }
 
-// TakesKeysOf reports whether a relay key of principal may run in a. A key outlives the membership it was made under, so it lands only where relay re-checks that membership itself: the principal's personal or service account, a member account that follows role bindings, or a provider account the key's user owns personally. A member account opened on first use (a group or team-level grant relay cannot see) serves minted tokens only, and team, project and system provider accounts are reached through the caller ladder, never as a lane.
+// TakesKeysOf reports whether a relay key of principal may run in a. A key outlives the membership it was made under, so it lands only where relay re-checks that membership itself: the principal's personal or service account, a member account that follows role bindings, or a provider account the key's user owns personally and no service account holds (a share made with one of the user's service accounts is that account's). A member account opened on first use (a group or team-level grant relay cannot see) serves minted tokens only, and team, project and system provider accounts are reached through the caller ladder, never as a lane.
 func (a *Account) TakesKeysOf(principal Holder) bool {
 	switch a.DerivedKind() {
 	case KindPersonal, KindService:
@@ -95,7 +95,7 @@ func (a *Account) TakesKeysOf(principal Holder) bool {
 	case KindMember:
 		return *a.Spec.Holder == principal && a.FollowsRoleBindings
 	case KindProvider:
-		return principal.Kind == HolderUser && a.Meta.Owner == meta.Owner{Kind: meta.OwnerUser, ID: principal.ID}
+		return principal.Kind == HolderUser && a.Spec.Holder == nil && a.Meta.Owner == meta.Owner{Kind: meta.OwnerUser, ID: principal.ID}
 	}
 	return false
 }

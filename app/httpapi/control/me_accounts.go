@@ -123,7 +123,7 @@ func myAccounts(v *engine.View, userID string, hidden func(meta.Metadata) bool) 
 				continue
 			}
 		case account.KindProvider:
-			if a.Meta.Owner != mine {
+			if a.Meta.Owner != mine || a.Spec.Holder != nil {
 				continue
 			}
 		default:

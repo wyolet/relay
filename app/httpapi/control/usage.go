@@ -32,8 +32,8 @@ import (
 // A caller reads the whole stream only when a binding at the global scope
 // grants usage/logs read. Otherwise the stream narrows to what is
 // attributable to them: events in a project they may see, events of a
-// service account owned by a team they may see, plus events they are the
-// principal of. These are a disjunction, carried on the query as
+// service account owned by a team they may see or by themselves, plus
+// events they are the principal of. These are a disjunction, carried on the query as
 // ScopeProjectID / ScopePrincipalID.
 
 // readScope is the slice of the usage/log stream a caller may read.
@@ -92,7 +92,11 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 		// own key hashes (snapshot principal index, no Postgres) keep that
 		// history readable to them.
 		if cat != nil {
-			sc.keyHashes = cat.Current().KeyHashesForUser(a.UserID)
+			snap := cat.Current()
+			sc.keyHashes = snap.KeyHashesForUser(a.UserID)
+			for _, sa := range snap.ServiceAccountsForUser(a.UserID) {
+				sc.principalIDs = append(sc.principalIDs, sa.Meta.ID)
+			}
 		}
 	}
 	return sc, nil
