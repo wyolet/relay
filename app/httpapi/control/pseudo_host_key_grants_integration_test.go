@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // secretRows counts the sealed values and the key ring's rows in every scope.
@@ -21,6 +23,27 @@ func (w *hostKeyFormWorld) secretRows(t *testing.T) map[string]int {
 		out[table] = n
 	}
 	return out
+}
+
+// An account held by a binding the caller may not see answers 403 as PUT /accounts/{ref}/policy does, whichever tier preset the request names, so a dry run per preset does not tell which one the hidden binding uses.
+func TestPseudoHostKey_HiddenHoldingBinding(t *testing.T) {
+	w := newHostKeyFormWorld(t)
+	hidden := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: ids.New(), Name: "one-holds-alice-other", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: w.teamOne.Meta.ID}}, Spec: policybinding.Spec{PolicyID: w.free.Meta.ID, AccountIDs: []string{w.other.Meta.ID}}}
+	must(t, "hidden binding", w.stores.PolicyBinding.Upsert(t.Context(), hidden))
+	w.loadPlans(t)
+	var answers []string
+	for _, tier := range []string{w.free.Meta.ID, w.paid.Meta.ID} {
+		rec, _ := w.post(t, "alice", w.body("alice", map[string]any{"value": keyOrgB, "accountId": w.other.Meta.ID, "tierPolicyId": tier}), true)
+		r := refusalOf(t, rec)
+		if rec.Code != http.StatusForbidden || r.Pointer != "/spec/tierPolicyId" {
+			t.Errorf("tier %s: %d %s, want 403 at /spec/tierPolicyId", tier, rec.Code, rec.Body)
+		}
+		answers = append(answers, r.Err.Message)
+	}
+	want := `account "alice-other" is held by a policy binding you may not see`
+	if diff := cmp.Diff([]string{want, want}, answers); diff != "" {
+		t.Errorf("answers (-want +got):\n%s", diff)
+	}
 }
 
 // A caller who may not create the host key under its owner is refused before the host is asked anything, on a dry run too: the provider gets no request.

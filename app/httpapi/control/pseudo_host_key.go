@@ -249,6 +249,9 @@ func (d Deps) hostKeyReads(ctx context.Context, body pseudo.HostKeyForm, check *
 			return in, err
 		}
 		if held := in.Holding; held != nil {
+			if s.TierPolicyID != "" && !visibleTo(ctx, d.Authz, "policy-binding", held.Meta.ID, held.Meta.Owner) {
+				return in, refusal(huma.Error403Forbidden(fmt.Sprintf("account %q is held by a policy binding you may not see", acc.Meta.Name)), "/spec/tierPolicyId")
+			}
 			pseudo.Record(ctx, held.Meta.ID, held)
 		}
 		if err := d.recordUpstream(ctx, []string{acc.Meta.ID}, nil); err != nil {
