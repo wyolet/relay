@@ -317,7 +317,7 @@ A binding or policy holding the account that you may not see or change answers `
             "access": { "accountIds": ["<team-account-id>"], "poolIds": [], "models": ["openai"] } } }
 ```
 
-`access` takes `everyCredential`, `poolIds`, `accountIds` and `models` with the rules of `POST /api/pseudo-agents`, and states the whole access: the policy's pools become `poolIds`, then one pool per host of `accountIds`; its models become `models`; its rate limits and budgets stay. Pools it makes are owned by the target's scope and labelled `access-for=<account id>`. On a later request, the labelled pool of a host is updated in place while only the policy changed in place links it, and a labelled pool the policy no longer links that nothing else links is deleted. Other pools are only linked or unlinked. `everyCredential: true` links no pools; in case `none` without `models` nothing is written and the answer carries `unchanged: true`.
+`access` takes `everyCredential`, `poolIds`, `accountIds` and `models` with the rules of `POST /api/pseudo-agents`, and states the whole access: the policy's pools become `poolIds`, then one pool per host of `accountIds`; its models become `models`; its rate limits and budgets stay. Pools it makes are owned by the target's scope and labelled `access-for=<account id>`. On a later request, the labelled pool of a host is updated in place while only the policy changed in place links it, and a labelled pool the policy no longer links that nothing else links is deleted. Other pools are only linked or unlinked. A pool link you may not see is kept where it is in the policy's order, in place and in a copy, as an update of the policy keeps the links it holds; the answer counts those in `hiddenPoolsKept` and names none. `everyCredential: true` links no pools of its own; in case `none` without `models` nothing is written and the answer carries `unchanged: true`.
 
 ```json
 {
@@ -327,9 +327,12 @@ A binding or policy holding the account that you may not see or change answers `
   "shares": [],
   "created": [{ "kind": "pool", "id": "…", "name": "two-app-at-openai" }],
   "updated": [{ "kind": "policy", "id": "…", "name": "two-app" }],
-  "deleted": [{ "kind": "pool", "id": "…", "name": "two-app-at-anthropic" }]
+  "deleted": [{ "kind": "pool", "id": "…", "name": "two-app-at-anthropic" }],
+  "warnings": []
 }
 ```
+
+Lists with nothing in them are left out of the answer, except `warnings`, which both kinds answer as `POST /api/pseudo-agents` does, `[]` included and on the dry run without a change too. Binding the account to a new policy or a copy is the write `PUT /api/accounts/{ref}/policy` makes: the binding made is listed in `created`, and the one the account left in `updated`, or in `deleted` when it held no other account.
 
 `POST /api/pseudo-limits` takes `metadata` (`name`, `displayName`, `description`, `labels`) and exactly one of `spec.budget` and `spec.rateLimit`, each the spec `POST /api/budgets` or `POST /api/rate-limits` takes. The row is owned by the target's scope and linked from the policy beside what it links already. The answer carries `case`, `policy`, `budget` or `rateLimit`, the three row lists, and for a budget `unpricedModels`: the models the target uses now that have no pricing and would answer `unpriced_under_budget` once the budget applies. It is a warning; the request goes through.
 
@@ -382,11 +385,12 @@ Then, in one transaction: the account (when new), its binding to `tierPolicyId` 
   "hostKey": { "id": "…", "name": "work-key" },
   "shares": [{ "receiver": { "kind": "team", "id": "…" }, "id": "…", "name": "work-for-platform" }],
   "detection": "detected",
-  "detected": { "orgId": "org-…", "orgName": "…" }
+  "detected": { "orgId": "org-…", "orgName": "…" },
+  "warnings": []
 }
 ```
 
-Each row passes what its own call passes (`POST /api/accounts`, `PUT /api/accounts/{ref}/policy`, `POST /api/host-keys`, `POST /api/accounts/{ref}/shares`), is audited as it, and the rows are checked against the plans together, as for `pseudo-agents`. The value appears in no answer, log line or audit row.
+`warnings` is as for `pseudo-agents`. Each row passes what its own call passes (`POST /api/accounts`, `PUT /api/accounts/{ref}/policy`, `POST /api/host-keys`, `POST /api/accounts/{ref}/shares`), is audited as it, and the rows are checked against the plans together, as for `pseudo-agents`. The value appears in no answer, log line or audit row.
 
 | Answer | When |
 | --- | --- |
