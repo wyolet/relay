@@ -2,10 +2,12 @@ package oauth_test
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -19,7 +21,6 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/jws"
 
 	"github.com/wyolet/relay/sdk/oauth"
 )
@@ -43,6 +44,17 @@ func pkcs8PEM(t *testing.T, key any) string {
 
 func pkcs1PEM(key *rsa.PrivateKey) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+}
+
+func decodeSegment(t *testing.T, seg string, v any) {
+	t.Helper()
+	b, err := base64.RawURLEncoding.DecodeString(seg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		t.Fatalf("segment %s: %v", b, err)
+	}
 }
 
 func withClient(srv *httptest.Server) context.Context {
@@ -91,25 +103,34 @@ func TestJWTBearerTokenPostsSignedAssertion(t *testing.T) {
 			if len(assertion) != 1 {
 				t.Fatalf("assertion = %v", assertion)
 			}
-			if err := jws.Verify(assertion[0], &testRSAKey().PublicKey); err != nil {
+			parts := strings.Split(assertion[0], ".")
+			if len(parts) != 3 {
+				t.Fatalf("assertion has %d parts, want 3", len(parts))
+			}
+			sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+			if err := rsa.VerifyPKCS1v15(&testRSAKey().PublicKey, crypto.SHA256, digest[:], sig); err != nil {
 				t.Fatalf("assertion does not verify against the key: %v", err)
 			}
-			claims, err := jws.Decode(assertion[0])
-			if err != nil {
-				t.Fatal(err)
-			}
-			if claims.Iss != "svc@example.test" || claims.Aud != tc.wantAud || claims.Scope != "scope-a scope-b" {
-				t.Fatalf("claims: iss %q aud %q scope %q", claims.Iss, claims.Aud, claims.Scope)
-			}
-			head, err := base64.RawURLEncoding.DecodeString(strings.Split(assertion[0], ".")[0])
-			if err != nil {
-				t.Fatal(err)
-			}
 			var hdr struct {
+				Alg   string `json:"alg"`
 				KeyID string `json:"kid"`
 			}
-			if err := json.Unmarshal(head, &hdr); err != nil || hdr.KeyID != "kid-1" {
-				t.Fatalf("header %s: %v", head, err)
+			decodeSegment(t, parts[0], &hdr)
+			if hdr.Alg != "RS256" || hdr.KeyID != "kid-1" {
+				t.Fatalf("header: alg %q kid %q", hdr.Alg, hdr.KeyID)
+			}
+			var claims struct {
+				Iss   string `json:"iss"`
+				Aud   string `json:"aud"`
+				Scope string `json:"scope"`
+			}
+			decodeSegment(t, parts[1], &claims)
+			if claims.Iss != "svc@example.test" || claims.Aud != tc.wantAud || claims.Scope != "scope-a scope-b" {
+				t.Fatalf("claims: iss %q aud %q scope %q", claims.Iss, claims.Aud, claims.Scope)
 			}
 		})
 	}
