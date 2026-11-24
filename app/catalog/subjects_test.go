@@ -218,29 +218,34 @@ func TestApplyTeamRename_ReindexesItsServiceAccountKeys(t *testing.T) {
 		return c
 	}
 	subjects := func(c *Catalog) []string { return c.Current().SubjectsForKey(k.Meta.ID) }
-	stored := &teamRows{f.team}
+	other := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "staging", Owner: meta.Global}}
+	stored := &teamRows{f.team, other}
 	c := load(stored)
 
 	renamed := *f.team
 	renamed.Meta.Name = "infra"
-	*stored = teamRows{&renamed}
+	*stored = teamRows{&renamed, other}
 	must(t, c.ApplyTeamUpsert(&renamed))
 	want := []string{"serviceaccount:" + deployer.Meta.ID, SubjectServiceAccounts, SubjectServiceAccounts + ":team:infra", SubjectAuthenticated}
 	if got := subjects(c); !slices.Equal(got, want) {
 		t.Errorf("subjects after the rename = %v, want %v", got, want)
 	}
-	if got, built := subjects(c), subjects(load(teamList{&renamed})); !slices.Equal(got, built) {
+	if got, built := subjects(c), subjects(load(teamList{&renamed, other})); !slices.Equal(got, built) {
 		t.Errorf("subjects after the rename = %v, a build from the same rows gives %v", got, built)
 	}
 
-	newcomer := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: meta.Global}}
-	*stored = append(*stored, newcomer)
-	must(t, c.ApplyTeamUpsert(newcomer))
-	if got := subjects(c); !slices.Equal(got, want) {
-		t.Errorf("subjects after a new team took the old name = %v, want %v", got, want)
+	// The source keeps the old row: a reload would undo this rename, so only the incremental path shows it.
+	taker := *other
+	taker.Meta.Name = f.team.Meta.Name
+	must(t, c.ApplyTeamUpsert(&taker))
+	if got, ok := c.Current().Team(other.Meta.ID); !ok || got.Meta.Name != f.team.Meta.Name {
+		t.Fatalf("team after the rename = %+v, want it applied incrementally as %q", got, f.team.Meta.Name)
 	}
-	if got, built := subjects(c), subjects(load(teamList{&renamed, newcomer})); !slices.Equal(got, built) {
-		t.Errorf("subjects after a new team took the old name = %v, a build from the same rows gives %v", got, built)
+	if got := subjects(c); !slices.Equal(got, want) {
+		t.Errorf("subjects after another team took the old name = %v, want %v", got, want)
+	}
+	if got, built := subjects(c), subjects(load(teamList{&renamed, &taker})); !slices.Equal(got, built) {
+		t.Errorf("subjects after another team took the old name = %v, a build from the same rows gives %v", got, built)
 	}
 }
 
