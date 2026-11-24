@@ -69,9 +69,9 @@ docker run --rm --network host \
 
 ## Release notes
 
-### Service accounts owned by a team (schema 47, auth module 6)
+### Service accounts owned by a team or a user (schema 47 and 48, auth module 6 and 7)
 
-Migration 47 lets a team own a service account directly, with no project; its row has no `project_id`. A binary from before it cannot read such a row, and fails to list every service account once one exists. Create none until no older pod runs, and before rolling the image back delete the team-owned service accounts: `relay migrate down 46` refuses while any remains.
+Migration 47 lets a team own a service account directly, with no project, and migration 48 lets a user own one; such a row has no `project_id`. A binary from before 47 cannot read such a row, and fails to list every service account once one exists. Create none until no older pod runs, and before rolling the image back delete the team- and user-owned service accounts: `relay migrate down 47` refuses while a user-owned one remains, and `relay migrate down 46` while a team-owned one does.
 
 ### 0.30.0: the organization owner (schema 45)
 

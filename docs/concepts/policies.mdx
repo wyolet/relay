@@ -13,12 +13,13 @@ Every request runs in one account, its [lane](/concepts/accounts#lanes), and cli
 | --- | --- |
 | Member or service account in project P of team T | T's account → P's account → the lane |
 | Member account in team T, or service account team T owns | T's account → the lane |
+| Service account user U owns | U's personal account → the lane |
 | Personal account | The lane |
 | Provider account used as a lane | None: its own policy applies as the upstream rung of its keys, which are all it reaches |
 
 On the upstream side, each host key's [provider account](/concepts/key-pooling#accounts) is a rung: its policy, usually a [tier preset](#tier-presets), applies to every request a key of that account serves, whoever the caller is. Every host key names its account; one that names none is refused.
 
-Refusals, usage and metrics name the rungs `team`, `project`, `lane` and, upstream, `account`.
+Refusals, usage and metrics name the rungs `team`, `project`, `lane` and, upstream, `account`. Above a user's service account the personal account's rung is named `personal`; counters there share the personal account's bucket with the user's own requests.
 
 Three rules hold on every rung:
 
@@ -45,7 +46,7 @@ When no caller rung links pools, the lane reaches the host keys its own scopes o
 | --- | --- |
 | Member or service account in a project | The project's, the team's, then the system's |
 | Member account in a team, or service account a team owns | The team's, then the system's |
-| Personal account | The user's own, then the system's |
+| Personal account, or service account a user owns | The user's own, then the system's |
 | Provider account | That account's host keys |
 
 Within one scope they are tried in the order they were created. A keyless (`noAuth`) host is never reached this way: it takes a pool at that host, linked by a caller policy, because no key gates it.
