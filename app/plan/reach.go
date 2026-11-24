@@ -3,6 +3,8 @@
 package plan
 
 import (
+	"slices"
+
 	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/pool"
@@ -256,9 +258,8 @@ func (cp *CallerPlan) reachModel(m *model.Model) ModelReach {
 	pointer := m.PointerSnapshot()
 	aliases := aliasesBySnapshot(snap, m)
 	hopAt := map[*PoolPlan]*RouteHop{}
-	for i := range m.Spec.Snapshots {
+	for i, route := range cp.Routes.snapshotRoutes(m) {
 		sn := &m.Spec.Snapshots[i]
-		route := cp.Routes.route([]*model.Model{m}, sn, "")
 		sr := SnapshotReach{Name: sn.Name, Aliases: aliases[sn.Name], Refused: route.Refused}
 		for j := range route.Hops {
 			hop := &route.Hops[j]
@@ -283,6 +284,23 @@ func (cp *CallerPlan) reachModel(m *model.Model) ModelReach {
 	}
 	mr.Upstream = cp.upstreamChecks(m)
 	return mr
+}
+
+// snapshotRoutes is the route fill's answer for each of m's snapshots, in snapshot order. While no binding of m lists snapshots every name gets the same answer, so the fill runs once and the answer is shared.
+func (t *RouteTable) snapshotRoutes(m *model.Model) []*Route {
+	narrowed := slices.ContainsFunc(t.idx.Snap.BindingsForModel(m.Meta.ID), func(b *binding.Binding) bool { return len(b.Spec.Snapshots) > 0 })
+	out := make([]*Route, len(m.Spec.Snapshots))
+	for i := range m.Spec.Snapshots {
+		switch {
+		case narrowed:
+			out[i] = t.route([]*model.Model{m}, &m.Spec.Snapshots[i], "")
+		case i == 0:
+			out[i] = t.route([]*model.Model{m}, nil, "")
+		default:
+			out[i] = out[0]
+		}
+	}
+	return out
 }
 
 // aliasesBySnapshot maps the snapshots of m to its declared exact aliases that resolve to them, as a request naming the alias resolves; an alias a catalog name or another model's alias shadows is left out.

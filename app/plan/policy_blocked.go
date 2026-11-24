@@ -179,8 +179,7 @@ func (cp *CallerPlan) blocks(policyID string, models []*model.Model) *Refusal {
 		if !boundAt(cp.Routes.idx, m, reached) {
 			continue
 		}
-		for i := range m.Spec.Snapshots {
-			route := cp.Routes.route([]*model.Model{m}, &m.Spec.Snapshots[i], "")
+		for _, route := range cp.Routes.snapshotRoutes(m) {
 			if len(route.Hops) > 0 {
 				return nil
 			}
