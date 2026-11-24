@@ -474,6 +474,30 @@ func TestPseudoAgent_PlanIssue(t *testing.T) {
 	}
 }
 
+// A disabled policy files no error, but every request of a lane bound to it is refused: the request is refused, on the binding.
+func TestPseudoAgent_DisabledPolicy(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	off := false
+	disabled := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "two-app-off", Owner: w.owner}, Spec: policy.Spec{Enabled: &off}}
+	must(t, "disabled policy", w.stores.Policy.Upsert(t.Context(), disabled))
+	w.loadPlans(t)
+	before := w.rowCounts(t)
+	rec, _ := w.post(t, "bob", w.agentBody(map[string]any{"policyId": disabled.Meta.ID, "key": map[string]any{}}), false)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d %s, want 422", rec.Code, rec.Body)
+	}
+	var codes []string
+	for _, i := range refusalOf(t, rec).Issues {
+		codes = append(codes, i.Code+" "+i.Kind+" "+i.Pointer)
+	}
+	if diff := cmp.Diff([]string{"policy_disabled policybinding /spec/policyId"}, codes); diff != "" {
+		t.Errorf("issues (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
+		t.Errorf("a refused request wrote rows (-before +after):\n%s", diff)
+	}
+}
+
 // A host key written after the plans loaded counts: its account, keyless in the plans, serves the pool made from it.
 func TestPseudoAgent_KeyWrittenAfterThePlans(t *testing.T) {
 	w := newPseudoAgentWorld(t)

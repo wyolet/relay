@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"errors"
 	"runtime"
 	"sync/atomic"
@@ -12,8 +13,10 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/meta"
 )
@@ -178,6 +181,101 @@ func TestCheck_BuildOutlivesTheBound(t *testing.T) {
 	if n := builds.Load(); n != 2 {
 		t.Errorf("%d builds started, want 2", n)
 	}
+}
+
+// A lane bound to a disabled policy serves nothing though no row files an error: it refuses, on the binding. A lane that reaches no key refuses nothing.
+func TestCheck_RefusedLane(t *testing.T) {
+	b := newBasic()
+	off := false
+	disabled := b.w.policy("off-"+seq(), policy.Spec{Enabled: &off})
+	h := b.w.start(t)
+	scope := meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID}
+	sa := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), scope), Spec: serviceaccount.Spec{ProjectID: b.proj.Meta.ID}}
+	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", b.proj.Meta.ID)
+	lane.Meta.ID = meta.NewID()
+	pb := &policybinding.PolicyBinding{Meta: md("pb-"+seq(), scope), Spec: policybinding.Spec{PolicyID: disabled.Meta.ID, AccountIDs: []string{lane.Meta.ID}}}
+	c := NewCheck(false, time.Minute)
+
+	got, err := c.NewIssues(t.Context(), h.e.View(), nil, []any{sa, lane, pb})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []engine.Issue{{Severity: engine.SeverityError, Code: CodePolicyDisabled, Source: engine.Ref{Kind: KindPolicyBinding, ID: pb.Meta.ID}, Target: engine.Ref{Kind: KindPolicy, ID: disabled.Meta.ID}, Field: "spec.policyId"}}
+	if diff := cmp.Diff(want, got, ignoreMessage); diff != "" {
+		t.Errorf("bound to a disabled policy (-want +got):\n%s", diff)
+	}
+
+	empty := &world{}
+	proj := empty.project(empty.team())
+	h2 := empty.start(t)
+	sa2 := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: proj.Meta.ID}}
+	lane2 := account.ForServiceAccount(sa2.Meta.ID, sa2.Meta.Name, "", proj.Meta.ID)
+	lane2.Meta.ID = meta.NewID()
+	if got, err := c.NewIssues(t.Context(), h2.e.View(), nil, []any{sa2, lane2}); err != nil || len(got) != 0 {
+		t.Errorf("a lane that reaches no key: %v %v, want nothing refused", got, err)
+	}
+}
+
+// A check that finds nothing builds once; one that would refuse builds the baseline from the same rows too and refuses only what holds against it.
+func TestCheck_ConfirmsRefusalsOnAFreshBaseline(t *testing.T) {
+	b := newBasic()
+	h := b.w.start(t)
+	c := NewCheck(false, time.Minute)
+	var builds atomic.Int32
+	c.build = func(src Sources) (*engine.View, error) {
+		builds.Add(1)
+		return scratchView(src)
+	}
+	if _, err := c.NewIssues(t.Context(), h.e.View(), nil, []any{newKeyIn(b, b.w.saAccount(b.sa).Meta.ID)}); err != nil || builds.Load() != 1 {
+		t.Fatalf("nothing found: %v, %d builds, want 1", err, builds.Load())
+	}
+	builds.Store(0)
+	got, err := c.NewIssues(t.Context(), h.e.View(), nil, []any{newKeyIn(b, meta.NewID())})
+	if err != nil || len(got) == 0 || builds.Load() != 2 {
+		t.Fatalf("a refusal: %v %v, %d builds, want the refusal after 2", got, err, builds.Load())
+	}
+}
+
+// No controller writes to the input rows the scratch build shares with the live view.
+func TestCheck_LeavesInputRowsAsTheyWere(t *testing.T) {
+	b := newBasic()
+	b.w.pool(b.hostA, b.a1, b.a2)
+	b.w.bindPolicy(b.w.policy("p-"+seq(), policy.Spec{Models: []string{"acme"}}), b.w.saAccount(b.sa))
+	h := b.w.start(t)
+	snapshot := func() string {
+		v := h.e.View()
+		var rows []any
+		for _, kind := range []func() []any{
+			func() []any { return all[account.Account](v) }, func() []any { return all[pool.Pool](v) },
+			func() []any { return all[policy.Policy](v) }, func() []any { return all[policybinding.PolicyBinding](v) },
+			func() []any { return all[key.Key](v) }, func() []any { return all[serviceaccount.ServiceAccount](v) },
+		} {
+			rows = append(rows, kind()...)
+		}
+		out, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	before := snapshot()
+	off := false
+	stale := *b.hostA
+	stale.Spec.Enabled = &off
+	if _, err := NewCheck(false, time.Minute).NewIssues(t.Context(), h.e.View(), []any{&stale}, []any{newKeyIn(b, meta.NewID())}); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(before, snapshot()); diff != "" {
+		t.Errorf("live input rows changed (-before +after):\n%s", diff)
+	}
+}
+
+func all[T any](v *engine.View) []any {
+	var out []any
+	for r := range engine.All[T](v) {
+		out = append(out, r)
+	}
+	return out
 }
 
 func TestCheck_RefusesRowsOfNoInputKind(t *testing.T) {

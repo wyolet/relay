@@ -92,7 +92,7 @@ func (h *hold) built() {
 	}
 }
 
-// NewIssues lays read, then proposed, over live's input rows (each a pointer to an input row such as *account.Account; a later row with an id already laid replaces it), runs every controller on the result, and returns the issues of the result that the baseline does not have, warnings left out. read is what the database holds now of rows the caller read, which live may not have seen yet; a read row of no input kind is left out. The baseline is live's issues when every read row is the one live holds, else the issues of live with read laid over it, built the same way, so a row live has not seen yet neither hides nor causes an issue. Two issues are the same when their severity, code, source, target and field are. It takes the slot as Hold does unless ctx already holds it; a build that outlives the bound, or a ctx that ends first, answers ErrCheckTimeout or ctx's error while the build runs on, holding the slot, to its end.
+// NewIssues lays read, then proposed, over live's input rows (each a pointer to an input row such as *account.Account; a later row with an id already laid replaces it), runs every controller on the result, and returns what the result refuses that the baseline does not: errors filed (warnings left out), and lanes the proposed rows make or bind that the result refuses as a whole (refusedLanes). read is what the database holds now of rows the caller read, which live may not have seen yet; a read row of no input kind is left out. The baseline is live when every read row is the one live holds, else live with read laid over it, built the same way, so a row live has not seen yet neither hides nor causes a refusal; and before answering a refusal against live, the baseline is built the same way as the result, so a difference between live, built change by change, and a build of the same rows at once refuses nothing. Two issues are the same when their severity, code, source, target and field are. It takes the slot as Hold does unless ctx already holds it; a build that outlives the bound, or a ctx that ends first, answers ErrCheckTimeout or ctx's error while the build runs on, holding the slot, to its end.
 func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed []any) ([]engine.Issue, error) {
 	if live == nil {
 		return nil, errors.New("plan: no published view to check against")
@@ -102,12 +102,8 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 		return nil, err
 	}
 	full.RBAC = c.rbac
-	var base *Sources
-	if stale {
-		b, _, _ := layered(live, read, nil)
-		b.RBAC = c.rbac
-		base = &b
-	}
+	base, _, _ := layered(live, read, nil)
+	base.RBAC = c.rbac
 	h, _ := ctx.Value(heldKey{c}).(*hold)
 	if h == nil {
 		held, release, err := c.Hold(ctx)
@@ -118,8 +114,8 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 		h = held.Value(heldKey{c}).(*hold)
 	}
 	type result struct {
-		before, after []engine.Issue
-		err           error
+		issues []engine.Issue
+		err    error
 	}
 	done := make(chan result, 1)
 	h.mu.Lock()
@@ -127,30 +123,35 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 	h.mu.Unlock()
 	go func() {
 		defer h.built()
-		var r result
-		r.before = live.AllIssues()
-		if base != nil {
-			v, err := c.build(*base)
-			if err != nil {
-				done <- result{err: err}
-				return
-			}
-			r.before = v.AllIssues()
-		}
-		v, err := c.build(full)
+		after, err := c.build(full)
 		if err != nil {
 			done <- result{err: err}
 			return
 		}
-		r.after = v.AllIssues()
-		done <- r
+		before := live
+		if stale {
+			if before, err = c.build(base); err != nil {
+				done <- result{err: err}
+				return
+			}
+		}
+		found := refusedBy(before, after, proposed)
+		if len(found) > 0 && !stale {
+			// The live view was built change by change; a refusal must hold against the same rows built at once.
+			if before, err = c.build(base); err != nil {
+				done <- result{err: err}
+				return
+			}
+			found = refusedBy(before, after, proposed)
+		}
+		done <- result{issues: found}
 	}()
 	bound := time.NewTimer(c.timeout)
 	defer bound.Stop()
 	var stopped error
 	select {
 	case r := <-done:
-		return answer(r.before, r.after, r.err)
+		return r.issues, r.err
 	case <-bound.C:
 		stopped = ErrCheckTimeout
 	case <-ctx.Done():
@@ -160,7 +161,7 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 	if !h.building {
 		h.mu.Unlock()
 		r := <-done
-		return answer(r.before, r.after, r.err)
+		return r.issues, r.err
 	}
 	h.abandoned = true
 	if stopped == ErrCheckTimeout {
@@ -170,11 +171,54 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 	return nil, stopped
 }
 
-func answer(before, after []engine.Issue, err error) ([]engine.Issue, error) {
-	if err != nil {
-		return nil, err
+// refusedBy is what after refuses that before does not: the errors filed on after alone, and a refusal of each lane the proposed rows make or bind (refusedLanes).
+func refusedBy(before, after *engine.View, proposed []any) []engine.Issue {
+	return append(newIssues(before.AllIssues(), after.AllIssues()), refusedLanes(before, after, proposed)...)
+}
+
+// refusedLanes files an error for each lane the proposed rows make (a caller account) or bind (an account of a proposed policy binding) whose caller plan in after refuses every request (CallerPlan.Refused: policy_disabled, duplicate_binding, subject_disabled, account_closed, personal_account_off), unless before refuses it with the same code. No plan files these: a lane refused as a whole is a state, not an error of one row. The issue sits on the binding that binds the lane when one is proposed, else on the lane.
+func refusedLanes(before, after *engine.View, proposed []any) []engine.Issue {
+	var lanes []string
+	bound := map[string]string{}
+	for _, p := range proposed {
+		switch r := p.(type) {
+		case *account.Account:
+			if r.ManagedKey() != "" {
+				lanes = append(lanes, r.Meta.ID)
+			}
+		case *policybinding.PolicyBinding:
+			for _, id := range r.Spec.AccountIDs {
+				if _, ok := bound[id]; !ok {
+					lanes = append(lanes, id)
+				}
+				bound[id] = r.Meta.ID
+			}
+		}
 	}
-	return newIssues(before, after), nil
+	var out []engine.Issue
+	seen := map[string]bool{}
+	for _, id := range lanes {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		cp := engine.Get[CallerPlan](after, accountSubject(id))
+		if cp == nil || cp.Refused == nil {
+			continue
+		}
+		if prev := engine.Get[CallerPlan](before, accountSubject(id)); prev != nil && prev.Refused != nil && prev.Refused.Code == cp.Refused.Code {
+			continue
+		}
+		i := engine.Issue{Severity: engine.SeverityError, Code: cp.Refused.Code, Source: engine.Ref{Kind: KindAccount, ID: id}, Message: "requests in this account would all be refused: " + cp.Refused.Message}
+		if b, ok := bound[id]; ok {
+			i.Source, i.Field = engine.Ref{Kind: KindPolicyBinding, ID: b}, "spec.policyId"
+		}
+		if cp.Refused.PolicyID != "" {
+			i.Target = engine.Ref{Kind: KindPolicy, ID: cp.Refused.PolicyID}
+		}
+		out = append(out, i)
+	}
+	return out
 }
 
 // heldKey marks a context whose caller holds c's slot (Hold).
