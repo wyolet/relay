@@ -68,11 +68,11 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 		var unpriced []string
 		var under *PseudoUnder
 		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
-			if err := checkPolicyStep(target.Meta.ID)(f); err != nil {
+			if err := checkPolicyStep(target.Meta.ID, change.Rows)(f); err != nil {
 				return err
 			}
 			var err error
-			if under, err = d.under(ctx, f, target); err != nil || s.Budget == nil {
+			if under, err = d.under(ctx, f, target, change.Rows); err != nil || s.Budget == nil {
 				return err
 			}
 			base, err := f.Baseline()

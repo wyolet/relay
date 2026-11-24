@@ -232,6 +232,24 @@ func BenchmarkCheck(b *testing.B) {
 	}
 }
 
+// BenchmarkChangedReach measures the comparison of every caller account's reach before and after one team's policy narrows, over the synthetic deployment's ten thousand service account lanes, thousand projects and hundred teams. Run with a short fixed -benchtime.
+func BenchmarkChangedReach(b *testing.B) {
+	s := newSynthetic()
+	h := s.w.start(b)
+	before := h.e.View()
+	narrowed := clone(s.teamPol)
+	narrowed.Spec.Models = []string{"prov-0"}
+	apply(h, narrowed)
+	after := h.e.View()
+	b.Logf("accounts=%d", len(s.w.accounts)+len(s.w.sas))
+	none := func(*CallerPlan) bool { return false }
+	for b.Loop() {
+		if changed, err := ChangedReach(b.Context(), before, after, none); err != nil || len(changed) == 0 {
+			b.Fatalf("changed %d, %v; want some", len(changed), err)
+		}
+	}
+}
+
 // BenchmarkRequestPath is the read side a request walks once the route is filled: key lookup, route hit, the first hop's counters.
 func BenchmarkRequestPath(b *testing.B) {
 	bs := newBasic()

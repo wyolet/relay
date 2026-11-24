@@ -7,6 +7,7 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/pkg/engine"
 )
 
@@ -44,9 +45,9 @@ func inSubtree(targetID string) func(*plan.CallerPlan) bool {
 	}
 }
 
-// under answers what f's rows do to the lanes under target, nil for a target that is no team or project.
-func (d Deps) under(ctx context.Context, f plan.Findings, target *account.Account) (*PseudoUnder, error) {
-	if k := target.DerivedKind(); k != account.KindTeam && k != account.KindProject {
+// under answers what rows do to the lanes under target, as f found them; nil for a target that is no team or project, and when rows write nothing.
+func (d Deps) under(ctx context.Context, f plan.Findings, target *account.Account, rows []pseudo.Row) (*PseudoUnder, error) {
+	if k := target.DerivedKind(); len(rows) == 0 || k != account.KindTeam && k != account.KindProject {
 		return nil, nil
 	}
 	base, err := f.Baseline()
@@ -55,7 +56,14 @@ func (d Deps) under(ctx context.Context, f plan.Findings, target *account.Accoun
 	}
 	id := target.Meta.ID
 	sub := inSubtree(id)
-	lanes, changed := plan.LanesUnder(base, f.Result, func(cp *plan.CallerPlan) bool { return cp.Lane.Meta.ID != id && sub(cp) })
+	var lanes int
+	var changed []plan.LaneReachChange
+	if err := f.Within(func(ctx context.Context) error {
+		lanes, changed, err = plan.LanesUnder(ctx, base, f.Result, func(cp *plan.CallerPlan) bool { return cp.Lane.Meta.ID != id && sub(cp) })
+		return err
+	}); err != nil {
+		return nil, err
+	}
 	out := &PseudoUnder{Lanes: lanes, Unreachable: []UnderLane{}}
 	for _, c := range changed {
 		if c.Narrowed {

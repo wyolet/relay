@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"runtime"
@@ -227,6 +228,49 @@ func TestCheck_BaselineOutlivesTheBound(t *testing.T) {
 	}
 	if _, err := c.NewIssues(t.Context(), h.e.View(), nil, nil); err != nil {
 		t.Fatalf("once it ended: %v", err)
+	}
+}
+
+// Work a writer runs on what the check found is held to the check's bound and ctx: past the bound it answers ErrCheckTimeout and the work's ctx ends, so work reading it stops; a ctx that ends answers its error.
+func TestCheck_WithinTheBound(t *testing.T) {
+	b := newBasic()
+	h := b.w.start(t)
+	const bound = 200 * time.Millisecond
+	c := NewCheck(false, bound)
+	held, release, err := c.Hold(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	f, err := c.Find(held, h.e.View(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan error, 1)
+	start := time.Now()
+	err = f.Within(func(ctx context.Context) error {
+		<-ctx.Done()
+		stopped <- ctx.Err()
+		return ctx.Err()
+	})
+	if !errors.Is(err, ErrCheckTimeout) || time.Since(start) > 3*bound {
+		t.Fatalf("work past the bound: %v after %v, want ErrCheckTimeout near %v", err, time.Since(start), bound)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the work's ctx did not end with the bound")
+	}
+
+	c2 := NewCheck(false, time.Minute)
+	ctx, cancel := context.WithCancel(t.Context())
+	f, err = c2.Find(ctx, h.e.View(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := f.Within(func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }); !errors.Is(err, context.Canceled) {
+		t.Errorf("a canceled request: %v, want context.Canceled", err)
 	}
 }
 

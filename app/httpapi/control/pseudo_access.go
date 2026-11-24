@@ -66,11 +66,11 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 		var under *PseudoUnder
 		poolNames := map[string]string{}
 		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
-			if err := checkPolicyStep(target.Meta.ID)(f); err != nil {
+			if err := checkPolicyStep(target.Meta.ID, change.Rows)(f); err != nil {
 				return err
 			}
 			var err error
-			under, err = d.under(ctx, f, target)
+			under, err = d.under(ctx, f, target, change.Rows)
 			return err
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {

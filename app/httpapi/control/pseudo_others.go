@@ -3,20 +3,25 @@
 package control
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/pkg/engine"
 )
 
 // codeOthersChanged refuses rows that would change what an account other than the target may use.
 const codeOthersChanged = "other_accounts_changed"
 
-// checkPolicyStep returns the checks of what the plan check found that it does not make itself: the target's lane is not refused as a whole where it was not, also when its policy changed in place with no binding written (laneServed), and no other account's reach changed (othersUnchanged). Both compare the result with the baseline built from the same rows, never with the live view, which may lag.
-func checkPolicyStep(targetID string) func(plan.Findings) error {
+// checkPolicyStep returns the checks of what the plan check found that it does not make itself: the target's lane is not refused as a whole where it was not, also when its policy changed in place with no binding written (laneServed), and no other account's reach changed (othersUnchanged). Both compare the result with the baseline built from the same rows, never with the live view, which may lag. No rows written, nothing is compared.
+func checkPolicyStep(targetID string, rows []pseudo.Row) func(plan.Findings) error {
 	return func(f plan.Findings) error {
+		if len(rows) == 0 {
+			return nil
+		}
 		if err := laneServed(f, targetID); err != nil {
 			return err
 		}
@@ -58,7 +63,13 @@ func othersUnchanged(targetID string) func(plan.Findings) error {
 		if err != nil {
 			return err
 		}
-		changed := plan.ChangedReach(base, f.Result, inSubtree(targetID))
+		var changed []plan.ReachChange
+		if err := f.Within(func(ctx context.Context) error {
+			changed, err = plan.ChangedReach(ctx, base, f.Result, inSubtree(targetID))
+			return err
+		}); err != nil {
+			return err
+		}
 		if len(changed) == 0 {
 			return nil
 		}

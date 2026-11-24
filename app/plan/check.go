@@ -106,6 +106,15 @@ type Findings struct {
 	Errors, Warnings []engine.Issue
 	Result           *engine.View
 	baseline         func() (*engine.View, error)
+	within           func(func(context.Context) error) error
+}
+
+// Within runs work under the check's slot and bound, as the check's own builds run: past the bound, or once the ctx Find was given ends, it answers ErrCheckTimeout or that ctx's error, and the ctx work is given ends then too, so work reading it stops early.
+func (f Findings) Within(work func(ctx context.Context) error) error {
+	if f.within == nil {
+		return errors.New("plan: the check built no result")
+	}
+	return f.within(work)
 }
 
 // Baseline is the view of the same rows without the proposed ones, built at once as Result was, never the live view; it is the one the check built when it needed it, else built on the first call under the check's bound and the ctx Find was given, as Find's own build: past the bound it answers ErrCheckTimeout and the slot stays taken until the build ends. The caller holds the check's slot, as a writer running the check does.
@@ -179,7 +188,13 @@ func (c *Check) Find(ctx context.Context, live *engine.View, read, proposed []an
 		baseline := onceView(rebuilt, func() (*engine.View, error) {
 			return bounded(ctx, c, h, func() (*engine.View, error) { return c.build(base) })
 		})
-		return Findings{Errors: found, Warnings: newWarnings(beforeIssues, afterIssues), Result: after, baseline: baseline}, nil
+		within := func(work func(context.Context) error) error {
+			wctx, cancel := context.WithTimeout(ctx, c.timeout)
+			defer cancel()
+			_, err := bounded(ctx, c, h, func() (struct{}, error) { return struct{}{}, work(wctx) })
+			return err
+		}
+		return Findings{Errors: found, Warnings: newWarnings(beforeIssues, afterIssues), Result: after, baseline: baseline, within: within}, nil
 	})
 }
 

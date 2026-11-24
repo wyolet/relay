@@ -3,6 +3,7 @@
 package plan
 
 import (
+	"context"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,15 +19,18 @@ type ReachChange struct {
 	Narrowed  bool
 }
 
-// ChangedReach lists, by account id, the accounts both views hold whose reach as callers differs between before and after, leaving out those mine reports as the writer's own (it is given each account's caller plan in either view). An account only one view holds is the writer's to make or delete and is not listed.
-func ChangedReach(before, after *engine.View, mine func(*CallerPlan) bool) []ReachChange {
+// ChangedReach lists, by account id, the accounts both views hold whose reach as callers differs between before and after, leaving out those mine reports as the writer's own (it is given each account's caller plan in either view). An account only one view holds is the writer's to make or delete and is not listed. It stops with ctx's error once ctx ends.
+func ChangedReach(ctx context.Context, before, after *engine.View, mine func(*CallerPlan) bool) ([]ReachChange, error) {
 	var out []ReachChange
 	for acc := range engine.All[account.Account](after) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		prev := engine.Get[account.Account](before, acc.Meta.ID)
 		if prev == nil {
 			continue
 		}
-		was, is := foldFor(before, prev, nil), foldFor(after, acc, nil)
+		was, is := callerOf(before, prev), callerOf(after, acc)
 		if was == nil || is == nil || mine(was) || mine(is) || laneState(was) == laneState(is) {
 			continue
 		}
@@ -35,7 +39,15 @@ func ChangedReach(before, after *engine.View, mine func(*CallerPlan) bool) []Rea
 		}
 	}
 	slices.SortFunc(out, func(a, b ReachChange) int { return strings.Compare(a.AccountID, b.AccountID) })
-	return out
+	return out, nil
+}
+
+// callerOf is acc's caller plan in v: the one v holds for a lane, else acc folded as a caller; nil when acc heads no ladder.
+func callerOf(v *engine.View, acc *account.Account) *CallerPlan {
+	if cp := LanePlan(v, acc.Meta.ID); cp != nil {
+		return cp
+	}
+	return foldFor(v, acc, nil)
 }
 
 // LaneReachChange is one lane and how its reach changed between two views: it lost something, gained something, or, Unreachable, served a model at some host before and serves none after.
@@ -44,9 +56,12 @@ type LaneReachChange struct {
 	Narrowed, Widened, Unreachable bool
 }
 
-// LanesUnder counts the lanes after holds that under reports, and lists, by account id, those of them whose reach differs from before's.
-func LanesUnder(before, after *engine.View, under func(*CallerPlan) bool) (lanes int, changed []LaneReachChange) {
+// LanesUnder counts the lanes after holds that under reports, and lists, by account id, those of them whose reach differs from before's. It stops with ctx's error once ctx ends.
+func LanesUnder(ctx context.Context, before, after *engine.View, under func(*CallerPlan) bool) (lanes int, changed []LaneReachChange, err error) {
 	for cp := range engine.All[CallerPlan](after) {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
 		if cp.Lane == nil || !under(cp) {
 			continue
 		}
@@ -61,7 +76,7 @@ func LanesUnder(before, after *engine.View, under func(*CallerPlan) bool) (lanes
 		}
 	}
 	slices.SortFunc(changed, func(a, b LaneReachChange) int { return strings.Compare(a.AccountID, b.AccountID) })
-	return lanes, changed
+	return lanes, changed, nil
 }
 
 // serves reports whether r reaches some model at some host.
