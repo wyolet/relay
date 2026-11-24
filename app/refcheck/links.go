@@ -182,6 +182,11 @@ func (c Checker) linkable(ctx context.Context, from, kind string, m meta.Metadat
 		kindWord(kind), homeText(refOwner))
 }
 
+// Reaches reports whether a row owned by refOwner may draw on a row owned by owner by ownership alone, before the caller's visibility; see reaches.
+func (c Checker) Reaches(ctx context.Context, owner, refOwner meta.Owner) bool {
+	return c.reaches(ctx, owner, refOwner)
+}
+
 // reaches reports whether a row owned by refOwner may draw on a row owned by owner: a project on its own, its team's and the deployment-wide rows, a team on its own and the deployment-wide ones, a user on any row but another user's, anyone else on any row (the caller's visibility and personalToProject narrow those). A user's row may be bound in that user's accounts only, which another user's row serves in no plan (containsScope, the plan's own rule).
 func (c Checker) reaches(ctx context.Context, owner, refOwner meta.Owner) bool {
 	switch {

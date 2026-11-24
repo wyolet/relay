@@ -90,6 +90,27 @@ func TestProbeOrgFailures(t *testing.T) {
 	}
 }
 
+// A redirect is the probe's answer: the key goes to the base URL it was given and never to the place the redirect names.
+func TestProbeOrgFollowsNoRedirect(t *testing.T) {
+	elsewhere := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		elsewhere++
+		w.Header().Set("X-Org-Id", "org-elsewhere")
+	}))
+	defer other.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/v1/models", http.StatusFound)
+	}))
+	defer up.Close()
+
+	s := newOrgSpec(&OrgProbe{Path: "/v1/models", OrgHeader: "X-Org-Id"})
+	_, err := s.ProbeOrg(context.Background(), up.URL, "sk-1", false)
+	var se *ProbeStatusError
+	if !errors.As(err, &se) || se.Status != http.StatusFound || elsewhere != 0 {
+		t.Fatalf("err = %v, calls elsewhere %d; want ProbeStatusError 302 and none", err, elsewhere)
+	}
+}
+
 // Live responses are read for the org on the request path, so the read must not allocate.
 func TestOrgIDReadsTheHeaderWithoutAllocating(t *testing.T) {
 	h := http.Header{"X-Org-Id": {"org-42"}}

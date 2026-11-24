@@ -229,18 +229,8 @@ func (k *HostKey) Validate() error {
 	if err := meta.Validator.Struct(k); err != nil {
 		return err
 	}
-	switch k.Meta.Owner.Kind {
-	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject:
-	case meta.OwnerOrganization:
-		if k.Meta.Owner.ID != "" {
-			return fmt.Errorf("hostkey %q: an organization owner carries no id", k.Meta.Name)
-		}
-	case meta.OwnerTeam:
-		if k.Meta.Owner.ID == "" {
-			return fmt.Errorf("hostkey %q: a team owner needs the team's id", k.Meta.Name)
-		}
-	default:
-		return fmt.Errorf("hostkey %q: owner.kind must be user, organization, system, team or project, got %q", k.Meta.Name, k.Meta.Owner.Kind)
+	if err := ValidateOwner(k.Meta.Name, k.Meta.Owner); err != nil {
+		return err
 	}
 	if k.Spec.HostID == "" {
 		return fmt.Errorf("hostkey %q: spec.hostId is required", k.Meta.Name)
@@ -273,6 +263,24 @@ func (k *HostKey) Validate() error {
 		if k.Spec.ValueFrom.Provider == "" {
 			return fmt.Errorf("hostkey %q: valueFrom.provider required for oauth mode", k.Meta.Name)
 		}
+	}
+	return nil
+}
+
+// ValidateOwner refuses an owner a host key named name cannot have: one of no kind user, organization, system, team or project, an organization with an id, a team without one.
+func ValidateOwner(name string, o meta.Owner) error {
+	switch o.Kind {
+	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject:
+	case meta.OwnerOrganization:
+		if o.ID != "" {
+			return fmt.Errorf("hostkey %q: an organization owner carries no id", name)
+		}
+	case meta.OwnerTeam:
+		if o.ID == "" {
+			return fmt.Errorf("hostkey %q: a team owner needs the team's id", name)
+		}
+	default:
+		return fmt.Errorf("hostkey %q: owner.kind must be user, organization, system, team or project, got %q", name, o.Kind)
 	}
 	return nil
 }

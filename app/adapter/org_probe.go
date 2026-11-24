@@ -44,7 +44,7 @@ func (e *ProbeStatusError) Error() string {
 // maxProbeBody bounds how much of a probe's answer is drained so its connection can be reused; only its headers are read.
 const maxProbeBody = 64 << 10
 
-// ProbeOrg asks the upstream at baseURL which organization apiKey belongs to: one GET of Org.Path, authenticated as a generation is and capped by the same sync timeout.
+// ProbeOrg asks the upstream at baseURL which organization apiKey belongs to: one GET of Org.Path, authenticated as a generation is and capped by the same sync timeout. A redirect is not followed: it is the answer, a ProbeStatusError.
 func (s *Spec) ProbeOrg(ctx context.Context, baseURL, apiKey string, oauth bool) (Org, error) {
 	if s.Org == nil || s.orgHeader == "" || s.Org.Path == "" {
 		return Org{}, ErrNoOrgProbe
@@ -57,7 +57,9 @@ func (s *Spec) ProbeOrg(ctx context.Context, baseURL, apiKey string, oauth bool)
 		return Org{}, err
 	}
 	s.setAuth(req.Header, apiKey, oauth)
-	resp, err := s.client.Do(req)
+	client := *s.client
+	client.CheckRedirect = stayAtBaseURL
+	resp, err := client.Do(req)
 	if err != nil {
 		return Org{}, err
 	}
@@ -72,6 +74,9 @@ func (s *Spec) ProbeOrg(ctx context.Context, baseURL, apiKey string, oauth bool)
 	}
 	return org, nil
 }
+
+// stayAtBaseURL answers a redirect as it is, so a probe's credential goes to the URL it was given and nowhere a header names, custom auth headers included, which net/http forwards to another host.
+func stayAtBaseURL(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // OrgID returns the organization id a response of this shape names, "" when it names none. It indexes the header map directly, so a shape without Org pays one comparison.
 func (a *specAdapter) OrgID(h http.Header) string {

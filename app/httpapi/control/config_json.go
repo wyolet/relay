@@ -67,6 +67,7 @@ func withFeatures(rc RuntimeConfig, d Deps) RuntimeConfig {
 		f["oidc"] = true
 	}
 	rc.Features = f
+	rc.PseudoKinds = enabledPseudoKinds(d.PseudoKinds)
 	return rc
 }
 
@@ -81,6 +82,7 @@ type RuntimeConfig struct {
 	Mode            string          `json:"mode,omitempty"            enum:"oss,cloud" doc:"Deployment flavour the UI adapts to."` // "oss" | "cloud"
 	Version         string          `json:"version,omitempty"         doc:"Relay build version."`
 	Features        map[string]bool `json:"features,omitempty"        doc:"Feature flags the UI gates on: tokens, users, audit and accessReview are always present; oidc only when enabled."`
+	PseudoKinds     []string        `json:"pseudoKinds"               doc:"The pseudo kinds this relay serves, such as agents for POST /pseudo-agents; always present, empty when none. A kind not listed has no route."`
 	Telemetry       *Telemetry      `json:"telemetry,omitempty"       doc:"Public client-side error reporting config."`
 	DocsURL         string          `json:"docsUrl,omitempty"         doc:"Documentation link shown in the UI."`
 	SupportURL      string          `json:"supportUrl,omitempty"      doc:"Support link shown in the UI."`

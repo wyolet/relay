@@ -94,6 +94,17 @@ func RecordExtra(ctx context.Context, row Row) {
 	f.mu.Unlock()
 }
 
+// RecordOnly replaces every row the request would record, a Discard included, with rows: a dry run that reached outside relay is recorded as that alone. No-op outside an audited request.
+func RecordOnly(ctx context.Context, rows []Row) {
+	f := fromContext(ctx)
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	f.discard, f.each, f.extra = false, rows, nil
+	f.mu.Unlock()
+}
+
 // Discard drops the request's row: a dry run changes nothing, and its
 // authorization pass would otherwise read as the writes it only planned.
 func Discard(ctx context.Context) {

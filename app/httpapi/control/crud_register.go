@@ -79,12 +79,13 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		nil,
 	))
 
+	sac := serviceAccountChecks(d)
 	rows.add(registerKind[serviceaccount.ServiceAccount](
-		api, "service-accounts", "service-account", dk.serviceAccounts, d.Authz, sameta,
-		func(sa *serviceaccount.ServiceAccount) error { return sa.Validate() },
+		api, sac.plural, sac.singular, dk.serviceAccounts, d.Authz, sameta,
+		sac.validate,
 		meta.OwnerProject,
 		listScanResolver(d.Stores.ServiceAccount, sameta),
-		guardServiceAccount(d),
+		sac.guard,
 		nil,
 		nil,
 		d.refuseInUse,
@@ -236,12 +237,13 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		usableFor(c, "pool", refcheck.Checker.UsableHostKey),
 	))
 
+	rlc := rateLimitChecks(d)
 	rows.add(registerKind[ratelimit.RateLimit](
-		api, "rate-limits", "rate-limit", d.Stores.RateLimit, d.Authz, rlmeta,
-		func(r *ratelimit.RateLimit) error { return r.Validate() },
+		api, rlc.plural, rlc.singular, d.Stores.RateLimit, d.Authz, rlmeta,
+		rlc.validate,
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
-		guardRateLimitUpdate(d),
+		rlc.guard,
 		nil,
 		nil,
 		d.refuseInUse,

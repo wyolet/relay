@@ -278,7 +278,12 @@ func Personal(userID, username string) *Account {
 
 // ForServiceAccount is the service account's account, in its project.
 func ForServiceAccount(saID, saName, display, projectID string) *Account {
-	return managed(servicePrefix+saName, orName(display, saName), meta.Owner{Kind: meta.OwnerProject, ID: projectID}, &Holder{Kind: HolderServiceAccount, ID: saID})
+	return ForServiceAccountIn(saID, saName, display, meta.Owner{Kind: meta.OwnerProject, ID: projectID})
+}
+
+// ForServiceAccountIn is the service account's account, owned by the service account's owner; Validate refuses an owner a service account's account cannot have.
+func ForServiceAccountIn(saID, saName, display string, owner meta.Owner) *Account {
+	return managed(servicePrefix+saName, orName(display, saName), owner, &Holder{Kind: HolderServiceAccount, ID: saID})
 }
 
 // Member is the user's member account in a team or project scope, named after the user and the scope.

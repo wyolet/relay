@@ -33,10 +33,11 @@ type HostKeyView struct {
 // HostPolicyRow — a host-tier policy this host owns, with its rate-limit rule
 // sets (model-scoped and unscoped links alike).
 type HostPolicyRow struct {
-	ID         string               `json:"id"         doc:"Policy id."`
-	Name       string               `json:"name"       doc:"Policy slug."`
-	Enabled    bool                 `json:"enabled"    doc:"Whether the policy is enabled."`
-	RateLimits []PolicyRateLimitRow `json:"rateLimits" doc:"The rate limits the preset links, model-scoped and unscoped."`
+	ID          string               `json:"id"                    doc:"Policy id."`
+	Name        string               `json:"name"                  doc:"Policy slug."`
+	DisplayName string               `json:"displayName,omitempty" doc:"Free-text name of the policy."`
+	Enabled     bool                 `json:"enabled"               doc:"Whether the policy is enabled."`
+	RateLimits  []PolicyRateLimitRow `json:"rateLimits"            doc:"The rate limits the preset links, model-scoped and unscoped."`
 }
 
 // loadHost resolves the host {ref} (id or slug) and builds the index.
@@ -85,10 +86,11 @@ func (s *Service) HostPolicies(ctx context.Context, ref string) (HostRef, []Host
 			continue
 		}
 		rows = append(rows, HostPolicyRow{
-			ID:         p.Meta.ID,
-			Name:       p.Meta.Name,
-			Enabled:    p.IsEnabled(),
-			RateLimits: idx.policyRateLimitRows(p, s.rateLimitVisible(idx)),
+			ID:          p.Meta.ID,
+			Name:        p.Meta.Name,
+			DisplayName: p.Meta.DisplayName,
+			Enabled:     p.IsEnabled(),
+			RateLimits:  idx.policyRateLimitRows(p, s.rateLimitVisible(idx)),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
