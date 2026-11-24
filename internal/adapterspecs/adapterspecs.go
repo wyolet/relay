@@ -41,6 +41,13 @@ func Specs() []*adapter.Spec {
 		}
 		return "/v1/projects/{project}/locations/{location}/publishers/anthropic/models/" + model + ":rawPredict"
 	}
+	vertexGeminiUpstreamPath := func(model string, stream bool) string {
+		path := "/v1/projects/{project}/locations/{location}/publishers/google/models/" + model
+		if stream {
+			return path + ":streamGenerateContent?alt=sse"
+		}
+		return path + ":generateContent"
+	}
 
 	specs := []*adapter.Spec{
 		(&adapter.Spec{
@@ -123,6 +130,19 @@ func Specs() []*adapter.Spec {
 			UpstreamPathFn: geminiUpstreamPath,
 			Auth:           geminiAuth,
 			Translator:     pkggemini.GeminiTranslator{},
+			ExtractTokens:  pkggemini.ExtractTokens,
+			ParamPaths: map[string]string{
+				"temperature": "generationConfig.temperature",
+				"top_p":       "generationConfig.topP",
+				"top_k":       "generationConfig.topK",
+			},
+		}).Build(),
+		(&adapter.Spec{
+			Name:           adapters.VertexGemini,
+			Family:         adapters.Gemini,
+			UpstreamPathFn: vertexGeminiUpstreamPath,
+			Auth:           adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+			Translator:     pkggemini.GeminiTranslator{Vertex: true},
 			ExtractTokens:  pkggemini.ExtractTokens,
 			ParamPaths: map[string]string{
 				"temperature": "generationConfig.temperature",

@@ -10,7 +10,10 @@ import (
 
 // GeminiTranslator implements v1.Translator for the Gemini generateContent
 // wire shape. Stateless value type; per-stream state lives in closures.
-type GeminiTranslator struct{}
+type GeminiTranslator struct {
+	// Vertex selects the Vertex AI form of the request: every fileData part carries a mimeType, taken from the part's media type or its URL's extension, and a part with neither is refused with v1.ErrUnsupportedRequest. Responses, streams and usage read the same either way.
+	Vertex bool
+}
 
 // Gemini's functionCall.id is optional — without it tool results match calls by function name. Canonical (and OpenAI/Anthropic clients downstream) require a unique CallID per call, so when the id is absent we synthesize CallID = name + callIDSep + index and strip it back to the bare name when emitting a functionResponse upstream. callIDSep is chosen to never collide with a real function name.
 const callIDSep = "__relay_call_"

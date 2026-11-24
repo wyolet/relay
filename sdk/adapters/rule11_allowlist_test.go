@@ -119,7 +119,7 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: Message.ID/Status dropped — Gemini", "input[message:*].id", "input[message:*].status", userMsg+".provider_data"),
 		annotated("canonical: ImagePart.Detail dropped — per-part mediaResolution", userMsg+".content[input_image].detail"),
 		annotated("canonical: FilePart.Filename dropped — Gemini API", userMsg+".content[input_file*].filename"),
-		carriable("SerializeRequest sends an image URL as fileData with no mimeType, so ParseRequest reads it back as a file",
+		carriable("SerializeRequest sends an image URL as fileData, which ParseRequest reads back as a file",
 			userMsg+".content[*"),
 		annotated("canonical: Reasoning.ID/Status dropped — a thought part", reasoning+".id", reasoning+".status"),
 		annotated("canonical: Reasoning.Summary dropped when Content is set", reasoning+".summary*"),
@@ -132,6 +132,9 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: Tools.Parallel dropped — Gemini", "tools.parallel"),
 	},
 }
+
+// The Vertex variant differs only in fileData's mimeType, which every file URL of fullRequest carries or names by extension.
+func init() { allowedDrops["gemini-vertex"] = allowedDrops["gemini"] }
 
 // silentFeatureDrops are rejectedFeatures a shape serializes without an
 // error while losing them; each is a skipped subtest until fixed.

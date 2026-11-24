@@ -1,0 +1,8 @@
+{
+  "contents": [
+    {"role": "user", "parts": [
+      {"text": "Describe this."},
+      {"fileData": {"fileUri": "https://example.com/image"}}
+    ]}
+  ]
+}

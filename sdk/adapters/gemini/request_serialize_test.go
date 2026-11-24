@@ -266,6 +266,46 @@ func TestSerializeRequest_UnsendableImageOrFilePart(t *testing.T) {
 	}
 }
 
+// Vertex rejects a fileData without a mimeType: the variant sends the part's media type, else the one its URL path's extension names, and refuses a part with neither; the Gemini API form sends what the part holds.
+func TestSerializeRequest_VertexFileMediaType(t *testing.T) {
+	cases := []struct {
+		name         string
+		part         v1.Part
+		vertex, gapi string // the fileData each form sends, "" when the variant refuses the part
+	}{
+		{"image URL with a known extension", &v1.ImagePart{ImageURL: "https://example.com/a/cat.JPG?sig=x.pdf#y"},
+			`{"mimeType":"image/jpeg","fileUri":"https://example.com/a/cat.JPG?sig=x.pdf#y"}`, `{"fileUri":"https://example.com/a/cat.JPG?sig=x.pdf#y"}`},
+		{"image URL without one", &v1.ImagePart{ImageURL: "https://example.com/cat"}, "", `{"fileUri":"https://example.com/cat"}`},
+		{"file URL with a media type", &v1.FilePart{FileURL: "https://example.com/clip", MediaType: "video/mp4"},
+			`{"mimeType":"video/mp4","fileUri":"https://example.com/clip"}`, `{"mimeType":"video/mp4","fileUri":"https://example.com/clip"}`},
+		{"file URL whose media type outranks its extension", &v1.FilePart{FileURL: "gs://b/a.pdf", MediaType: "text/plain"},
+			`{"mimeType":"text/plain","fileUri":"gs://b/a.pdf"}`, `{"mimeType":"text/plain","fileUri":"gs://b/a.pdf"}`},
+		{"gs file URL with a known extension", &v1.FilePart{FileURL: "gs://b/talk.mp3"}, `{"mimeType":"audio/mp3","fileUri":"gs://b/talk.mp3"}`, `{"fileUri":"gs://b/talk.mp3"}`},
+		{"file URL with an unknown extension", &v1.FilePart{FileURL: "https://example.com/notes.txt"}, "", `{"fileUri":"https://example.com/notes.txt"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := &v1.Request{Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{c.part}}}}
+			for _, form := range []struct {
+				tr   GeminiTranslator
+				want string
+			}{{GeminiTranslator{Vertex: true}, c.vertex}, {GeminiTranslator{}, c.gapi}} {
+				body, err := form.tr.SerializeRequest(req)
+				if form.want == "" {
+					if !errors.Is(err, v1.ErrUnsupportedRequest) {
+						t.Errorf("Vertex: serialized to %s (err %v), want ErrUnsupportedRequest", body, err)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatalf("Vertex=%v: %v", form.tr.Vertex, err)
+				}
+				assertJSON(t, body, `{"contents":[{"role":"user","parts":[{"fileData":`+form.want+`}]}]}`)
+			}
+		})
+	}
+}
+
 func TestToolChoice_RoundTrip(t *testing.T) {
 	const fAndG = `[{"functionDeclarations":[{"name":"f","parametersJsonSchema":{}},{"name":"g","parametersJsonSchema":{}}]}]`
 	cases := []struct {

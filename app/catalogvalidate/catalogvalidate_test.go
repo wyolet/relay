@@ -344,7 +344,7 @@ var wantReports = map[string][]string{
 		"error ref_missing Account/acct.spec.host → Host/ghost-host: host \"ghost-host\" not found",
 	},
 	"binding adapter that is no upstream shape": {
-		"error invariant HostBinding/gpt-x-openai-host.spec.adapter: adapter \"canonical\" is not a valid upstream binding (want one of [openai anthropic vertex_anthropic gemini openai_responses])",
+		"error invariant HostBinding/gpt-x-openai-host.spec.adapter: adapter \"canonical\" is not a valid upstream binding (want one of [openai anthropic vertex_anthropic gemini vertex_gemini openai_responses])",
 	},
 	"binding naming neither model nor host": {
 		"error incomplete HostBinding/gpt-x-openai-host.spec.host: host is required",
