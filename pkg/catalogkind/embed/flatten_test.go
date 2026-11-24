@@ -88,24 +88,44 @@ func TestFlatten_PricingFollowsTheBindingsSheet(t *testing.T) {
 	t.Fatal("host-a missing")
 }
 
-// The document's wire name is the one routing sends: the binding's upstreamName where it states one, else the snapshot's upstream name.
+// The document's wire name is the one routing sends: the binding's upstreamName while the binding serves one snapshot of the model, else the snapshot's upstream name.
 func TestFlatten_WireNameFollowsTheBindingsUpstreamName(t *testing.T) {
-	idx, kept := flattenFixture()
 	const wire = "global.prov.m-v1:0"
-	for _, list := range idx.bindingsByModel {
-		for _, b := range list {
-			if b.Meta.ID == kept {
-				b.Spec.UpstreamName, b.Spec.Snapshots = wire, []string{"m-snap"}
+	for _, tc := range []struct {
+		name        string
+		oldSnapshot bool     // the model also has snapshot m-old
+		snapshots   []string // host-a's binding's list
+		atA, atB    map[string]string
+	}{
+		{"one-snapshot model, binding lists none", false, nil,
+			map[string]string{"m-snap": wire}, map[string]string{"m-snap": "m-snap"}},
+		{"binding lists one of several", true, []string{"m-snap"},
+			map[string]string{"m-snap": wire}, map[string]string{"m-snap": "m-snap", "m-old": "m-old"}},
+		{"several snapshots, binding lists none", true, nil,
+			map[string]string{"m-snap": "m-snap", "m-old": "m-old"}, map[string]string{"m-snap": "m-snap", "m-old": "m-old"}},
+	} {
+		idx, kept := flattenFixture()
+		for _, m := range idx.modelsByID {
+			if tc.oldSnapshot {
+				m.Spec.Snapshots = append(m.Spec.Snapshots, model.Snapshot{Name: "m-old"})
 			}
 		}
-	}
-	got := map[string]string{}
-	for _, h := range Flatten(idx, time.Time{}, nil).Hosts {
-		for _, b := range h.Models {
-			got[h.Name] = b.Name
+		for _, list := range idx.bindingsByModel {
+			for _, b := range list {
+				if b.Meta.ID == kept {
+					b.Spec.UpstreamName, b.Spec.Snapshots = wire, tc.snapshots
+				}
+			}
 		}
-	}
-	if want := map[string]string{"host-a": wire, "host-b": "m-snap"}; !maps.Equal(got, want) {
-		t.Errorf("wire names by host = %v, want %v", got, want)
+		got := map[string]map[string]string{}
+		for _, h := range Flatten(idx, time.Time{}, nil).Hosts {
+			got[h.Name] = map[string]string{}
+			for _, b := range h.Models {
+				got[h.Name][b.MetadataName] = b.Name
+			}
+		}
+		if !maps.Equal(got["host-a"], tc.atA) || !maps.Equal(got["host-b"], tc.atB) {
+			t.Errorf("%s: wire names = %v, want host-a %v, host-b %v", tc.name, got, tc.atA, tc.atB)
+		}
 	}
 }

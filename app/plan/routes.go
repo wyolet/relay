@@ -70,7 +70,7 @@ type RouteHop struct {
 	CallerN int
 	// ParamRenames are the request-body renames the host applies to the binding's wire shape, resolved with the route so a request reads them without a lookup.
 	ParamRenames []host.ParamRename
-	// UpstreamModel is the model name sent through this hop: the binding's upstreamName when it states one, which wins over an alias the host does not know, else the alias's or the snapshot's name.
+	// UpstreamModel is the model name sent through this hop: the binding's upstreamName when it applies (binding.UpstreamNameFor), which wins over an alias the host does not know, else the alias's or the snapshot's name.
 	UpstreamModel string
 }
 
@@ -215,7 +215,6 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 			if u.UpstreamModel == "" && res.Snapshot != nil {
 				u.UpstreamModel = res.Snapshot.Upstream()
 			}
-			u.UpstreamModel = b.UpstreamNameOr(u.UpstreamModel)
 			return u
 		}
 		best.note(stepNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
@@ -246,7 +245,6 @@ func (r *Root) ResolveAtHost(h *host.Host, ref string) *Unkeyed {
 				if u.UpstreamModel == "" && res.Snapshot != nil {
 					u.UpstreamModel = res.Snapshot.Upstream()
 				}
-				u.UpstreamModel = b.UpstreamNameOr(u.UpstreamModel)
 				return u
 			}
 		}
@@ -290,7 +288,7 @@ func (t *RouteTable) fill(ref string) *Route {
 		r.UpstreamModel = res.Snapshot.Upstream()
 	}
 	for i := range r.Hops {
-		r.Hops[i].UpstreamModel = r.Hops[i].Binding.UpstreamNameOr(r.UpstreamModel)
+		r.Hops[i].UpstreamModel = r.Hops[i].Binding.UpstreamNameFor(r.Model, r.UpstreamModel)
 	}
 	if len(r.Hops) > 0 {
 		r.UpstreamModel = r.Hops[0].UpstreamModel

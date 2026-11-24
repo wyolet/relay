@@ -8,6 +8,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -56,11 +57,11 @@ func TestValidate(t *testing.T) {
 		{"upstream name for its one snapshot", func(b *Binding) {
 			b.Spec.UpstreamName, b.Spec.Snapshots = "global.acme.m-v1:0", []string{"m-2026-01-01"}
 		}, nil, adapters.OpenAI},
-		{"upstream name for every snapshot", func(b *Binding) { b.Spec.UpstreamName = "global.acme.m-v1:0" },
-			[]string{`binding "m-on-h": upstreamName "global.acme.m-v1:0" names one upstream model, so snapshots must list exactly one snapshot (got 0)`}, adapters.OpenAI},
+		// Routing applies it only when the model has one snapshot; a stored row of this shape stays editable.
+		{"upstream name listing no snapshot", func(b *Binding) { b.Spec.UpstreamName = "global.acme.m-v1:0" }, nil, adapters.OpenAI},
 		{"upstream name for two snapshots", func(b *Binding) {
 			b.Spec.UpstreamName, b.Spec.Snapshots = "acme/m", []string{"m-2026-01-01", "m-2026-02-01"}
-		}, []string{`binding "m-on-h": upstreamName "acme/m" names one upstream model, so snapshots must list exactly one snapshot (got 2)`}, adapters.OpenAI},
+		}, []string{`binding "m-on-h": upstreamName "acme/m" names one upstream model, so snapshots may list at most one snapshot (got 2)`}, adapters.OpenAI},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &Binding{Meta: meta.Metadata{Name: "m-on-h"}, Spec: Spec{ModelID: meta.NewID(), HostID: meta.NewID()}}
@@ -72,6 +73,30 @@ func TestValidate(t *testing.T) {
 				t.Errorf("adapter after Validate = %q, want %q", b.Spec.Adapter, tc.wantAdapter)
 			}
 		})
+	}
+}
+
+// An upstreamName applies only while the binding serves one snapshot of the model.
+func TestUpstreamNameFor(t *testing.T) {
+	one := &model.Model{Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m"}}}}
+	several := &model.Model{Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m"}, {Name: "m-2026-01-01"}}}}
+	for _, tc := range []struct {
+		name         string
+		upstreamName string
+		snapshots    []string
+		m            *model.Model
+		want         string
+	}{
+		{"no upstream name", "", nil, one, "fallback"},
+		{"lists none, model has one snapshot", "wire", nil, one, "wire"},
+		{"lists one", "wire", []string{"m"}, several, "wire"},
+		{"lists none, model has several", "wire", nil, several, "fallback"},
+		{"lists several", "wire", []string{"m", "m-2026-01-01"}, several, "fallback"},
+	} {
+		b := &Binding{Spec: Spec{UpstreamName: tc.upstreamName, Snapshots: tc.snapshots}}
+		if got := b.UpstreamNameFor(tc.m, "fallback"); got != tc.want {
+			t.Errorf("%s: UpstreamNameFor = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
