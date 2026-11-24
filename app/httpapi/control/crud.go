@@ -122,6 +122,153 @@ func refuseOrganizationOwner(ctx context.Context, a authz.Authorizer, singular s
 	return nil
 }
 
+// settleCreateOwner settles the owner of a new row of checks' kind as checkCreate does before its guard: the system read as the organization where it names it, defaultOwnerKind for an omitted kind, the owners the kind refuses, and the caller's id stamped.
+func settleCreateOwner[T any](ctx context.Context, checks kindChecks[T], defaultOwnerKind meta.OwnerKind, o *meta.Owner) error {
+	singular := checks.singular
+	// system is reserved for seed paths; where it names the global scope
+	// it is read as the organization.
+	readSystemAsGlobal(singular, o, meta.Owner{})
+	if o.Kind == meta.OwnerSystem {
+		return huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
+	}
+	if o.Kind == "" && defaultOwnerKind != "" {
+		o.Kind = defaultOwnerKind
+	}
+	if err := refuseTenantOwner(singular, *o); err != nil {
+		return err
+	}
+	if err := refuseNonGlobalScopeOwner(singular, *o); err != nil {
+		return err
+	}
+	if err := refuseOrganizationOwner(ctx, checks.authz, singular, *o); err != nil {
+		return err
+	}
+	if err := stampOwnerID(ctx, o); err != nil {
+		return huma.Error400BadRequest(err.Error())
+	}
+	return nil
+}
+
+// checkCreate settles a new row's owner and runs the create checks on it, as the generic create route does once the row has its id and name: m is v's metadata, defaultOwnerKind fills an omitted owner kind ("" for none).
+func checkCreate[T any](ctx context.Context, checks kindChecks[T], defaultOwnerKind meta.OwnerKind, m *meta.Metadata, v *T) error {
+	if err := settleCreateOwner(ctx, checks, defaultOwnerKind, &m.Owner); err != nil {
+		return err
+	}
+	// The guard runs first: on kinds whose owner mirrors a spec field
+	// (Project, ServiceAccount) it is what re-derives or completes
+	// the owner, and the owner is what the decision below turns on.
+	if err := checks.guarded(ctx, "create", nil, v); err != nil {
+		return err
+	}
+	// Authorize AFTER owner stamping so an owner-aware Authorizer can
+	// decide on the row's final provenance (user-owned rows are open to
+	// any authenticated caller; anything else needs a binding).
+	if err := checks.mayCreate(ctx, &m.Owner); err != nil {
+		return err
+	}
+	// Validate AFTER stamping id+slug so the entity's Validate() sees
+	// the same shape the store will persist. Rejecting here keeps bad
+	// rows out of PG (which would otherwise break Bootstrap).
+	return checks.valid(v)
+}
+
+// insertRow writes a new row through the store's create when it has one, else its upsert.
+func insertRow[T any](ctx context.Context, store entityStore[T], v *T) error {
+	create := store.Upsert
+	if w, ok := store.(kindWriter[T]); ok {
+		create = w.Create
+	}
+	return create(ctx, v)
+}
+
+// checkUpdate settles v's id and owner and runs the update checks on it, as the generic update route does once it found existing, the stored row v replaces.
+func checkUpdate[T any](ctx context.Context, checks kindChecks[T], metaOf func(*T) *meta.Metadata, mergeUpdate mergeOnUpdateFn[T], id string, existing, v *T) error {
+	singular := checks.singular
+	if !visibleTo(ctx, checks.authz, singular, metaOf(existing).ID, metaOf(existing).Owner) {
+		return huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, id))
+	}
+	// Authorize with the fetched row's owner so an owner-aware Authorizer
+	// can enforce owner.id == caller for user-owned rows.
+	if err := checks.mayUpdate(ctx, id, metaOf(existing)); err != nil {
+		return err
+	}
+	m := metaOf(v)
+	m.ID = id // path id wins over body id
+	// Early answer for a stale body; the store re-checks atomically.
+	if m.ResourceVersion != "" && m.ResourceVersion != metaOf(existing).ResourceVersion {
+		return staleVersionError(singular, id)
+	}
+	if err := refuseTenantOwner(singular, m.Owner); err != nil {
+		return err
+	}
+	if mergeUpdate != nil {
+		mergeUpdate(existing, v)
+	}
+	readSystemAsGlobal(singular, &m.Owner, metaOf(existing).Owner)
+	// An omitted owner, or the stored kind without an id, keeps the stored
+	// owner: a body echoing {kind: user} must not chown a row to its editor.
+	if stored := metaOf(existing).Owner; m.Owner == (meta.Owner{}) || (m.Owner.Kind == stored.Kind && (m.Owner.ID == "" || m.Owner.ID == stored.ID)) {
+		m.Owner = stored
+	} else {
+		if err := stampOwnerID(ctx, &m.Owner); err != nil {
+			return huma.Error400BadRequest(err.Error())
+		}
+		if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
+			return err
+		}
+		if err := refuseOrganizationOwner(ctx, checks.authz, singular, m.Owner); err != nil {
+			return err
+		}
+	}
+	m.CatalogDetachedAt = metaOf(existing).CatalogDetachedAt
+	// The organization's rows are never the catalog's, so one moved there sheds the detach mark.
+	if m.Owner.Kind == meta.OwnerOrganization {
+		m.CatalogDetachedAt = nil
+	}
+	if err := checks.valid(v); err != nil {
+		return err
+	}
+	if err := checks.guarded(ctx, "update", existing, v); err != nil {
+		return err
+	}
+	// A row moved by metadata.owner, or by the spec field its owner mirrors
+	// (re-derived in validate or the guard), lands in a new scope, which
+	// takes the create grant there, as POST of the same body would.
+	if m.Owner != metaOf(existing).Owner {
+		if err := checks.mayCreate(ctx, &m.Owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// updateRow writes v, whose metadata is m, over its stored row through the store's update when it has one, else its upsert.
+func updateRow[T any](ctx context.Context, store entityStore[T], m *meta.Metadata, v *T) error {
+	m.Dirty = true // operator-edited; seed must not clobber it on re-seed
+	update := store.Upsert
+	if w, ok := store.(kindWriter[T]); ok {
+		update = w.Update
+	}
+	return update(ctx, v)
+}
+
+// checkDelete runs the delete checks on existing, the stored row whose metadata is m, as the generic delete route does once it found it, and returns the links the delete takes from rows that stay.
+func checkDelete[T any](ctx context.Context, checks kindChecks[T], refuseInUse inUseFn, m *meta.Metadata, existing *T) (*droppedLinks, error) {
+	if !visibleTo(ctx, checks.authz, checks.singular, m.ID, m.Owner) {
+		return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", checks.singular, m.ID))
+	}
+	if err := checks.mayDelete(ctx, m.ID, m); err != nil {
+		return nil, err
+	}
+	if err := checks.guarded(ctx, "delete", existing, nil); err != nil {
+		return nil, err
+	}
+	if refuseInUse == nil {
+		return nil, nil
+	}
+	return refuseInUse(ctx, checks.singular, m.ID, m.Name)
+}
+
 // registerKind installs the five CRUD operations for kind T on api and returns how they find a row. The metaOf, validate, defaultOwnerKind, and resolveSlug closures supply the kind-specific glue.
 //
 // defaultOwnerKind is stamped on Create when the caller omits
@@ -357,51 +504,11 @@ func registerKind[T any](
 				}
 				m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
 			}
-			// system is reserved for seed paths; where it names the global scope
-			// it is read as the organization.
-			readSystemAsGlobal(singular, &m.Owner, meta.Owner{})
-			if m.Owner.Kind == meta.OwnerSystem {
-				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
-			}
-			if m.Owner.Kind == "" && defaultOwnerKind != "" {
-				m.Owner.Kind = defaultOwnerKind
-			}
-			if err := refuseTenantOwner(singular, m.Owner); err != nil {
-				return nil, err
-			}
-			if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
-				return nil, err
-			}
-			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
-				return nil, err
-			}
-			if err := stampOwnerID(ctx, &m.Owner); err != nil {
-				return nil, huma.Error400BadRequest(err.Error())
-			}
-			// The guard runs first: on kinds whose owner mirrors a spec field
-			// (Project, ServiceAccount) it is what re-derives or completes
-			// the owner, and the owner is what the decision below turns on.
-			if err := checks.guarded(ctx, "create", nil, v); err != nil {
-				return nil, err
-			}
-			// Authorize AFTER owner stamping so an owner-aware Authorizer can
-			// decide on the row's final provenance (user-owned rows are open to
-			// any authenticated caller; anything else needs a binding).
-			if err := checks.mayCreate(ctx, &m.Owner); err != nil {
-				return nil, err
-			}
-			// Validate AFTER stamping id+slug so the entity's Validate() sees
-			// the same shape the store will persist. Rejecting here keeps bad
-			// rows out of PG (which would otherwise break Bootstrap).
-			if err := checks.valid(v); err != nil {
+			if err := checkCreate(ctx, checks, defaultOwnerKind, m, v); err != nil {
 				return nil, err
 			}
 			audit.Changed(ctx, []string{audit.AnyField})
-			create := store.Upsert
-			if w, ok := store.(kindWriter[T]); ok {
-				create = w.Create
-			}
-			if err := create(ctx, v); err != nil {
+			if err := insertRow(ctx, store, v); err != nil {
 				return nil, mapWriteErr(singular, m.ID, err)
 			}
 			created, err := store.Get(ctx, m.ID)
@@ -431,69 +538,12 @@ func registerKind[T any](
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
-		}
-		// Authorize with the fetched row's owner so an owner-aware Authorizer
-		// can enforce owner.id == caller for user-owned rows.
-		if err := checks.mayUpdate(ctx, in.ID, metaOf(existing)); err != nil {
-			return nil, err
-		}
 		v := &in.Body
-		m := metaOf(v)
-		m.ID = in.ID // path id wins over body id
-		// Early answer for a stale body; the store re-checks atomically.
-		if m.ResourceVersion != "" && m.ResourceVersion != metaOf(existing).ResourceVersion {
-			return nil, staleVersionError(singular, in.ID)
-		}
-		if err := refuseTenantOwner(singular, m.Owner); err != nil {
+		if err := checkUpdate(ctx, checks, metaOf, mergeUpdate, in.ID, existing, v); err != nil {
 			return nil, err
-		}
-		if mergeUpdate != nil {
-			mergeUpdate(existing, v)
-		}
-		readSystemAsGlobal(singular, &m.Owner, metaOf(existing).Owner)
-		// An omitted owner, or the stored kind without an id, keeps the stored
-		// owner: a body echoing {kind: user} must not chown a row to its editor.
-		if stored := metaOf(existing).Owner; m.Owner == (meta.Owner{}) || (m.Owner.Kind == stored.Kind && (m.Owner.ID == "" || m.Owner.ID == stored.ID)) {
-			m.Owner = stored
-		} else {
-			if err := stampOwnerID(ctx, &m.Owner); err != nil {
-				return nil, huma.Error400BadRequest(err.Error())
-			}
-			if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
-				return nil, err
-			}
-			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
-				return nil, err
-			}
-		}
-		m.CatalogDetachedAt = metaOf(existing).CatalogDetachedAt
-		// The organization's rows are never the catalog's, so one moved there sheds the detach mark.
-		if m.Owner.Kind == meta.OwnerOrganization {
-			m.CatalogDetachedAt = nil
-		}
-		if err := checks.valid(v); err != nil {
-			return nil, err
-		}
-		if err := checks.guarded(ctx, "update", existing, v); err != nil {
-			return nil, err
-		}
-		// A row moved by metadata.owner, or by the spec field its owner mirrors
-		// (re-derived in validate or the guard), lands in a new scope, which
-		// takes the create grant there, as POST of the same body would.
-		if m.Owner != metaOf(existing).Owner {
-			if err := checks.mayCreate(ctx, &m.Owner); err != nil {
-				return nil, err
-			}
 		}
 		audit.Changed(ctx, audit.DiffFields(existing, v))
-		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
-		update := store.Upsert
-		if w, ok := store.(kindWriter[T]); ok {
-			update = w.Update
-		}
-		if err := update(ctx, v); err != nil {
+		if err := updateRow(ctx, store, metaOf(v), v); err != nil {
 			return nil, mapWriteErr(singular, in.ID, err)
 		}
 		updated, err := store.Get(ctx, in.ID)
@@ -531,20 +581,9 @@ func registerKind[T any](
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
-		}
-		if err := checks.mayDelete(ctx, in.ID, metaOf(existing)); err != nil {
+		dropped, err := checkDelete(ctx, checks, refuseInUse, metaOf(existing), existing)
+		if err != nil {
 			return nil, err
-		}
-		if err := checks.guarded(ctx, "delete", existing, nil); err != nil {
-			return nil, err
-		}
-		var dropped *droppedLinks
-		if refuseInUse != nil {
-			if dropped, err = refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); err != nil {
-				return nil, err
-			}
 		}
 		audit.Changed(ctx, []string{audit.AnyField})
 		if err := store.Delete(ctx, in.ID); err != nil {

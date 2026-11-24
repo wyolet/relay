@@ -21,8 +21,9 @@ import (
 )
 
 type createKeyMetadata struct {
-	Name        string `json:"name,omitempty"        doc:"Slug for the key; derived from displayName when omitted."`
-	DisplayName string `json:"displayName,omitempty" doc:"Free-text name shown in the UI."`
+	Name        string            `json:"name,omitempty"        doc:"Slug for the key; derived from displayName when omitted."`
+	DisplayName string            `json:"displayName,omitempty" doc:"Free-text name shown in the UI."`
+	Labels      map[string]string `json:"labels,omitempty"      doc:"Key/value selectors; GET /keys filters on them with ?label=key=value."`
 }
 
 type createKeySpec struct {
@@ -67,14 +68,10 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{400, 401, 403, 404, 500},
 	}, func(ctx context.Context, in *createKeyInput) (*createKeyResponse, error) {
-		gen, err := apikey.Generate(key.TokenPrefix)
-		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
-		}
-
 		k := &key.Key{}
 		k.Meta.ID = ids.New()
 		k.Meta.DisplayName = in.Body.Metadata.DisplayName
+		k.Meta.Labels = in.Body.Metadata.Labels
 		k.Meta.Name = in.Body.Metadata.Name
 		if k.Meta.Name == "" {
 			base := slug.From(k.Meta.DisplayName)
@@ -91,29 +88,9 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: a.UserID}
 		}
-		if err := refs(d).KeyOwner(ctx, k); err != nil {
-			return nil, refErr(err)
-		}
-		// Authorize AFTER owner stamping, same as the generic create path.
-		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
-		k.Spec.AccountID = in.Body.Spec.AccountID
-		if err := refs(d).KeyAccount(ctx, k); err != nil {
-			return nil, refErr(err)
-		}
-		k.Spec.ExpiresAt = in.Body.Spec.ExpiresAt
-		k.Spec.Enabled = in.Body.Spec.Enabled
-		k.Spec.PassthroughAllowed = in.Body.Spec.PassthroughAllowed
-		k.Spec.PayloadLoggingEnabled = in.Body.Spec.PayloadLoggingEnabled
-		k.Spec.KeyHash = gen.Hash
-		k.Spec.Prefix = gen.Prefix
-
-		if err := k.Validate(); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-		if err := d.Stores.Key.Upsert(ctx, k); err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+		plaintext, err := d.createKey(ctx, k, in.Body.Spec)
+		if err != nil {
+			return nil, err
 		}
 		created, err := d.Stores.Key.Get(ctx, k.Meta.ID)
 		if err != nil {
@@ -125,9 +102,42 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 
 		out := &createKeyResponse{}
-		out.Body.Plaintext = gen.Plaintext
+		out.Body.Plaintext = plaintext
 		enrichKey(d)(ctx, created)
 		out.Body.Key = created
 		return out, nil
 	})
+}
+
+// createKey generates k's bearer token, runs the checks POST /keys runs on k and writes it, returning the plaintext. k carries its id, name and principal; s its account and flags.
+func (d Deps) createKey(ctx context.Context, k *key.Key, s createKeySpec) (string, error) {
+	gen, err := apikey.Generate(key.TokenPrefix)
+	if err != nil {
+		return "", huma.Error500InternalServerError(err.Error())
+	}
+	if err := refs(d).KeyOwner(ctx, k); err != nil {
+		return "", refErr(err)
+	}
+	// Authorize AFTER owner stamping, same as the generic create path.
+	if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
+		return "", mapAuthzErr(err)
+	}
+	k.Spec.AccountID = s.AccountID
+	if err := refs(d).KeyAccount(ctx, k); err != nil {
+		return "", refErr(err)
+	}
+	k.Spec.ExpiresAt = s.ExpiresAt
+	k.Spec.Enabled = s.Enabled
+	k.Spec.PassthroughAllowed = s.PassthroughAllowed
+	k.Spec.PayloadLoggingEnabled = s.PayloadLoggingEnabled
+	k.Spec.KeyHash = gen.Hash
+	k.Spec.Prefix = gen.Prefix
+
+	if err := k.Validate(); err != nil {
+		return "", huma.Error400BadRequest(err.Error())
+	}
+	if err := d.Stores.Key.Upsert(ctx, k); err != nil {
+		return "", huma.Error500InternalServerError(err.Error())
+	}
+	return gen.Plaintext, nil
 }

@@ -9,6 +9,8 @@ package serviceaccount
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/wyolet/relay/pkg/meta"
 )
@@ -65,6 +67,21 @@ func (s *ServiceAccount) StampOwner() {
 	}
 }
 
+// OwnerKinds are the kinds of scope a service account may be owned by; Validate refuses any other, and request shapes that name an owner document these.
+var OwnerKinds = []meta.OwnerKind{meta.OwnerProject, meta.OwnerTeam, meta.OwnerUser}
+
+// ownerKindsText lists OwnerKinds as prose: "project, team or user".
+func ownerKindsText() string {
+	names := make([]string, len(OwnerKinds))
+	for i, k := range OwnerKinds {
+		names[i] = string(k)
+	}
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+}
+
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
 //   - Owner.Kind is project, team or user.
 //   - A project owner's id, when set, equals Spec.ProjectID when that is set, and one of them is set.
@@ -76,6 +93,13 @@ func (s *ServiceAccount) Validate() error {
 		return err
 	}
 	o := s.Meta.Owner
+	if !slices.Contains(OwnerKinds, o.Kind) {
+		if o.Kind == meta.OwnerOrganization {
+			// The admin token's create reads an id-less user owner as the organization's, which owns no service account.
+			return fmt.Errorf("serviceaccount %q: owner.kind must be %s, got %q; the admin token is no user, so a user owner needs metadata.owner.id", s.Meta.Name, ownerKindsText(), o.Kind)
+		}
+		return fmt.Errorf("serviceaccount %q: owner.kind must be %s, got %q", s.Meta.Name, ownerKindsText(), o.Kind)
+	}
 	switch o.Kind {
 	case meta.OwnerProject:
 		if o.ID != "" && s.Spec.ProjectID != "" && o.ID != s.Spec.ProjectID {
@@ -91,11 +115,6 @@ func (s *ServiceAccount) Validate() error {
 		if s.Spec.ProjectID != "" {
 			return fmt.Errorf("serviceaccount %q: owner is %s %q but spec.projectId names project %q; a service account has one owner", s.Meta.Name, o.Kind, o.ID, s.Spec.ProjectID)
 		}
-	case meta.OwnerOrganization:
-		// The admin token's create reads an id-less user owner as the organization's, which owns no service account.
-		return fmt.Errorf("serviceaccount %q: owner.kind must be project, team or user, got %q; the admin token is no user, so a user owner needs metadata.owner.id", s.Meta.Name, o.Kind)
-	default:
-		return fmt.Errorf("serviceaccount %q: owner.kind must be project, team or user, got %q", s.Meta.Name, o.Kind)
 	}
 	return nil
 }

@@ -276,7 +276,7 @@ func Personal(userID, username string) *Account {
 	return managed(personalPrefix+username, username, meta.Owner{Kind: meta.OwnerUser, ID: userID}, &Holder{Kind: HolderUser, ID: userID})
 }
 
-// ForServiceAccount is the service account's account, owned by the service account's owner.
+// ForServiceAccount is the service account's account, owned by the service account's owner; Validate refuses an owner a service account's account cannot have.
 func ForServiceAccount(saID, saName, display string, owner meta.Owner) *Account {
 	return managed(servicePrefix+saName, orName(display, saName), owner, &Holder{Kind: HolderServiceAccount, ID: saID})
 }

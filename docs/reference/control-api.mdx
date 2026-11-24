@@ -146,7 +146,7 @@ curl -X POST http://localhost:8081/api/keys \
 }
 ```
 
-`spec.principal` left out makes the key the signed-in user's; the admin token must name one, or the create answers `400`. Optional fields: `accountId`, `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. `accountId` is the key's default [lane](/concepts/accounts#a-keys-default-lane): left out, the service account's account or the user's personal account; an account the principal may not run keys in answers `403 account_not_held`, and a closed one `400`. A key holds no policy: bind one to its account instead. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal; it may move the key to another account under the same rules.
+`spec.principal` left out makes the key the signed-in user's; the admin token must name one, or the create answers `400`. Optional fields: `metadata.labels`, `accountId`, `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. `accountId` is the key's default [lane](/concepts/accounts#a-keys-default-lane): left out, the service account's account or the user's personal account; an account the principal may not run keys in answers `403 account_not_held`, and a closed one `400`. A key holds no policy: bind one to its account instead. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal; it may move the key to another account under the same rules.
 
 Create and rotate answer once the pod that handled them authenticates the new value, waiting up to 5 seconds, so the plaintext can be used at once. `GET /api/keys?account_id=<id>` lists the keys whose default lane is an account. Reads carry `status.lastUsedAt`, when the key last served a request, to the minute; see [When a key was last used](/concepts/auth#when-a-key-was-last-used).
 
@@ -219,6 +219,255 @@ A pool's keys and accounts must be at the pool's host, and an account named by a
 `POST /api/accounts` creates provider accounts only (`spec.hostId` is required). Team, project, personal, member and service accounts are made by Relay; a PUT may change their name, display name and `payloadLogging`, and keeps their owner, holder and kind. Every account carries a read-only `spec.kind`, and `spec.holder` and `spec.closed` where they apply. `spec.holder.name`, and a key's `spec.principal.name`, is the user's username or the service account's display name, filled on reads of a row you can see whether or not you may list users; it is ignored on writes. The list filters by `kind`, `owner_id`, `holder_id` and `closed`. See [Accounts and lanes](/concepts/accounts).
 
 Deleting an account that host keys, relay keys or a policy binding still name, or a host that still has accounts or pools, answers `409`, and so does deleting a team or project that still owns a provider account. Deleting a team, project, personal, service or open member account on its own answers `409` with the code `account_managed`: it goes with the row it stands for. Deleting a team or project that still has rows under it or owned by it answers `409` and lists them as `blockers`.
+
+### Service accounts in one request
+
+```
+POST /api/pseudo-agents              a service account, its account, what it may use and its first key, in one transaction
+POST /api/pseudo-agents?dryRun=true  the same checks, nothing written; answers 200 with what would be made
+```
+
+The route is served only when `RELAY_PSEUDO_KINDS` lists `agents` or is `all`; otherwise the path answers `404` and is absent from the OpenAPI document. `GET /config.json` lists the served kinds in `pseudoKinds`, so a client can fall back to the separate calls below.
+
+```json
+{
+  "metadata": { "displayName": "CI bot", "labels": { "sa-type": "agent" }, "owner": { "kind": "project", "id": "<project-id>" } },
+  "spec": {
+    "access": { "accountIds": ["<team-account-id>", "<your-personal-account-id>"], "models": ["openai/gpt-5.5"] },
+    "key": { "displayName": "CI bot key", "expiresAt": null }
+  }
+}
+```
+
+`metadata` is the service account's. `metadata.owner` is required, with no default: the project the service account belongs to (the kinds a service account may be owned by). `name` is derived from `displayName` when left out. `spec` takes exactly one of `policyId`, an existing policy to bind the service account's account to, and `access`:
+
+| `access` | What is made after the service account and its account |
+| --- | --- |
+| `everyCredential: true`, no `models` | Nothing: the account's default reach is the access. |
+| `everyCredential: true` with `models` | A policy of those models linking no pool, and its binding to the account. |
+| `poolIds`, `accountIds` (one of them required unless `everyCredential`) | For each provider account in `accountIds` the owner does not reach and holds no share of (your personal account, an account of another team), a share with the owner; then one pool per host listing that host's accounts or shares in the order given, a policy of the pools and `models`, and its binding. A share the owner already holds may be listed as it is. `poolIds` names existing pools a policy of the owner may link. |
+
+The policy links the `poolIds` first, in the order given, then the pools made, in the order each host first appears in `accountIds`. A host that takes no key (`spec.noAuth`) is reached through its pool alone: an account there in `accountIds` answers `400`; name that host's pool in `poolIds`. The pools and the policy made are owned by the service account's owner and carry the label `agent-id=<service account id>`. The binding holds the account alone, as `PUT /api/accounts/{ref}/policy` makes it. `spec.key` makes a key of the service account in its account; left out, none is made.
+
+```json
+{
+  "created": [
+    { "kind": "service-account", "id": "…", "name": "ci-bot" },
+    { "kind": "account", "id": "…", "name": "sa-ci-bot" },
+    { "kind": "account", "id": "…", "name": "alice-openai-for-web" },
+    { "kind": "pool", "id": "…", "name": "ci-bot-at-openai" },
+    { "kind": "policy", "id": "…", "name": "ci-bot" },
+    { "kind": "policy-binding", "id": "…", "name": "ci-bot-sa-ci-bot" },
+    { "kind": "key", "id": "…", "name": "ci-bot-key" }
+  ],
+  "serviceAccount": { "id": "…", "name": "ci-bot" },
+  "account": { "id": "…", "name": "sa-ci-bot" },
+  "policy": { "id": "…", "name": "ci-bot" },
+  "pools": [{ "id": "…", "name": "ci-bot-at-openai" }],
+  "shares": [{ "id": "…", "name": "alice-openai-for-web" }],
+  "key": { "id": "…", "name": "ci-bot-key", "plaintext": "sk-wr-…" },
+  "warnings": []
+}
+```
+
+`created` lists the rows in write order. `warnings` lists the plan warnings the rows would raise that are not there now, on the rows the request makes (as the row carrying the warning or the row it names), in the shape of the `issues` of a `422` below; for example `model_ref_blocked` on the policy for a model a policy above it excludes. Warnings refuse nothing; the list is `[]` when there are none. A dry run answers `200` with the same body, ids and warnings included (ids are minted before the write) and `plaintext` left out. Each row passes what its own create call passes, with the same answers: the grant for its kind and owner, the row's rules and cross-row checks, and name minting with a `-2` suffix while a name is taken. Each row made is audited as its own create. A repeated request makes a second set.
+
+Nothing is written on any refusal. A refusal of one row carries `pointer`, the JSON pointer of the part of the body it came from:
+
+```json
+{ "error": { "type": "invalid_request_error", "message": "authz: forbidden: only an admin of team \"Platform\" shares account \"platform-openai\" of team \"Platform\"; ask one to share it" }, "pointer": "/spec/access/accountIds/1" }
+```
+
+Once every row passes, the rows are checked against the plans as a whole, in memory. Errors they would raise that the plans do not have now refuse the request with `422` `plan_issue`; `issues` lists each one with the pointer of the row it is on, or without one for a row that exists already:
+
+```json
+{
+  "error": { "type": "invalid_request_error", "code": "plan_issue", "message": "the rows pass one by one but together would raise errors in the plans (1, listed in issues); nothing was written" },
+  "issues": [{ "code": "pools_serve_nothing", "message": "none of its pools (ci-bot-at-openai) has a usable key at an enabled host; requests under this policy cannot be served", "kind": "policy", "id": "…", "name": "ci-bot", "field": "spec.poolIds", "pointer": "/spec/access" }]
+}
+```
+
+| Answer | When |
+| --- | --- |
+| `400` | The body names both or neither of `policyId` and `access`, lists an account or pool twice, lists an account at a host that takes no key, names a pool the owner may not link, or a row breaks a rule of its own create call. |
+| `403`, `404` | A row's own grant, or an account or policy you may not see, as its own call answers. |
+| `409` `conflict` | Another change touched the same rows at the same time, or took a name the rows need; retry. Also `share_exists`, `already_reachable`, `duplicate_binding` and `managed_by_source` from a row's own call. |
+| `422` `plan_issue` | The rows would raise plan errors together; see above. |
+| `503` | The plans are not loaded yet, or the check took longer than `RELAY_PLAN_CHECK_TIMEOUT_MS`, waiting for another one included. |
+
+### Access and limits in one request
+
+```
+POST /api/pseudo-access               what a team, project or service account may use, stated whole
+POST /api/pseudo-limits               a budget or rate limit on a team, project or service account
+POST /api/pseudo-access?dryRun=true   the same checks, nothing written; without spec.access, the case and the current policy only
+POST /api/pseudo-limits?dryRun=true   the same; without spec.budget and spec.rateLimit, the case and the current policy only
+```
+
+The routes are served only when `RELAY_PSEUDO_KINDS` lists `access` or `limits`, or is `all`. Both change the policy over the target's account: a team's or project's own account, or a service account's account (made first when Relay has not made it yet). `spec.target` is `{"kind": "team|project|service-account", "id": "<id>"}`; a slug answers `400`. What happens to the policy is answered in `case`:
+
+| `case` | When | What is written |
+| --- | --- | --- |
+| `none` | The account is in no binding. | A policy owned by the target's scope, bound to the account alone. |
+| `own` | The account is bound alone to a policy of the target's scope that you may update. | That policy, changed in place. |
+| `copy` | The policy is bound to other accounts too, is a preset, or is owned elsewhere. | A copy owned by the target's scope, with its models, links, description and labels, changed; the account taken out of its binding and bound to the copy alone, as `PUT /api/accounts/{ref}/policy` does. The original and the other accounts stay as they were. |
+
+A binding or policy holding the account that you may not see or change answers `403` `policy_set_above`, naming the scope that holds it (by name only when you may see that scope) and nothing of the binding or policy. A copy that would carry a pool, rate limit or budget the target's scope may not link answers `400` `links_not_carried` with how many of each kind, unless the request drops them.
+
+```json
+{ "spec": { "target": { "kind": "project", "id": "<project-id>" },
+            "access": { "accountIds": ["<team-account-id>"], "poolIds": [], "models": ["openai"] } } }
+```
+
+`access` takes `everyCredential`, `poolIds`, `accountIds` and `models` with the rules of `POST /api/pseudo-agents`, and states the whole access: the policy's pools become `poolIds`, then one pool per host of `accountIds`; its models become `models`; its rate limits and budgets stay. Pools it makes are owned by the target's scope and labelled `access-for=<account id>`. A label is a claim anyone who makes a pool can write, so a labelled pool counts as this route's only while the target's scope owns it, you may see it and no policy but the one the account is under links it; any other labelled pool is treated as any pool. On a later request, such a pool of a host is updated in place while only the policy changed in place links it, and one the policy no longer links is deleted when you may delete it, else only unlinked. Other pools are only linked or unlinked, and `current.pools[].labelled` is true only for this route's own. A pool link you may not see is kept where it is in the policy's order, in place and in a copy, as an update of the policy keeps the links it holds; the answer counts those in `hiddenPoolsKept` and names none. `everyCredential: true` links no pools of its own; in case `none` without `models` nothing is written and the answer carries `unchanged: true`. On a policy that links pools you may not see, which it keeps, `everyCredential` would leave the account reaching only those, so it answers `409` `hidden_pools_kept` with their count; the prefill's `current.hiddenPools` tells a form beforehand.
+
+```json
+{
+  "case": "own",
+  "policy": { "id": "…", "name": "two-app" },
+  "pools": [{ "id": "…", "name": "two-app-at-openai" }],
+  "shares": [],
+  "created": [{ "kind": "pool", "id": "…", "name": "two-app-at-openai" }],
+  "updated": [{ "kind": "policy", "id": "…", "name": "two-app" }],
+  "deleted": [{ "kind": "pool", "id": "…", "name": "two-app-at-anthropic" }],
+  "warnings": []
+}
+```
+
+Lists with nothing in them are left out of the answer, except `warnings`, which both kinds answer as `POST /api/pseudo-agents` does, `[]` included and on the dry run without a change too. Binding the account to a new policy or a copy is the write `PUT /api/accounts/{ref}/policy` makes: the binding made is listed in `created`, and the one the account left in `updated`, or in `deleted` when it held no other account.
+
+`POST /api/pseudo-limits` takes `metadata` (`name`, `displayName`, `description`, `labels`) and exactly one of `spec.budget` and `spec.rateLimit`, each the spec `POST /api/budgets` or `POST /api/rate-limits` takes. The row is owned by the target's scope and linked from the policy beside what it links already. The answer carries `case`, `policy`, `budget` or `rateLimit`, the three row lists, and for a budget `unpricedModels`: the models the target uses now that have no pricing and would answer `unpriced_under_budget` once the budget applies. It is a warning; the request goes through. `unpricedModels` is the list for the target; a `warnings` entry with the same code is the plan's own warning on the policy, counting the bindings that policy allows without pricing wherever they are, so its count can be larger.
+
+`spec.link` sets the fields of the policy's new `budgets` or `rateLimits` entry. `shared` is the entry's `shared`: `true` or omitted counts the limit once for everyone under the target, `false` once for each account under it, each lane with a counter of its own. `models`, with a rate limit only, is the entry's `models`: the limit applies to those models, in the policy model grammar, checked as `PUT /api/policies/by-id/{id}` checks a rate-limit entry's models and stored in canonical form; empty or omitted applies it to every model. A budget entry has no model scope, so `models` with a budget answers `400`, as does a model the policy update would refuse, both with `pointer` `/spec/link/models`. Without `spec.link` the entry is linked as before: shared, over every model. `budget` or `rateLimit` in the answer carries the entry as stored:
+
+```json
+{ "rateLimit": { "id": "…", "name": "ci-rpm", "link": { "shared": false, "models": ["openai/gpt-5"] } } }
+```
+
+The dry run without a change answers the case and what you may see of the current policy, so a form opens filled; it is absent in case `none`. `bindingEnabled` is false when the binding holding the account is disabled: a disabled binding binds nothing, so that policy does not govern the account now, and a change through the form binds the account in an enabled binding:
+
+```json
+{ "case": "copy", "current": { "policy": { "id": "…", "name": "gold" }, "models": [], "linksNoPools": false, "hiddenPools": 1, "bindingEnabled": true,
+  "pools": [{ "id": "…", "name": "gold-openai", "host": { "id": "…", "name": "openai" }, "accounts": [{ "id": "…", "name": "team-openai" }], "hiddenAccounts": 0, "labelled": false }] } }
+```
+
+Each row passes what its own create, update or delete call passes, with the same answers and pointers, and is audited as that call; then the result is checked against the plans as for `POST /api/pseudo-agents`, and against what every other account reaches: Relay compares what each account reaches with and without the request's rows, whichever row changes it, and a request that would give any account other than the target, and those under a team or project target, more or less (a model, a host, or a pool or account a model comes through) answers `422` `other_accounts_changed`, counting them and naming none, accounts you may not see included. A share made for the target reaches no other account: an account reaches by ownership only the host keys its scopes own, and a share's keys stay its real account's. A request that would leave the target's account refusing every request answers `422` `plan_issue`.
+
+A change on a team or project applies to everything under it: the lanes of its projects, service accounts and members climb its policy. That is never a refusal; `under`, answered on the dry run and the save for a team or project target, is how to see the effect before saving: `lanes` counts the lanes under the target. Each lane is compared by the models it can be served and the hosts that serve them; another pool or account serving the same model at the same host is no change. `narrowed` counts the lanes that lose at least one model at a host and gain none, `widened` those that gain and lose none, `changed` those that do both. `unreachable` lists, up to 20 with `unreachableMore` counting the rest, the lanes served at some model and host before and at none after, each by who holds it: `{"kind": "service-account", "id", "name"}` with the service account's display name, `{"kind": "user", …}` with the username for a member's lane, or the project or team for its own account. `unreachableHidden` counts those whose holder you may not see. Nothing is compared, and `under` is absent, when the request writes nothing:
+
+```json
+{ "under": { "lanes": 3, "narrowed": 1, "widened": 0, "changed": 0,
+             "unreachable": [{ "kind": "service-account", "id": "…", "name": "CI bot" }] } }
+```
+
+A concurrent change to a row the request read answers `409` `conflict`. Nothing is written on any refusal.
+
+### Provider keys in one request
+
+```
+POST /api/pseudo-host-keys              a provider key, its account, the account's tier and its shares, in one transaction
+POST /api/pseudo-host-keys?dryRun=true  the same checks and the same one read of the host; nothing written, the value not stored
+```
+
+The route is served only when `RELAY_PSEUDO_KINDS` lists `host-keys` or is `all`, as for `pseudo-agents` above.
+
+```json
+{
+  "metadata": { "displayName": "Work key", "owner": { "kind": "user", "id": "<user-id>" } },
+  "spec": {
+    "hostId": "<host-id>",
+    "value": "<the provider key>",
+    "account": { "displayName": "Work" },
+    "tierPolicyId": "<one of the host's tier presets>",
+    "shareWith": [{ "kind": "team", "id": "<team-id>" }]
+  }
+}
+```
+
+`metadata` is the host key's, as `POST /api/host-keys` takes it; its owner owns the account too, and an omitted user id is yours. `spec` takes exactly one of `accountId`, an existing provider account of the owner at the host, and `account`, a new one. It takes exactly one of `value` and `valueFrom` (a host key's own `valueFrom`, such as `{"kind": "env", "env": "VAR"}`), or neither for a host that takes no key (`spec.noAuth`), which then gets no host key. `pricingStrategy` is the host key's. Every reference is an id; a slug answers `400` with its pointer.
+
+First Relay asks the create grants the host key and a new account will need under the owner, with the owner rules of `POST /api/host-keys`, then runs the whole write as a dry run without the value: every row's checks, the account, tier and receivers named, and the plan check. Any refusal there answers as it would later, and the host is asked nothing and nothing is stored. On a dry run that pass is the answer; a request with no `value` sends and stores nothing, so it makes no such pass. Then, before anything is written, Relay asks the host which organization `value` belongs to, with the read `POST /api/host-keys/by-id/{id}/detect-account` makes, sent only to the host's own base URL. A `401` or `403` to the key refuses the request with `422` `provider_refused_key`. A host that names no organization, or does not answer, refuses nothing; `detection` says which. A detected organization becomes the new account's `orgId`; one that another account of the owner at the host holds refuses the request, before anything is stored, with `409` `organization_taken`, naming that account in `account`, and an `accountId` holding another organization answers `409` `organization_mismatch`. `valueFrom` is not checked.
+
+Then, in one transaction: the account (when new), its binding to `tierPolicyId` (an existing account is moved to it as `PUT /api/accounts/{ref}/policy` moves it), the host key, and a share of the account with each `shareWith` receiver. A receiver that already holds a share of the account, or reaches it by ownership, gets none and is answered with `existing: true`. `value` is sealed under the owner's scope before the transaction opens, since the secret store writes on a connection of its own, and is removed when the transaction does not commit, a failure inside it included; if that removal fails, the answer is `500` and says what is left behind. A process that stops between sealing the value and the commit cannot remove it: the sealed value stays under the owner's scope with no host key naming it, unread, and names no secret in any answer or log.
+
+```json
+{
+  "created": [
+    { "kind": "account", "id": "…", "name": "work" },
+    { "kind": "policy-binding", "id": "…", "name": "tier-1-work" },
+    { "kind": "host-key", "id": "…", "name": "work-key" },
+    { "kind": "account", "id": "…", "name": "work-for-platform" }
+  ],
+  "account": { "id": "…", "name": "work" },
+  "hostKey": { "id": "…", "name": "work-key" },
+  "shares": [{ "receiver": { "kind": "team", "id": "…" }, "id": "…", "name": "work-for-platform" }],
+  "detection": "detected",
+  "detected": { "orgId": "org-…", "orgName": "…" },
+  "warnings": []
+}
+```
+
+`warnings` is as for `pseudo-agents`. Each row passes what its own call passes (`POST /api/accounts`, `PUT /api/accounts/{ref}/policy`, `POST /api/host-keys`, `POST /api/accounts/{ref}/shares`), is audited as it, and the rows are checked against the plans together, as for `pseudo-agents`. A dry run that asked the host is audited as one `pseudo-host-keys.dry-run` row on the host, with the request's outcome, since it reached outside Relay; a dry run refused before that is not audited. The value appears in no answer, log line or audit row.
+
+| Answer | When |
+| --- | --- |
+| `400` | A reference is not an id; the body names both or neither of `accountId` and `account`, or both `value` and `valueFrom`; a value for a host that takes no key, or none for one that takes keys; `tierPolicyId` is not one of the host's tier presets; `accountId` is not a provider account of the owner at the host; or a row breaks a rule of its own call. |
+| `403`, `404` | A row's own grant, or a host, account, policy or receiver you may not see. |
+| `409` | `organization_taken`, `organization_mismatch`; `conflict` as above; `share_exists`, `reshare_refused`, `duplicate_binding` from a row's own call. |
+| `422` | `provider_refused_key`, with `pointer` `/spec/value`; `plan_issue` as above. |
+| `503` | As above. |
+
+### Removing an agent in one request
+
+```
+POST /api/pseudo-agent-removals              a service account and what was made for it, deleted in one transaction
+POST /api/pseudo-agent-removals?dryRun=true  the same checks, nothing deleted; answers what would be deleted and kept
+```
+
+The route is served only when `RELAY_PSEUDO_KINDS` lists `agent-removals` or is `all`, as for `pseudo-agents` above.
+
+```json
+{ "spec": { "serviceAccountId": "<service-account-id>", "keep": ["<pool-id>"], "expect": ["<id>", "…"] } }
+```
+
+Relay decides what goes, in an order each delete's own call accepts: the service account's keys; its account out of the policy binding holding it, as `PUT /api/accounts/{ref}/policy` with `"policyId": null` takes it out (the binding is deleted when it held only that account, else shrinks); each share the service account holds, revoked as `DELETE /api/accounts/by-id/{id}` revokes it; the service account, which takes its account with it; then each policy, then each pool, labelled `agent-id=<service account id>`, when the service account's scope owns it, you may see and delete it, `keep` does not name it, and no binding or policy left after the earlier deletes uses it, including ones you may not see.
+
+A label is a claim anyone who can make a pool or policy can write, so a labelled row that does not go stays and is listed in `kept` with a `reason`:
+
+| `reason` | When |
+| --- | --- |
+| `in_use` | A binding or policy the request does not delete uses it, whether you may see it or not. |
+| `kept_by_request` | `keep` names it. |
+| `not_deletable` | It is owned outside the service account's scope, or its delete's grant or governance refuses you. |
+
+A labelled row of the service account's scope that you may not see stays and is counted in `keptHidden`, not named; one owned outside the scope that you may not see is neither touched nor counted. `keep` names labelled rows you may see; any other id answers `400` with `pointer` `/spec/keep/<i>`.
+
+```json
+{
+  "deleted": [
+    { "kind": "key", "id": "…", "name": "ci-key" },
+    { "kind": "policy-binding", "id": "…", "name": "ci-bot-sa-ci-bot" },
+    { "kind": "service-account", "id": "…", "name": "ci-bot" },
+    { "kind": "account", "id": "…", "name": "sa-ci-bot" },
+    { "kind": "policy", "id": "…", "name": "ci-bot" }
+  ],
+  "kept": [{ "kind": "pool", "id": "…", "name": "ci-bot-at-openai", "reason": "in_use" }],
+  "updated": [],
+  "warnings": []
+}
+```
+
+`deleted` lists every row in delete order, with the bindings a revoke left empty after their share and the service account's account after it; `updated` lists a binding the account left that holds other accounts, and the bindings, keys and pools a revoke changed. A row you may not read through its own read, such as a binding a revoke empties in another scope, is counted in `deletedHidden` or `updatedHidden` instead, as `DELETE /api/accounts/by-id/{id}` counts it. Both answers are `200`. `expect`, when given, is the ids of a dry run's `deleted`: when the set to delete differs at submit, the request answers `409` `changed` with the current `deleted` and `kept` and their hidden counts, and deletes nothing.
+
+Before any list is answered, each delete's visibility, grant and governance are asked, the service account's first, as the transaction will ask them; a refused delete refuses the request with the same answer and `pointer` `/spec/serviceAccountId`, and a row you may not see answers `404` without naming it. Each delete then passes its reference check as its own delete call does; a refused delete refuses the request and nothing is deleted. A `409` `resource_in_use` carries the row's `blockers`, such as a role binding naming the service account. Then the result is checked against the plans as for `pseudo-agents`, so a delete that would leave an error on a row that stays answers `422` `plan_issue`, and against what every other account reaches, as for `pseudo-access`. Each row deleted or changed is audited as its own delete call records it. A deleted key stops authenticating once the pod's plans hear the delete, as after `DELETE /api/keys/by-id/{id}`.
+
+| Answer | When |
+| --- | --- |
+| `400` | `serviceAccountId` or a `keep` entry is not an id, a `keep` entry is listed twice or names no listed labelled row. |
+| `403`, `404` | A delete's own grant, or a service account you may not see. |
+| `409` | `changed`; `resource_in_use` with `blockers`; `managed_by_source`; `conflict` as above. |
+| `422` | `plan_issue` or `other_accounts_changed`, as above. |
+| `503` | As above. |
 
 ### Accounts and limits
 
@@ -319,7 +568,7 @@ GET /api/models/{ref}/pricing        the model's pricing per host
 GET /api/models/{ref}/policies       policies granting the model, with the limits each applies
 GET /api/hosts/{ref}/models          models the host serves, with binding and pricing
 GET /api/hosts/{ref}/keys            the host's keys, without values
-GET /api/hosts/{ref}/policies        the host's tier presets, with limits
+GET /api/hosts/{ref}/policies        the host's tier presets, with display names and limits
 GET /api/policies/{ref}/models       models the policy grants, with the limits it applies
 GET /api/policies/{ref}/hosts        hosts the policy's pools reach, with the keys at each
 GET /api/policies/{ref}/rate-limits  rate limits the policy links

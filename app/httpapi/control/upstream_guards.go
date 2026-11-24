@@ -124,6 +124,15 @@ func guardKeyAccount(d Deps) mutationGuard[key.Key] {
 	}
 }
 
+// poolChecks are the checks the pools routes run; a pool takes its defaults before it is validated.
+func poolChecks(d Deps) kindChecks[pool.Pool] {
+	return kindChecks[pool.Pool]{
+		plural: "pools", singular: "pool", authz: d.Authz, gov: d.Catalog,
+		validate: func(p *pool.Pool) error { p.Default(); return p.Validate() },
+		guard:    guardPool(d),
+	}
+}
+
 // guardPool checks the pool's host and keys, and refuses an owner move away
 // from the policies drawing on it.
 func guardPool(d Deps) mutationGuard[pool.Pool] {
@@ -142,6 +151,15 @@ func guardPool(d Deps) mutationGuard[pool.Pool] {
 		return refuseStrandingMove(ctx, d, "pool", incoming.Meta.ID, incoming.Meta.Name, incoming.Meta.Owner, func(it referenceItem) bool {
 			return it.Kind == "policy" && c.PoolRefs(ctx, []string{incoming.Meta.ID}, it.owner) == nil
 		})
+	}
+}
+
+// budgetChecks are the checks the budgets routes run; a budget takes its defaults before it is validated.
+func budgetChecks(d Deps) kindChecks[budget.Budget] {
+	return kindChecks[budget.Budget]{
+		plural: "budgets", singular: "budget", authz: d.Authz, gov: d.Catalog,
+		validate: func(b *budget.Budget) error { b.Default(); return b.Validate() },
+		guard:    guardBudgetUpdate(d),
 	}
 }
 
