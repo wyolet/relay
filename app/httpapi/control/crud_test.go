@@ -301,7 +301,7 @@ func TestCRUDAccessByMode(t *testing.T) {
 		forbidden  = "forbidden"
 		sysEdit    = "rate-limit is system-owned: only an admin may edit it"
 		sysDelete  = "rate-limit is system-owned: only an admin may delete it"
-		govDelete  = "delete of rate-limit is disabled on this relay; enable it via the governance:rate-limit settings section"
+		govDelete  = "delete of rate-limit is disabled on this relay; the kind has no governance settings section to enable it"
 		byID       = "/rate-limits/by-id/"
 		collection = "/rate-limits"
 	)

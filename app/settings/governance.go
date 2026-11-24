@@ -1,6 +1,9 @@
 package settings
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Governance is the per-resource mutation policy: whether a catalog-managed
 // row of a given kind may be edited or deleted through the generic control
@@ -121,17 +124,20 @@ func Governs(r Reader, op Op, kind, ownerKind string, admin bool) error {
 		return nil
 	}
 
+	section := governanceSection(kind)
 	g := Governance{AllowEdit: true, AllowDelete: false}
-	if v, ok := r.Setting(governanceSection(kind)); ok {
-		if gv, ok := v.(*Governance); ok {
-			g = *gv
-		}
+	v, served := r.Setting(section)
+	if gv, ok := v.(*Governance); ok {
+		g = *gv
 	}
 
 	allowed := (op == OpEdit && g.AllowEdit) || (op == OpDelete && g.AllowDelete)
 	if !allowed {
-		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind,
-			Reason: fmt.Sprintf("%s of %s is disabled on this relay; enable it via the governance:%s settings section", op, kind, kind)}
+		reason := fmt.Sprintf("%s of %s is disabled on this relay; enable it via the %s settings section", op, kind, section)
+		if !served && !slices.Contains(GovernanceSections, section) {
+			reason = fmt.Sprintf("%s of %s is disabled on this relay; the kind has no governance settings section to enable it", op, kind)
+		}
+		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind, Reason: reason}
 	}
 	return nil
 }
