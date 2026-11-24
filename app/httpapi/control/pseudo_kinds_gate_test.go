@@ -11,43 +11,60 @@ import (
 	"github.com/wyolet/relay/app/httpapi/openapitest"
 )
 
-// The access and limits routes, like every pseudo kind, are absent from the document and answer 404 unless RELAY_PSEUDO_KINDS names them.
-func TestPseudoKinds_AccessAndLimitsGated(t *testing.T) {
-	for _, tc := range []struct {
-		kinds  []string
-		served map[string]bool
-	}{
-		{nil, map[string]bool{}},
-		{[]string{"agents"}, map[string]bool{}},
-		{[]string{"access"}, map[string]bool{"/pseudo-access": true}},
-		{[]string{"limits"}, map[string]bool{"/pseudo-limits": true}},
-		{[]string{"all"}, map[string]bool{"/pseudo-access": true, "/pseudo-limits": true}},
-	} {
-		d := mountDeps(t)
-		d.PseudoKinds = tc.kinds
-		r := chi.NewRouter()
-		api := Mount(r, d)
-		doc, err := openapitest.Decode(api.OpenAPI())
-		if err != nil {
-			t.Fatal(err)
-		}
-		paths, _ := doc["paths"].(map[string]any)
-		for _, path := range []string{"/pseudo-access", "/pseudo-limits"} {
-			_, documented := paths[path]
-			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
-			want := http.StatusNotFound
-			if tc.served[path] {
-				want = http.StatusUnauthorized
+// Each pseudo kind is absent from the document and answers 404 unless RELAY_PSEUDO_KINDS names it, alone or as all; a served one is documented without problems and answers its warnings.
+func TestPseudoKinds_EachAloneAllAndNone(t *testing.T) {
+	paths := map[string]string{"agents": "/pseudo-agents", "access": "/pseudo-access", "limits": "/pseudo-limits", "host-keys": "/pseudo-host-keys"}
+	cases := map[string][]string{"none": nil, "all": {"all"}}
+	for kind := range paths {
+		cases[kind+" alone"] = []string{kind}
+	}
+	for name, kinds := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := mountDeps(t)
+			d.PseudoKinds = kinds
+			r := chi.NewRouter()
+			api := Mount(r, d)
+			doc, err := openapitest.Decode(api.OpenAPI())
+			if err != nil {
+				t.Fatal(err)
 			}
-			if documented != tc.served[path] || rec.Code != want {
-				t.Errorf("kinds %v, %s: documented %v, POST %d; want %v, %d", tc.kinds, path, documented, rec.Code, tc.served[path], want)
-			}
-		}
-		if tc.served["/pseudo-access"] {
 			for _, p := range openapitest.Problems(doc) {
 				t.Error(p)
 			}
+			documented, _ := doc["paths"].(map[string]any)
+			for kind, path := range paths {
+				served := name == "all" || name == kind+" alone"
+				_, inDoc := documented[path]
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
+				want := http.StatusNotFound
+				if served {
+					want = http.StatusUnauthorized
+				}
+				if inDoc != served || rec.Code != want {
+					t.Errorf("%s: documented %v, POST %d; want %v, %d", path, inDoc, rec.Code, served, want)
+				}
+				if served && !answersWarnings(t, doc, path) {
+					t.Errorf("%s: the 201 answer declares no warnings", path)
+				}
+			}
+		})
+	}
+}
+
+// answersWarnings reports whether the 201 answer of the POST at path declares a required warnings list.
+func answersWarnings(t *testing.T, doc map[string]any, path string) bool {
+	t.Helper()
+	ref := responseRef(operation(t, doc, path, "post"), "201")
+	schemas, _ := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	s, _ := schemas[strings.TrimPrefix(ref, "#/components/schemas/")].(map[string]any)
+	props, _ := s["properties"].(map[string]any)
+	required, _ := s["required"].([]any)
+	_, has := props["warnings"]
+	for _, r := range required {
+		if r == "warnings" {
+			return has
 		}
 	}
+	return false
 }
