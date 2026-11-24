@@ -32,12 +32,10 @@ type Row struct {
 	Kind string
 	// Pointer is the JSON pointer of the part of the pseudo body the row came from.
 	Pointer string
-	// Meta is the metadata inside Value.
-	Meta *meta.Metadata
+	Meta    *meta.Metadata
 	// Value points at the row, such as a *pool.Pool; the write function writes it as it leaves it.
 	Value any
-	// Op is what the step does to the row.
-	Op Op
+	Op    Op
 }
 
 // BodyError is a pseudo body that expands to no rows; Pointer names the part at fault.
@@ -94,7 +92,7 @@ type Writer struct {
 	Outside []Outside
 }
 
-// Run takes the check slot (plan.Check.Hold) before its outside writes and transaction begin and frees it once the transaction ended and what it did not commit was undone, so one write is open at a time and a writer that waits holds no connection; one that waits past the bound answers plan.ErrCheckTimeout. It makes the outside writes, then expands, writes each step in order, checks the result against the plans and commits; a dry run does all of it but the outside writes and the commit. It returns the steps as written, also on a dry run. A refused step is a *RowError, a body that expands to nothing a *BodyError, steps the plans refuse an *IssuesError; nothing is written on any error, and an *UndoError names what an outside write left behind when it could not be undone. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created and updated and without the rows deleted. A row a step updates or deletes is laid in the baseline as first read, before any step wrote it. Once the check passed, the hook AfterCheck put on ctx is given what it found.
+// Run makes the outside writes, then in one transaction expands, writes each step in order, checks the result against the plans and commits; a dry run does all but the outside writes and the commit. It holds the check slot (plan.Check.Hold) throughout, so one write is open at a time; past the bound it answers plan.ErrCheckTimeout. It returns the steps as written, on a dry run too. Nothing is written on any error: a refused step is a *RowError, a body that expands to nothing a *BodyError, steps the plans refuse an *IssuesError, and an *UndoError names an outside write that could not be undone. The plan check lays the rows passed to Record over the live view, a changed row as first read. Once the check passed, the AfterCheck hook on ctx is given what it found.
 func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, error) {
 	rows, _, err := w.RunWithWarnings(ctx, expand, create, dryRun)
 	return rows, err
@@ -261,7 +259,6 @@ func Changed(rows []Row, op Op) []Row {
 	return out
 }
 
-// ours reports whether id is a row a step creates, updates or deletes.
 func ours(created, changed map[string]bool, id string) bool { return created[id] || changed[id] }
 
 type afterCheckKey struct{}

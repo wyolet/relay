@@ -18,7 +18,6 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// write runs r's step: its kind's create, update or delete.
 func (w *pseudoWrite) write(ctx context.Context, tx *appcatalog.Stores, r pseudo.Row) error {
 	switch r.Op {
 	case pseudo.OpUpdate:
