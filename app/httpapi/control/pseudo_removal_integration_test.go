@@ -386,6 +386,33 @@ func TestPseudoAgentRemoval_Refused(t *testing.T) {
 	}
 }
 
+// A role binding naming the service account blocks its delete: the removal answers 409 resource_in_use with the blockers the ordinary delete answers, grouped by kind and field.
+func TestPseudoAgentRemoval_Blockers(t *testing.T) {
+	w := newAgentRemovalWorld(t)
+	rb := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: ids.New(), Name: "bot-viewer", Owner: w.owner}}
+	roles, err := w.stores.Role.List(t.Context())
+	must(t, "roles", err)
+	for _, r := range roles {
+		if r.Meta.Name == "viewer" {
+			rb.Spec.RoleID = r.Meta.ID
+		}
+	}
+	yes := true
+	rb.Spec.Scope, rb.Spec.Enabled = w.owner, &yes
+	rb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: w.agent.ServiceAccount.ID}}
+	must(t, "role binding", w.stores.RoleBinding.Upsert(t.Context(), rb))
+	w.loadPlans(t)
+	rec, _ := w.remove(t, "bob", map[string]any{}, true)
+	r := refusalOf(t, rec)
+	want := []blockerGroup{{Kind: "role-binding", Field: "spec.subjects", Count: 1, Items: []blockerItem{{ID: rb.Meta.ID, Name: rb.Meta.Name}}}}
+	if rec.Code != http.StatusConflict || r.Err.Code != "resource_in_use" || r.Pointer != "/spec/serviceAccountId" {
+		t.Errorf("%d %s, want 409 resource_in_use", rec.Code, rec.Body)
+	}
+	if diff := cmp.Diff(want, r.Blockers); diff != "" {
+		t.Errorf("blockers (-want +got):\n%s", diff)
+	}
+}
+
 // A service account the caller may not see answers 404 at /spec/serviceAccountId, as a missing one does.
 func TestPseudoAgentRemoval_NotVisible(t *testing.T) {
 	w := newAgentRemovalWorld(t)

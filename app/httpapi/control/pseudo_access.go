@@ -53,7 +53,7 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares:   protect,
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{400, 401, 403, 404, 500},
-		Responses:     pseudoResponses(api, "conflict: another change touched the same rows at the same time, retry; share_exists or already_reachable from a share; duplicate_binding from the binding. pointer names the row."),
+		Responses:     pseudoResponses(api, "conflict: another change touched the same rows at the same time, retry; share_exists or already_reachable from a share; duplicate_binding from the binding; resource_in_use, with blockers, from a step that deletes a row something still references. pointer names the row."),
 	}, func(ctx context.Context, in *pseudoAccessInput) (*pseudoAccessOutput, error) {
 		out := &pseudoAccessOutput{Status: http.StatusOK}
 		if in.Body.Spec.Access == nil && in.DryRun {

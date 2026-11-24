@@ -82,7 +82,7 @@ type pseudoRefusal struct {
 	httpapi.APIError
 	Pointer  string         `json:"pointer,omitempty" doc:"JSON pointer of the part of the body the refused row came from, such as /spec/access/accountIds/1."`
 	Issues   []PseudoIssue  `json:"issues,omitempty"  doc:"With plan_issue: each error the rows would raise in the plans that they do not have now."`
-	Blockers []blockerGroup `json:"blockers,omitempty" doc:"With resource_in_use: the rows that still reference the row a delete step refused on, grouped as its own delete call groups them."`
+	Blockers []blockerGroup `json:"blockers,omitempty" doc:"With resource_in_use: the rows that still reference the row a delete step refused on, grouped by kind and field as its own delete call groups them; rows in scopes the caller may not see are counted, not listed."`
 }
 
 // codePlanIssue refuses rows that pass one by one but would raise a plan error together.

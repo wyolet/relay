@@ -52,6 +52,8 @@ type removalChanged struct {
 	DeletedHidden int          `json:"deletedHidden,omitempty" doc:"As a dry run answers it."`
 	Kept          []PseudoKept `json:"kept"                    doc:"What it would keep now, as a dry run answers it."`
 	KeptHidden    int          `json:"keptHidden,omitempty"    doc:"As a dry run answers it."`
+	// Blockers declares the resource_in_use answer this route's 409 also carries (pseudoRefusal), so one schema documents both.
+	Blockers []blockerGroup `json:"blockers,omitempty" doc:"With resource_in_use: the rows that still reference the row a delete step refused on, grouped by kind and field as its own delete call groups them; rows in scopes the caller may not see are counted, not listed."`
 }
 
 type pseudoAgentRemovalOutput struct {
@@ -60,7 +62,7 @@ type pseudoAgentRemovalOutput struct {
 
 func registerPseudoAgentRemoval(api huma.API, d Deps, protect huma.Middlewares) {
 	responses := pseudoResponses(api, "")
-	responses["409"] = jsonResponse(api, "changed: spec.expect is no longer exactly the set the request would delete; deleted and kept say what it is now, and nothing was deleted. resource_in_use, with the row's blockers in the message: a row still references one the request deletes, such as a role binding naming the service account. managed_by_source: an identity source manages the service account. conflict: another change touched the same rows at the same time, retry. pointer names the part of the body.", removalChanged{})
+	responses["409"] = jsonResponse(api, "changed: spec.expect is no longer exactly the set the request would delete; deleted and kept say what it is now, and nothing was deleted. resource_in_use, with blockers grouped as the row's own delete call answers them: a row still references one the request deletes, such as a role binding naming the service account. managed_by_source: an identity source manages the service account. conflict: another change touched the same rows at the same time, retry. pointer names the part of the body.", removalChanged{})
 	huma.Register(api, huma.Operation{
 		OperationID: "create_pseudo_agent_removal",
 		Method:      http.MethodPost,

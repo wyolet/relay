@@ -54,7 +54,7 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares:   protect,
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{400, 401, 403, 404, 500},
-		Responses:     pseudoResponses(api, "conflict: another change touched the same rows at the same time, retry; duplicate_binding from the binding. pointer names the row."),
+		Responses:     pseudoResponses(api, "conflict: another change touched the same rows at the same time, retry; duplicate_binding from the binding; resource_in_use, with blockers, from a step that deletes a row something still references. pointer names the row."),
 	}, func(ctx context.Context, in *pseudoLimitsInput) (*pseudoLimitsOutput, error) {
 		out := &pseudoLimitsOutput{Status: http.StatusOK}
 		s := in.Body.Spec
