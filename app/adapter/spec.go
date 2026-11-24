@@ -194,7 +194,7 @@ type InboundPath struct {
 type RequestEnvelope struct {
 	// DropMembers are top-level body members removed, e.g. a model the shape names in its URL instead. Only members whose information the shape carries elsewhere belong here, so nothing the caller asked for is lost; that is why a drop is not reported as a dropped param.
 	DropMembers []string
-	// DefaultMembers are top-level body members set only when the body lacks the key.
+	// DefaultMembers are top-level body members set only when the body lacks the key or holds it as null.
 	DefaultMembers []BodyMember
 	// JoinHeaders are header names whose repeated lines are sent as one comma-joined line.
 	JoinHeaders []string
