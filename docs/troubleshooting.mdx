@@ -96,7 +96,7 @@ In proxy mode `request_too_large` also means the first 32 MiB of the body hold n
 
 ## Wrong wire format from the upstream
 
-If a model returns a wire-format error from its provider, the host binding's `adapter` probably doesn't match how that endpoint speaks. Valid adapters are `openai` (Chat Completions and OpenAI-compatible servers such as Ollama), `openai_responses`, `anthropic` and `gemini` (Gemini's native `generateContent`). The adapter is set per binding, not per host, because one host can serve models over different wire shapes.
+If a model returns a wire-format error from its provider, the host binding's `adapter` probably doesn't match how that endpoint speaks. Valid adapters are `openai` (Chat Completions and OpenAI-compatible servers such as Ollama), `openai_responses`, `anthropic`, `vertex_anthropic` (Claude on Google Cloud Vertex AI, `rawPredict`) and `gemini` (Gemini's native `generateContent`). The adapter is set per binding, not per host, because one host can serve models over different wire shapes.
 
 ## The admin UI won't sign you in
 

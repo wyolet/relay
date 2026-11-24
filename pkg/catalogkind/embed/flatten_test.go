@@ -2,6 +2,7 @@ package embed
 
 import (
 	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -126,6 +127,38 @@ func TestFlatten_WireNameFollowsTheBindingsUpstreamName(t *testing.T) {
 		}
 		if !maps.Equal(got["host-a"], tc.atA) || !maps.Equal(got["host-b"], tc.atB) {
 			t.Errorf("%s: wire names = %v, want host-a %v, host-b %v", tc.name, got, tc.atA, tc.atB)
+		}
+	}
+}
+
+// A binding through an upstream adapter the SDK client cannot call drops out of the document, its host with it when nothing else is left there; a name that is no upstream adapter stays for ValidateAdapters to reject.
+func TestFlatten_SkipsRelayOnlyAdapters(t *testing.T) {
+	for _, tc := range []struct {
+		adapter    adapters.Name
+		wantHosts  []string
+		wantReject bool
+	}{
+		{adapters.VertexAnthropic, []string{"host-b"}, false},
+		{"no-such-adapter", []string{"host-a", "host-b"}, true},
+	} {
+		idx, kept := flattenFixture()
+		for _, list := range idx.bindingsByModel {
+			for _, b := range list {
+				if b.Meta.ID == kept {
+					b.Spec.Adapter = tc.adapter
+				}
+			}
+		}
+		cat := Flatten(idx, time.Time{}, nil)
+		var hosts []string
+		for _, h := range cat.Hosts {
+			hosts = append(hosts, h.Name)
+		}
+		if !slices.Equal(hosts, tc.wantHosts) {
+			t.Errorf("%s: hosts = %v, want %v", tc.adapter, hosts, tc.wantHosts)
+		}
+		if err := ValidateAdapters(cat); (err != nil) != tc.wantReject {
+			t.Errorf("%s: ValidateAdapters = %v, want rejected %v", tc.adapter, err, tc.wantReject)
 		}
 	}
 }

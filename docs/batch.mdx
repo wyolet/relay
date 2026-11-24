@@ -35,7 +35,7 @@ The answer is `202 Accepted` with the batch id. Leave `stream` unset in the item
 
 ### Items must match the upstream's shape
 
-Relay does not translate batch items. An item runs only when the routed model's host binding uses the same adapter as `shape`, or an adapter that sends that shape's body in another envelope (a different URL, auth header, or top-level members): `openai` items need an `adapter: openai` binding, `anthropic` items an `adapter: anthropic` binding, `openai_responses` items an `adapter: openai_responses` binding.
+Relay does not translate batch items. An item runs only when the routed model's host binding uses the same adapter as `shape`, or an adapter that sends that shape's body in another envelope (a different URL, auth header, or top-level members): `openai` items need an `adapter: openai` binding, `anthropic` items an `adapter: anthropic` or `adapter: vertex_anthropic` binding, `openai_responses` items an `adapter: openai_responses` binding.
 
 An item routed to a binding of another shape fails with a `cross-shape dispatch` error. One exception fails differently: an `openai_responses` item routed to an `adapter: openai` binding on the `openai` host is sent to the Chat Completions endpoint and fails with the upstream's status. Canonical (`/v1/generate`) bodies and embeddings requests cannot be batched. To mix providers, submit one batch per shape.
 

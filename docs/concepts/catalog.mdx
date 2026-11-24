@@ -46,7 +46,7 @@ When a model has bindings on several hosts and you don't pin one, Relay tries th
 
 ## Model aliases
 
-A model can declare **aliases** in `spec.aliases`: extra names that resolve to it. Aliases are checked last, after every catalog name and its provider- and host-qualified forms miss, so they never shadow a real model. An alias may contain one `*` after a literal prefix (`claude-fable-5[*]`). When a request matches an alias, Relay routes to the model and sends the name from the request upstream unchanged; this is how a client can send `claude-fable-5[1m]` to a provider that understands that suffix.
+A model can declare **aliases** in `spec.aliases`: extra names that resolve to it. Aliases are checked last, after every catalog name and its provider- and host-qualified forms miss, so they never shadow a real model. An alias may contain one `*` after a literal prefix (`claude-fable-5[*]`). When a request matches an alias, Relay routes to the model and sends the name from the request upstream unchanged; this is how a client can send `claude-fable-5[1m]` to a provider that understands that suffix. An adapter that names the model in the URL (`gemini`, `vertex_anthropic`) would put that name, suffix included, in the upstream path; set the binding's `upstreamName` and that name is sent instead.
 
 Aliases are lookup keys only: they are not valid in policy grants, and usage records the model's catalog name. To add an alias to a catalog model without losing it on the next catalog update, use an [overlay](/concepts/overlays).
 

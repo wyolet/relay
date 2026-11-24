@@ -34,7 +34,7 @@ type Binding struct {
 type Spec struct {
 	ModelID      string        `json:"modelId"                yaml:"modelId"                validate:"required,uuid" doc:"Id of the model the host serves. One binding per (model, host) pair."`
 	HostID       string        `json:"hostId"                 yaml:"hostId"                 validate:"required,uuid" doc:"Id of the host serving the model."`
-	Adapter      adapters.Name `json:"adapter"                yaml:"adapter"                doc:"Wire shape relay speaks to the host for this model, such as openai, openai_responses, openai_embeddings, anthropic or gemini."`
+	Adapter      adapters.Name `json:"adapter"                yaml:"adapter"                doc:"Wire shape relay speaks to the host for this model, such as openai, openai_responses, openai_embeddings, anthropic, vertex_anthropic or gemini."`
 	UpstreamName string        `json:"upstreamName,omitempty" yaml:"upstreamName,omitempty" doc:"Model name sent upstream. Applies only while the binding serves one snapshot of the model (snapshots lists one, or the model has one); otherwise, or when empty, the model's own name is sent."`
 	PricingID    string        `json:"pricingId,omitempty"    yaml:"pricingId,omitempty"    validate:"omitempty,uuid" doc:"Id of the pricing that costs this binding's traffic. Empty leaves it unpriced: requests governed by a budget refuse it with unpriced_under_budget."`
 	Enabled      *bool         `json:"enabled,omitempty"      yaml:"enabled,omitempty"      doc:"False stops routing the model to this host. Omitted means true."`

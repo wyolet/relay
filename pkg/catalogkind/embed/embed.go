@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/wyolet/relay/pkg/adapters"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
@@ -18,6 +19,12 @@ var SDKAdapters = map[string]struct{}{
 	"openai_responses": {},
 	"anthropic":        {},
 	"gemini":           {},
+}
+
+// relayOnly reports whether a is an upstream-binding adapter outside SDKAdapters. The SDK client cannot call such a binding directly, so a ref resolving to it would fail; it reaches that host through relay. Any other name outside SDKAdapters stays in the document for ValidateAdapters to reject.
+func relayOnly(a adapters.Name) bool {
+	_, sdk := SDKAdapters[string(a)]
+	return !sdk && a.UpstreamBinding()
 }
 
 // ValidateAdapters returns an error if any binding uses an adapter name outside
