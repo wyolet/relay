@@ -292,6 +292,55 @@ Once every row passes, the rows are checked against the plans as a whole, in mem
 | `422` `plan_issue` | The rows would raise plan errors together; see above. |
 | `503` | The plans are not loaded yet, or the check took longer than `RELAY_PLAN_CHECK_TIMEOUT_MS`, waiting for another one included. |
 
+### Access and limits in one request
+
+```
+POST /api/pseudo-access               what a team, project or service account may use, stated whole
+POST /api/pseudo-limits               a budget or rate limit on a team, project or service account
+POST /api/pseudo-access?dryRun=true   the same checks, nothing written; without spec.access, the case and the current policy only
+POST /api/pseudo-limits?dryRun=true   the same; without spec.budget and spec.rateLimit, the case and the current policy only
+```
+
+The routes are served only when `RELAY_PSEUDO_KINDS` lists `access` or `limits`, or is `all`. Both change the policy over the target's account: a team's or project's own account, or a service account's account (made first when Relay has not made it yet). `spec.target` is `{"kind": "team|project|service-account", "id": "<id>"}`; a slug answers `400`. What happens to the policy is answered in `case`:
+
+| `case` | When | What is written |
+| --- | --- | --- |
+| `none` | The account is in no binding. | A policy owned by the target's scope, bound to the account alone. |
+| `own` | The account is bound alone to a policy of the target's scope that you may update. | That policy, changed in place. |
+| `copy` | The policy is bound to other accounts too, is a preset, or is owned elsewhere. | A copy owned by the target's scope, with its models, links, description and labels, changed; the account taken out of its binding and bound to the copy alone, as `PUT /api/accounts/{ref}/policy` does. The original and the other accounts stay as they were. |
+
+A binding or policy holding the account that you may not see or change answers `403` `policy_set_above`, naming the scope that holds it (by name only when you may see that scope) and nothing of the binding or policy. A copy that would carry a pool, rate limit or budget the target's scope may not link answers `400` `links_not_carried` with how many of each kind, unless the request drops them.
+
+```json
+{ "spec": { "target": { "kind": "project", "id": "<project-id>" },
+            "access": { "accountIds": ["<team-account-id>"], "poolIds": [], "models": ["openai"] } } }
+```
+
+`access` takes `everyCredential`, `poolIds`, `accountIds` and `models` with the rules of `POST /api/pseudo-agents`, and states the whole access: the policy's pools become `poolIds`, then one pool per host of `accountIds`; its models become `models`; its rate limits and budgets stay. Pools it makes are owned by the target's scope and labelled `access-for=<account id>`. On a later request, the labelled pool of a host is updated in place while only the policy changed in place links it, and a labelled pool the policy no longer links that nothing else links is deleted. Other pools are only linked or unlinked. `everyCredential: true` links no pools; in case `none` without `models` nothing is written and the answer carries `unchanged: true`.
+
+```json
+{
+  "case": "own",
+  "policy": { "id": "…", "name": "two-app" },
+  "pools": [{ "id": "…", "name": "two-app-at-openai" }],
+  "shares": [],
+  "created": [{ "kind": "pool", "id": "…", "name": "two-app-at-openai" }],
+  "updated": [{ "kind": "policy", "id": "…", "name": "two-app" }],
+  "deleted": [{ "kind": "pool", "id": "…", "name": "two-app-at-anthropic" }]
+}
+```
+
+`POST /api/pseudo-limits` takes `metadata` (`name`, `displayName`, `description`, `labels`) and exactly one of `spec.budget` and `spec.rateLimit`, each the spec `POST /api/budgets` or `POST /api/rate-limits` takes. The row is owned by the target's scope and linked from the policy beside what it links already. The answer carries `case`, `policy`, `budget` or `rateLimit`, the three row lists, and for a budget `unpricedModels`: the models the target uses now that have no pricing and would answer `unpriced_under_budget` once the budget applies. It is a warning; the request goes through.
+
+The dry run without a change answers the case and what you may see of the current policy, so a form opens filled; it is absent in case `none`:
+
+```json
+{ "case": "copy", "current": { "policy": { "id": "…", "name": "gold" }, "models": [], "linksNoPools": false, "hiddenPools": 1,
+  "pools": [{ "id": "…", "name": "gold-openai", "host": { "id": "…", "name": "openai" }, "accounts": [{ "id": "…", "name": "team-openai" }], "hiddenAccounts": 0, "labelled": false }] } }
+```
+
+Each row passes what its own create, update or delete call passes, with the same answers and pointers, and is audited as that call; then the result is checked against the plans as for `POST /api/pseudo-agents`, and against what every other account reaches: a change that would alter another account's models or hosts answers `422` `other_accounts_changed`, and one that would leave the target's account refusing every request answers `422` `plan_issue`. A concurrent change to a row the request read answers `409` `conflict`. Nothing is written on any refusal.
+
 ### Accounts and limits
 
 ```
