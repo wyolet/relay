@@ -92,7 +92,8 @@ func (r *Registry) Specs() []*Spec {
 //     adapter to dispatch to.
 //   - Every inbound, non-byte-pass spec has a canonical Translator, so a
 //     cross-shape route can always translate.
-//   - Every Family names a registered spec, and every Translator is of a
+//   - Every Family names a registered spec that has no Family of its own
+//     (FamilyName does not follow chains), and every Translator is of a
 //     comparable type: dispatch compares translators to tell which hops one
 //     serialized body serves, and == on an uncomparable one panics.
 func (r *Registry) AssertWired() error {
@@ -109,8 +110,14 @@ func (r *Registry) AssertWired() error {
 		if len(s.InboundPaths) > 0 && !s.BytePass && s.Translator == nil {
 			return fmt.Errorf("adapter.Registry: inbound spec %q has no canonical translator", s.Name)
 		}
-		if s.Family != "" && r.byName[s.Family] == nil {
-			return fmt.Errorf("adapter.Registry: spec %q names unregistered family %q", s.Name, s.Family)
+		if s.Family != "" {
+			f := r.byName[s.Family]
+			if f == nil {
+				return fmt.Errorf("adapter.Registry: spec %q names unregistered family %q", s.Name, s.Family)
+			}
+			if f.Family != "" {
+				return fmt.Errorf("adapter.Registry: spec %q names family %q, which is itself in family %q", s.Name, s.Family, f.Family)
+			}
 		}
 		if s.Translator != nil && !reflect.TypeOf(s.Translator).Comparable() {
 			return fmt.Errorf("adapter.Registry: spec %q has a translator of uncomparable type %T", s.Name, s.Translator)

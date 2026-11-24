@@ -11,10 +11,10 @@ import (
 // stubTranslator is a translator the registry only stores, never calls.
 type stubTranslator struct{ v1.Translator }
 
-// uncomparableTranslator panics when compared with ==.
+// uncomparableTranslator panics when compared with ==: a struct with a slice field, even a blank one, is not comparable.
 type uncomparableTranslator struct {
 	v1.Translator
-	keys []string
+	_ []string
 }
 
 func TestSpec_FamilyName(t *testing.T) {
@@ -113,6 +113,9 @@ func TestRegistry_AssertWired(t *testing.T) {
 		{"unknown family", func(s []*adapter.Spec) []*adapter.Spec {
 			return append(s, (&adapter.Spec{Name: "extra", Family: "nope"}).Build())
 		}, `adapter.Registry: spec "extra" names unregistered family "nope"`},
+		{"family of a family member", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "member", Family: first}).Build(), (&adapter.Spec{Name: "extra", Family: "member"}).Build())
+		}, `adapter.Registry: spec "extra" names family "member", which is itself in family "` + string(first) + `"`},
 		{"uncomparable translator", func(s []*adapter.Spec) []*adapter.Spec {
 			return append(s, (&adapter.Spec{Name: "extra", Translator: uncomparableTranslator{}}).Build())
 		}, `adapter.Registry: spec "extra" has a translator of uncomparable type adapter_test.uncomparableTranslator`},
