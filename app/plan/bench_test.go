@@ -216,7 +216,7 @@ func BenchmarkCheck(b *testing.B) {
 
 	scope := meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}
 	sa := &serviceaccount.ServiceAccount{Meta: md("agent-"+seq(), scope), Spec: serviceaccount.Spec{ProjectID: proj.Meta.ID}}
-	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", proj.Meta.ID)
+	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", scope)
 	lane.Meta.ID = meta.NewID()
 	agentPool := &pool.Pool{Meta: md("agent-pool-"+seq(), scope), Spec: pool.Spec{HostID: hosts[0].Meta.ID, AccountIDs: []string{accounts[0].Meta.ID}}}
 	pol := &policy.Policy{Meta: md("agent-policy-"+seq(), scope), Spec: policy.Spec{PoolIDs: []string{agentPool.Meta.ID}, Models: []string{"prov-0"}}}

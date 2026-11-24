@@ -209,7 +209,23 @@ func (w *World) Project(t *team.Team) *project.Project {
 func (w *World) ServiceAccount(p *project.Project) *serviceaccount.ServiceAccount {
 	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: p.Meta.ID}}
 	w.ServiceAccounts = append(w.ServiceAccounts, s)
-	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", p.Meta.ID))
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", s.Meta.Owner))
+	return s
+}
+
+// TeamServiceAccount adds a service account t owns, with no project in between, and its account.
+func (w *World) TeamServiceAccount(t *team.Team) *serviceaccount.ServiceAccount {
+	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}), Spec: serviceaccount.Spec{TeamID: t.Meta.ID}}
+	w.ServiceAccounts = append(w.ServiceAccounts, s)
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", s.Meta.Owner))
+	return s
+}
+
+// UserServiceAccount adds a service account u owns, their personal bot, and its account.
+func (w *World) UserServiceAccount(u *user.User) *serviceaccount.ServiceAccount {
+	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerUser, ID: u.ID}), Spec: serviceaccount.Spec{UserID: u.ID}}
+	w.ServiceAccounts = append(w.ServiceAccounts, s)
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", s.Meta.Owner))
 	return s
 }
 

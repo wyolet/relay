@@ -121,7 +121,7 @@ func TestWriter_LaysRecordedReads(t *testing.T) {
 	plans := w.Load(t)
 	owner := meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}
 	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "fresh", Owner: owner}, Spec: serviceaccount.Spec{ProjectID: proj.Meta.ID}}
-	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", proj.Meta.ID)
+	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", owner)
 	lane.Meta.ID = meta.NewID()
 	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "fresh-key"}, Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID}, AccountID: lane.Meta.ID, KeyHash: meta.NewID()}}
 	row := Row{Kind: "key", Pointer: "/spec/key", Meta: &k.Meta, Value: k}

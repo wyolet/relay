@@ -170,8 +170,8 @@ func (x *agentExpansion) add(kind, pointer string, m *meta.Metadata, v any) {
 }
 
 func (x *agentExpansion) serviceAccount(md AgentMetadata) *serviceaccount.ServiceAccount {
-	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: x.in.NewID(), Name: md.Name, DisplayName: md.DisplayName, Description: md.Description, Labels: md.Labels}}
-	sa.SetOwner(x.owner)
+	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: x.in.NewID(), Name: md.Name, DisplayName: md.DisplayName, Description: md.Description, Labels: md.Labels, Owner: x.owner}}
+	sa.StampOwner()
 	if sa.Meta.Name == "" {
 		sa.Meta.Name = x.in.Names.Mint("service-account", md.DisplayName, "service-account")
 	} else {
@@ -182,7 +182,7 @@ func (x *agentExpansion) serviceAccount(md AgentMetadata) *serviceaccount.Servic
 }
 
 func (x *agentExpansion) lane(sa *serviceaccount.ServiceAccount) *account.Account {
-	lane := account.ForServiceAccountIn(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Owner)
+	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Owner)
 	lane.Meta.ID = x.in.NewID()
 	lane.Meta.Name = x.in.Names.Mint("account", lane.Meta.Name, "account")
 	x.add("account", "/metadata", &lane.Meta, lane)

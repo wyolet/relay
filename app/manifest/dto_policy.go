@@ -27,7 +27,7 @@ type AccountSpec struct {
 	PayloadLogging string `json:"payloadLogging,omitempty" yaml:"payloadLogging,omitempty" enum:"on,off"`
 	// SourceAccount names the real account a shared account reaches; host names the same host. Fixed once created.
 	SourceAccount string `json:"sourceAccount,omitempty" yaml:"sourceAccount,omitempty"`
-	// ServiceAccount names the service account a share with one is held by; metadata.owner is its project.
+	// ServiceAccount names the service account a share with one is held by; metadata.owner is the service account's project, team or user.
 	ServiceAccount string `json:"serviceAccount,omitempty" yaml:"serviceAccount,omitempty"`
 }
 

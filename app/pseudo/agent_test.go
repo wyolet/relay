@@ -85,7 +85,7 @@ func TestExpandAgent_RefusesNoOwner(t *testing.T) {
 // The rows every agent starts with: the service account (id-1, its name taken once) and its lane (id-2).
 func headRows() []Row {
 	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: "id-1", Name: "ci-bot-2", DisplayName: "CI bot", Labels: map[string]string{"sa-type": "agent"}, Owner: proj}, Spec: serviceaccount.Spec{ProjectID: "proj"}}
-	lane := account.ForServiceAccountIn("id-1", "ci-bot-2", "CI bot", proj)
+	lane := account.ForServiceAccount("id-1", "ci-bot-2", "CI bot", proj)
 	lane.Meta.ID = "id-2"
 	return []Row{
 		{Kind: "service-account", Pointer: "/metadata", Meta: &sa.Meta, Value: sa},

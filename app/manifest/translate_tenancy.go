@@ -79,9 +79,9 @@ func FromProject(p *project.Project, rev ReverseResolver) ProjectDTO {
 // ServiceAccount / Group
 // ---------------------------------------------------------------------------
 
-// ToServiceAccount resolves the owning project name → id and the optional
-// policy override. Owner mirrors spec.project, so it is re-derived rather
-// than read from the wire form.
+// ToServiceAccount resolves the owning project, team or user name → id.
+// Owner mirrors spec.project, spec.team or spec.user, so it is re-derived
+// rather than read from the wire form.
 func ToServiceAccount(d ServiceAccountDTO, idx Resolver) (*serviceaccount.ServiceAccount, error) {
 	row, err := AuthManifests.ToServiceAccount(serviceAccountDoc(d), authRefs{idx})
 	if err != nil {
@@ -95,7 +95,14 @@ func FromServiceAccount(sa *serviceaccount.ServiceAccount, rev ReverseResolver) 
 	d, _ := fromAuthDoc(rendered(AuthManifests.FromServiceAccount(row, authNames{rev})))
 	dto := *d.ServiceAccount
 	dto.APIVersion, dto.Metadata = APIVersion, metaToWire(sa.Meta)
-	dto.Metadata.Owner.Name = dto.Spec.Project
+	switch sa.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		dto.Metadata.Owner.Name = dto.Spec.Project
+	case meta.OwnerTeam:
+		dto.Metadata.Owner.Name = dto.Spec.Team
+	case meta.OwnerUser:
+		dto.Metadata.Owner.Name = dto.Spec.User
+	}
 	return dto
 }
 

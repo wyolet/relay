@@ -26,7 +26,7 @@ func (d Deps) removalReads(ctx context.Context, body pseudo.AgentRemoval) (pseud
 	}
 	pseudo.Record(ctx, sa.Meta.ID, sa)
 	in.ServiceAccount = sa
-	if in.Lane, err = d.managedAccount(ctx, account.ForServiceAccountIn(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Owner)); err != nil {
+	if in.Lane, err = d.managedAccount(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Owner)); err != nil {
 		return in, err
 	}
 	if in.Lane != nil {

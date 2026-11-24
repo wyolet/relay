@@ -54,15 +54,17 @@ func (p *Project) validate() error {
 	return validateMeta("project", &p.Meta)
 }
 
-// ServiceAccount is a machine principal that lives in one project. Its owner is always its project.
+// ServiceAccount is a machine principal owned by one project, one team or one user.
 type ServiceAccount struct {
 	Meta Metadata
 	Spec ServiceAccountSpec
 }
 
-// ServiceAccountSpec holds the parent project and the enabled flag.
+// ServiceAccountSpec holds the owner and the enabled flag. Exactly one of ProjectID, TeamID and UserID is set.
 type ServiceAccountSpec struct {
 	ProjectID string
+	TeamID    string
+	UserID    string
 	// Enabled nil means enabled.
 	Enabled *bool
 	// Attributes are product fields stored next to the spec, keyed by field name; the module round-trips them untouched.
@@ -72,14 +74,32 @@ type ServiceAccountSpec struct {
 // IsEnabled reports whether the service account is enabled.
 func (s *ServiceAccount) IsEnabled() bool { return enabled(s.Spec.Enabled) }
 
-// StampOwner sets the owner to the account's project, so it never drifts from ProjectID.
+// StampOwner sets the owner to the account's user when UserID is set, else to its team when TeamID is set, else to its project, so it never drifts from the spec.
 func (s *ServiceAccount) StampOwner() {
-	s.Meta.Owner = authz.Owner{Kind: OwnerProject, ID: s.Spec.ProjectID}
+	switch {
+	case s.Spec.UserID != "":
+		s.Meta.Owner = authz.Owner{Kind: OwnerUser, ID: s.Spec.UserID}
+	case s.Spec.TeamID != "":
+		s.Meta.Owner = authz.Owner{Kind: OwnerTeam, ID: s.Spec.TeamID}
+	default:
+		s.Meta.Owner = authz.Owner{Kind: OwnerProject, ID: s.Spec.ProjectID}
+	}
+}
+
+// ownerCount is how many of the owner ids are set; a valid row sets one.
+func (s ServiceAccountSpec) ownerCount() int {
+	n := 0
+	for _, id := range []string{s.ProjectID, s.TeamID, s.UserID} {
+		if id != "" {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *ServiceAccount) validate() error {
-	if s.Spec.ProjectID == "" {
-		return fmt.Errorf("%w: service account %q: project id is required", ErrInvalid, s.Meta.Name)
+	if s.Spec.ownerCount() != 1 {
+		return fmt.Errorf("%w: service account %q: exactly one of project id, team id and user id is required", ErrInvalid, s.Meta.Name)
 	}
 	return validateMeta("service account", &s.Meta)
 }

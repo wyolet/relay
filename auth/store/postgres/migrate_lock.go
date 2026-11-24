@@ -46,15 +46,29 @@ func migrationFile(src source.Driver, version uint, up bool) string {
 	return fmt.Sprintf("%06d_%s.%s.sql", version, ident, dir)
 }
 
-// retryable turns a migration that timed out waiting for a lock into a clean, retryable failure. A migration file runs as one implicit transaction, so it applied nothing; only the dirty mark golang-migrate set before running it remains, and that refuses every later run. up says which way the failed migration ran.
+// raiseException is the SQLSTATE of RAISE EXCEPTION, which a migration, up or down, uses to refuse.
+const raiseException = "P0001"
+
+// refused reports whether err is a migration that refused with RAISE EXCEPTION.
+func refused(err error) bool {
+	var pg interface{ SQLState() string }
+	return errors.As(migrationCause(err), &pg) && pg.SQLState() == raiseException
+}
+
+// retryable turns a migration that timed out waiting for a lock, or refused, into a clean, retryable failure. A migration file runs as one implicit transaction, so it applied nothing; only the dirty mark golang-migrate set before running it remains, and that refuses every later run. up says which way the failed migration ran.
 func retryable(m *migrate.Migrate, src source.Driver, up bool, err error) error {
-	if !lockTimedOut(err) {
+	why, then := "it timed out waiting for a lock", "retry once the blocking transaction ends"
+	switch {
+	case lockTimedOut(err):
+	case refused(err):
+		why, then = "it refused", "act on its message, then retry"
+	default:
 		return err
 	}
 	cause := migrationCause(err)
 	v, dirty, verr := m.Version()
 	if verr != nil || !dirty {
-		return fmt.Errorf("%w; it timed out waiting for a lock, retry once the blocking transaction ends", cause)
+		return fmt.Errorf("%w; %s, %s", cause, why, then)
 	}
 	// Up marks the failed migration's version dirty, down the one below it; the clean version is the neighbour.
 	var clean uint
@@ -77,7 +91,7 @@ func retryable(m *migrate.Migrate, src source.Driver, up bool, err error) error 
 		nerr = m.Force(int(clean))
 	}
 	if nerr != nil {
-		return fmt.Errorf("%w; it timed out waiting for a lock and the schema is left marked dirty: %v", cause, nerr)
+		return fmt.Errorf("%w; %s and the schema is left marked dirty: %v", cause, why, nerr)
 	}
-	return fmt.Errorf("%w; it timed out waiting for a lock and applied nothing, retry once the blocking transaction ends", cause)
+	return fmt.Errorf("%w; %s and applied nothing, %s", cause, why, then)
 }

@@ -1,4 +1,4 @@
-// Package account is the domain layer for the Account entity: what policies bind to and usage is charged to. A provider account is one provider organization at one host, whose tier limits every host key of the organization shares. A caller account is one relay keeps in step with the tenancy rows: one per team and per project, a personal account per user, one per service account, and a member account per user and team or project the user is a member of. A key lands in one account its principal holds, its default lane. A shared account is a provider account owned by the user, team or project it was shared with (a service account's by its project, held by it) that holds no keys and reaches those of the real account it names.
+// Package account is the domain layer for the Account entity: what policies bind to and usage is charged to. A provider account is one provider organization at one host, whose tier limits every host key of the organization shares. A caller account is one relay keeps in step with the tenancy rows: one per team and per project, a personal account per user, one per service account, and a member account per user and team or project the user is a member of. A key lands in one account its principal holds, its default lane. A shared account is a provider account owned by the user, team or project it was shared with (a service account's by the service account's owner, held by it) that holds no keys and reaches those of the real account it names.
 //
 // This package validates one row's shape, stores it, and creates a caller account idempotently (Store.EnsureManaged). A provider account is only ever created on request: a host key names one, and nothing makes one for it. Out of scope: learning org ids from upstream responses, deciding which caller accounts should exist (app/plan) and applying an account's policy to requests.
 package account
@@ -87,7 +87,7 @@ func (a *Account) Receiver() Receiver {
 	return Receiver{Kind: ReceiverKind(a.Meta.Owner.Kind), ID: a.Meta.Owner.ID}
 }
 
-// TakesKeysOf reports whether a relay key of principal may run in a. A key outlives the membership it was made under, so it lands only where relay re-checks that membership itself: the principal's personal or service account, a member account that follows role bindings, or a provider account the key's user owns personally. A member account opened on first use (a group or team-level grant relay cannot see) serves minted tokens only, and team, project and system provider accounts are reached through the caller ladder, never as a lane.
+// TakesKeysOf reports whether a relay key of principal may run in a. A key outlives the membership it was made under, so it lands only where relay re-checks that membership itself: the principal's personal or service account, a member account that follows role bindings, or a provider account the key's user owns personally and no service account holds (a share made with one of the user's service accounts is that account's). A member account opened on first use (a group or team-level grant relay cannot see) serves minted tokens only, and team, project and system provider accounts are reached through the caller ladder, never as a lane.
 func (a *Account) TakesKeysOf(principal Holder) bool {
 	switch a.DerivedKind() {
 	case KindPersonal, KindService:
@@ -95,7 +95,7 @@ func (a *Account) TakesKeysOf(principal Holder) bool {
 	case KindMember:
 		return *a.Spec.Holder == principal && a.FollowsRoleBindings
 	case KindProvider:
-		return principal.Kind == HolderUser && a.Meta.Owner == meta.Owner{Kind: meta.OwnerUser, ID: principal.ID}
+		return principal.Kind == HolderUser && a.Spec.Holder == nil && a.Meta.Owner == meta.Owner{Kind: meta.OwnerUser, ID: principal.ID}
 	}
 	return false
 }
@@ -142,8 +142,8 @@ func (a *Account) DerivedKind() Kind {
 	o := a.Meta.Owner
 	switch h := a.Spec.Holder; {
 	case a.Spec.HostID != "":
-		// A service account's share is owned by its project and held by it, so only its lane draws on it.
-		if h == nil || (a.IsShared() && h.Kind == HolderServiceAccount && o.Kind == meta.OwnerProject) {
+		// A service account's share is owned by the service account's owner and held by it, so only its lane draws on it.
+		if h == nil || (a.IsShared() && h.Kind == HolderServiceAccount) {
 			return KindProvider
 		}
 	case h == nil:
@@ -163,7 +163,7 @@ func (a *Account) DerivedKind() Kind {
 			return KindMember
 		}
 	case h.Kind == HolderServiceAccount:
-		if o.Kind == meta.OwnerProject {
+		if !o.DeploymentWide() {
 			return KindService
 		}
 	}
@@ -218,7 +218,7 @@ func (a *Account) Validate() error {
 	k := a.DerivedKind()
 	switch {
 	case k == "" && a.Spec.HostID != "":
-		return fmt.Errorf("account %q: a provider account (spec.hostId set) has no holder, except a service account's share, owned by its project", a.Meta.Name)
+		return fmt.Errorf("account %q: a provider account (spec.hostId set) has no holder, except a service account's share, owned by the service account's owner", a.Meta.Name)
 	case k == "":
 		return fmt.Errorf("account %q: spec.hostId is required unless the account is a team's, a project's, a user's personal account, a member account or a service account's", a.Meta.Name)
 	case k != KindProvider && a.Spec.OrgID != "":
@@ -236,7 +236,7 @@ func (a *Account) Validate() error {
 	return nil
 }
 
-// Share is the account sharing src with r, owned by owner (r itself, or a service account's project) and named after src and receiverName; the store mints the final name.
+// Share is the account sharing src with r, owned by owner (r itself, or a service account's owner) and named after src and receiverName; the store mints the final name.
 func Share(src *Account, r Receiver, owner meta.Owner, receiverName string) *Account {
 	name := slug.From(src.Meta.Name + "-for-" + receiverName)
 	if name == "" {
@@ -276,13 +276,8 @@ func Personal(userID, username string) *Account {
 	return managed(personalPrefix+username, username, meta.Owner{Kind: meta.OwnerUser, ID: userID}, &Holder{Kind: HolderUser, ID: userID})
 }
 
-// ForServiceAccount is the service account's account, in its project.
-func ForServiceAccount(saID, saName, display, projectID string) *Account {
-	return ForServiceAccountIn(saID, saName, display, meta.Owner{Kind: meta.OwnerProject, ID: projectID})
-}
-
-// ForServiceAccountIn is the service account's account, owned by the service account's owner; Validate refuses an owner a service account's account cannot have.
-func ForServiceAccountIn(saID, saName, display string, owner meta.Owner) *Account {
+// ForServiceAccount is the service account's account, owned by the service account's owner; Validate refuses an owner a service account's account cannot have.
+func ForServiceAccount(saID, saName, display string, owner meta.Owner) *Account {
 	return managed(servicePrefix+saName, orName(display, saName), owner, &Holder{Kind: HolderServiceAccount, ID: saID})
 }
 

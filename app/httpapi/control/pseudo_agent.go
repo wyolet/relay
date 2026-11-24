@@ -65,6 +65,9 @@ func registerPseudoAgent(api huma.API, d Deps, protect huma.Middlewares) {
 			if err := pseudo.CheckAgent(in.Body); err != nil {
 				return nil, err
 			}
+			if err := refs(d.boundTo(tx)).ServiceAccountOwnerOn(ctx, in.Body.Metadata.Owner.Owner()); err != nil {
+				return nil, refusal(refErr(err), "/metadata/owner")
+			}
 			var err error
 			if reads, err = d.boundTo(tx).agentReads(ctx, in.Body); err != nil {
 				return nil, err

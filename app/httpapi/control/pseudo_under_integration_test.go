@@ -91,7 +91,7 @@ func TestPseudoAccess_UnderTheTarget(t *testing.T) {
 	sibSA := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: "other-bot"}, Spec: serviceaccount.Spec{ProjectID: sib.Meta.ID}}
 	sibSA.StampOwner()
 	must(t, "sibling service account", w.stores.ServiceAccount.Upsert(ctx, sibSA))
-	sibLane, err := w.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sibSA.Meta.ID, sibSA.Meta.Name, "", sib.Meta.ID))
+	sibLane, err := w.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sibSA.Meta.ID, sibSA.Meta.Name, "", sibSA.Meta.Owner))
 	must(t, "sibling lane", err)
 	must(t, "reload", w.cat.Reload(ctx))
 	w.loadPlans(t)

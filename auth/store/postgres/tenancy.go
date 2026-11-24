@@ -1,4 +1,4 @@
-// team_id and project_id are columns with cascading foreign keys, so deleting a team drops its projects and their service accounts without parsing JSONB. The spec documents repeat them for a reader of the JSONB alone; on read the column wins.
+// team_id, project_id and user_id are columns with foreign keys, so deleting a team drops its projects and their service accounts without parsing JSONB, and is refused while the team owns a service account itself, and deleting a user drops the service accounts the user owns. The spec documents repeat them for a reader of the JSONB alone; on read the column wins.
 
 package postgres
 
@@ -167,7 +167,7 @@ func (s serviceAccounts) Upsert(ctx context.Context, sa *directory.ServiceAccoun
 	if err != nil {
 		return err
 	}
-	spec, err := encodeSpec(serviceAccountSpecDoc{ProjectID: sa.Spec.ProjectID, Enabled: sa.Spec.Enabled}, sa.Spec.Attributes, serviceAccountSpecKeys)
+	spec, err := encodeSpec(serviceAccountSpecDoc{ProjectID: sa.Spec.ProjectID, TeamID: sa.Spec.TeamID, UserID: sa.Spec.UserID, Enabled: sa.Spec.Enabled}, sa.Spec.Attributes, serviceAccountSpecKeys)
 	if err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func (s serviceAccounts) Upsert(ctx context.Context, sa *directory.ServiceAccoun
 		return err
 	}
 	return mapErr("upsert service account", staleIfNoRows(gen.New(s.db).UpsertServiceAccount(ctx, gen.UpsertServiceAccountParams{
-		ID: sa.Meta.ID, Name: sa.Meta.Name, DisplayName: sa.Meta.DisplayName, ProjectID: sa.Spec.ProjectID,
+		ID: sa.Meta.ID, Name: sa.Meta.Name, DisplayName: sa.Meta.DisplayName, ProjectID: text(sa.Spec.ProjectID), TeamID: text(sa.Spec.TeamID), UserID: text(sa.Spec.UserID),
 		Metadata: md, Spec: spec, ExpectedVersion: ver,
 	})))
 }
@@ -195,7 +195,7 @@ func serviceAccountFromRow(r gen.ServiceAccount) (*directory.ServiceAccount, err
 	if err != nil {
 		return nil, err
 	}
-	sa := &directory.ServiceAccount{Meta: m, Spec: directory.ServiceAccountSpec{ProjectID: r.ProjectID, Enabled: doc.Enabled, Attributes: attrs}}
+	sa := &directory.ServiceAccount{Meta: m, Spec: directory.ServiceAccountSpec{ProjectID: r.ProjectID.String, TeamID: r.TeamID.String, UserID: r.UserID.String, Enabled: doc.Enabled, Attributes: attrs}}
 	sa.StampOwner()
 	return sa, nil
 }

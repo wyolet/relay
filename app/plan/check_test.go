@@ -285,7 +285,7 @@ func TestCheck_RefusedLane(t *testing.T) {
 	h := b.w.start(t)
 	scope := meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID}
 	sa := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), scope), Spec: serviceaccount.Spec{ProjectID: b.proj.Meta.ID}}
-	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", b.proj.Meta.ID)
+	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner)
 	lane.Meta.ID = meta.NewID()
 	pb := &policybinding.PolicyBinding{Meta: md("pb-"+seq(), scope), Spec: policybinding.Spec{PolicyID: disabled.Meta.ID, AccountIDs: []string{lane.Meta.ID}}}
 	c := NewCheck(false, time.Minute)
@@ -303,7 +303,7 @@ func TestCheck_RefusedLane(t *testing.T) {
 	proj := empty.project(empty.team())
 	h2 := empty.start(t)
 	sa2 := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: proj.Meta.ID}}
-	lane2 := account.ForServiceAccount(sa2.Meta.ID, sa2.Meta.Name, "", proj.Meta.ID)
+	lane2 := account.ForServiceAccount(sa2.Meta.ID, sa2.Meta.Name, "", sa2.Meta.Owner)
 	lane2.Meta.ID = meta.NewID()
 	if got, err := c.NewIssues(t.Context(), h2.e.View(), nil, []any{sa2, lane2}); err != nil || len(got) != 0 {
 		t.Errorf("a lane that reaches no key: %v %v, want nothing refused", got, err)
@@ -411,7 +411,7 @@ func TestCheck_ReadRowsTheViewLacks(t *testing.T) {
 	b := newBasic()
 	h := b.w.start(t)
 	sa := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: b.proj.Meta.ID}}
-	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", b.proj.Meta.ID)
+	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner)
 	lane.Meta.ID = meta.NewID()
 	k := &key.Key{Meta: md("key-"+seq(), system), Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID}, AccountID: lane.Meta.ID, KeyHash: keyHash("fresh")}}
 	c := NewCheck(false, time.Minute)

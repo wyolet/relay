@@ -15,7 +15,7 @@ A service account has one account. A user has several: a personal account, a mem
 | `project` | The project's own account, a rung above every lane in the project | The project | Nobody | With the project |
 | `personal` | A user's own account | The user | The user | With the user |
 | `member` | A user inside one team or project | That team or project | The user | When a role binding at that team or project names the user, or when the user mints an inference token for a project |
-| `service` | A service account's account | The service account's project | The service account | With the service account |
+| `service` | A service account's account | The service account's owner: its project, its team when the team owns it directly, or its user for a personal bot | The service account | With the service account |
 | `provider` | One provider organization at one host | The system, a team, a project or a user | Nobody; a share with a service account is held by it | Created explicitly, before the host keys that name it, or by [sharing](/concepts/key-pooling#sharing-an-account) another provider account with the owner |
 
 `spec.kind` is derived from `spec.hostId`, `spec.holder` and the owner, and is read-only. `spec.holder` (`{kind: user | serviceaccount, id}`) names the principal of a personal, member or service account, and the service account a share was made with. Provider accounts are described on [Key pooling](/concepts/key-pooling#accounts).
@@ -52,7 +52,8 @@ While a user's personal account is off, nothing is deleted:
 
 - Requests in the personal account, and in provider accounts the user owns personally, are refused with `403 personal_account_off`. Keys running in them show the plan issue `personal_account_off`, and so do the personal account and those provider accounts. Their shares serve nothing and show `personal_account_off` too.
 - A new key of the user must name a member account in `accountId`; leaving it out answers `400 lane_required`, and naming the personal account or one of the user's provider accounts `403 personal_account_off`.
-- Creating a provider account owned by the user, or sharing an account with the user, answers `403 personal_account_off`: share with their team or project instead.
+- Requests of the service accounts the user owns are refused with `403 personal_account_off`, and their accounts and keys show the issue. Creating a key for one of them answers `403 personal_account_off`.
+- Creating a provider account owned by the user, or sharing an account with the user or one of their service accounts, answers `403 personal_account_off`: share with their team or project instead.
 - Revoking a share a key of theirs ran in leaves the key without an account instead of moving it to the personal account; it serves there again once the account is on.
 - `GET /api/me/contexts` leaves the personal context out.
 
@@ -77,7 +78,7 @@ A relay key belongs to a principal and runs in one of that principal's accounts 
 
 Naming any other account answers `403 account_not_held`, and naming a closed account answers `400`. A key cannot land in a team or project account, in a token-only member account, or in a provider account owned by the system, a team or a project. `PUT /api/keys/by-id/{id}` may move a key to another account under the same rules.
 
-A key's lane decides its ladder. A service account's key climbs its team's account, its project's account and its own. A user's key in the personal account climbs nothing above it; the same user's key in a member account climbs that team's (and project's) accounts. A key in a provider account uses that account's host keys directly, under that account's own policy. See [The ladder](/concepts/policies#the-ladder).
+A key's lane decides its ladder. A service account's key climbs its team's account, its project's account and its own; a service account a team owns directly has no project rung, so its key climbs the team's account and its own; a service account a user owns climbs that user's personal account and its own. An account a user owns and their service account holds is the service account's: the user's own keys and tokens never run in it, and it is not among the user's accounts. A user's key in the personal account climbs nothing above it; the same user's key in a member account climbs that team's (and project's) accounts. A key in a provider account uses that account's host keys directly, under that account's own policy. See [The ladder](/concepts/policies#the-ladder).
 
 ### Switching lanes per request
 
@@ -103,7 +104,7 @@ A WebSocket connection keeps the lane it opened in for every frame, and a [batch
 
 `spec.payloadLogging` on an account is `on`, `off` or omitted. The nearest account on the request's ladder that sets it decides whether [payload logging](/concepts/payload-logging) captures the request: the lane, then the project's account, then the team's. When none sets it, the relay key's own `payloadLoggingEnabled` decides. The operator switch in the `payload-logging` settings section must be on either way.
 
-Under `RELAY_AUTHZ=rbac`, whoever may update the account sets it, with two exceptions that keep a user from deciding whether their own bodies are kept: only an admin sets a personal account's, and a member account's own user cannot set it, whatever their role there. Both answer `403`.
+Under `RELAY_AUTHZ=rbac`, whoever may update the account sets it, with two exceptions that keep a user from deciding whether their own bodies are kept: only an admin sets a personal account's, or that of a service account a user owns, whose lane comes before the personal account, and a member account's own user cannot set it, whatever their role there. Both answer `403`.
 
 ## Reading your accounts
 

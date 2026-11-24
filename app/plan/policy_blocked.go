@@ -223,7 +223,7 @@ func (cp *CallerPlan) narrowsAbove(policyID string) bool {
 
 func rungIndex(r limits.Rung) int {
 	switch r {
-	case limits.RungTeam:
+	case limits.RungTeam, limits.RungPersonal:
 		return rungTeam
 	case limits.RungProject:
 		return rungProject

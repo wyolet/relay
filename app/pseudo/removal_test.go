@@ -36,7 +36,7 @@ type removalWorld struct {
 
 func newRemovalWorld() *removalWorld {
 	w := &removalWorld{sa: &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: botID, Name: "bot", Owner: proj}}}
-	w.lane = account.ForServiceAccountIn(botID, "bot", "", proj)
+	w.lane = account.ForServiceAccount(botID, "bot", "", proj)
 	w.lane.Meta.ID = "lane"
 	w.share = &account.Account{Meta: meta.Metadata{ID: "share", Name: "share", Owner: proj}, Spec: account.Spec{HostID: "host-a", SourceAccountID: "src", Holder: &account.Holder{Kind: account.HolderServiceAccount, ID: botID}}}
 	for _, id := range []string{"k1", "k2"} {

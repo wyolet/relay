@@ -23,7 +23,7 @@ A `401` with `X-WR-Origin: upstream` is the provider rejecting a host key, not y
 | `model_not_allowed` | A policy on the caller's ladder does not allow the model; the message names the rung and the policy. | Add the model to that policy's `models`; see [Policies](/concepts/policies). `GET /api/plan-issues` lists configuration Relay found broken, such as a binding outside its owner's scope. |
 | `model_disabled` | The model is disabled in the catalog. | Enable it, or use another model. |
 | `policy_disabled` | The policy bound on the rung the message names is disabled. | Enable the policy, or bind the account to another one. |
-| `subject_disabled` | The caller's team or project is disabled. | Enable it. |
+| `subject_disabled` | The caller's team or project is disabled, or the user who owns the caller's service account. | Enable it. |
 | `duplicate_binding` | Two policy bindings name one account. | Remove the account from all but one binding. |
 | `account_closed` | The request runs in a member account whose membership ended. | Grant the user a role in that team or project again, or use another account. |
 | `account_not_held` | The request named an account its credential may not run in (by `X-WR-Account`, a `/a/<account>/` base URL or the account's host), or an inference token's user has no account in the token's project, as with a token minted before an upgrade or for a project that is gone. | Name an account the credential may use, see [Lanes](/concepts/accounts#lanes); for a token, mint a new one. |

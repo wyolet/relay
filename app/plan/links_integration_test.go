@@ -77,7 +77,7 @@ func TestIntegration_DeletedPoolNarrowsAfterReload(t *testing.T) {
 	must("upsert service account", stores.ServiceAccount.Upsert(ctx, sa))
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "links-policy", Owner: meta.Owner{Kind: meta.OwnerProject, ID: prj.Meta.ID}}, Spec: policy.Spec{PoolIDs: []string{pl.Meta.ID}}}
 	must("upsert policy", stores.Policy.Upsert(ctx, pol))
-	saAccount, err := stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", prj.Meta.ID))
+	saAccount, err := stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", meta.Owner{Kind: meta.OwnerProject, ID: prj.Meta.ID}))
 	must("ensure the service account's account", err)
 	must("upsert binding", stores.PolicyBinding.Upsert(ctx, &policybinding.PolicyBinding{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "links-binding", Owner: meta.Owner{Kind: meta.OwnerProject, ID: prj.Meta.ID}},

@@ -112,7 +112,7 @@ func newPrincipalFixture() principalFixture {
 		signer:       priv,
 		teamAcct:     withID(account.ForTeam(tm.Meta.ID, tm.Meta.Name, "")),
 		projAcct:     withID(account.ForProject(proj.Meta.ID, proj.Meta.Name, "")),
-		saAcct:       withID(account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", proj.Meta.ID)),
+		saAcct:       withID(account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID})),
 		personalAcct: withID(account.Personal(user, "u-"+user)),
 		memberAcct:   withID(account.Member(user, "u-"+user, meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}, proj.Meta.Name, "")),
 	}

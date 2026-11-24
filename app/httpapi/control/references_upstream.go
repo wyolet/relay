@@ -99,7 +99,7 @@ func poolsLosingShares(ctx context.Context, d Deps, goes func(*account.Account) 
 	return out, nil
 }
 
-// sharesOwnedBy matches the shares a team or project receives; a service account's are owned by its project too, so they go with the project.
+// sharesOwnedBy matches the shares a team or project receives; a service account's are owned by the service account's owner too, so they go with it.
 func sharesOwnedBy(kind meta.OwnerKind, id string) func(*account.Account) bool {
 	return func(a *account.Account) bool { return ownedBy(a.Meta.Owner, kind, id) }
 }

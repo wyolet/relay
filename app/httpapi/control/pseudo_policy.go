@@ -118,7 +118,7 @@ func (d Deps) targetAccount(ctx context.Context, t pseudo.Target) (*account.Acco
 			return nil, "", err
 		}
 		pseudo.Record(ctx, sa.Meta.ID, sa)
-		return account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Spec.ProjectID), policyDisplay(sa.Meta), nil
+		return account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Owner), policyDisplay(sa.Meta), nil
 	}
 	return nil, "", refusal(huma.Error400BadRequest("spec.target.kind must be team, project or service-account"), "/spec/target/kind")
 }

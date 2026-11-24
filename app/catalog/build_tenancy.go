@@ -7,6 +7,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // addTeams folds Teams into the snapshot. Teams have no outbound refs, so
@@ -53,27 +54,40 @@ func sanitizeProject(p *project.Project, teams idSet) (*project.Project, bool) {
 // addServiceAccounts folds ServiceAccounts into the snapshot.
 //
 // Indexes: serviceAccountsByID, serviceAccountsByName, and
-// serviceAccountsByProject (sorted by account name).
-func (s *Snapshot) addServiceAccounts(sas []*serviceaccount.ServiceAccount, projects idSet) {
+// serviceAccountsByOwner (sorted by account name).
+func (s *Snapshot) addServiceAccounts(sas []*serviceaccount.ServiceAccount, projects, teams idSet) {
 	for _, sa := range sas {
-		clean, keep := sanitizeServiceAccount(sa, projects)
+		clean, keep := sanitizeServiceAccount(sa, projects, teams)
 		if !keep {
 			continue
 		}
 		s.serviceAccountsByID[clean.Meta.ID] = clean
 		s.serviceAccountsByName[clean.Meta.Name] = clean
-		s.serviceAccountsByProject[clean.Spec.ProjectID] = append(s.serviceAccountsByProject[clean.Spec.ProjectID], clean)
+		s.serviceAccountsByOwner[clean.Meta.Owner] = append(s.serviceAccountsByOwner[clean.Meta.Owner], clean)
 		s.registerRefs(refKey{Kind: refServiceAccount, ID: clean.Meta.ID}, outboundServiceAccountRefs(clean))
 	}
-	for projectID := range s.serviceAccountsByProject {
-		list := s.serviceAccountsByProject[projectID]
+	for owner := range s.serviceAccountsByOwner {
+		list := s.serviceAccountsByOwner[owner]
 		sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
 	}
 }
 
-// sanitizeServiceAccount drops the account when its Project is missing.
-func sanitizeServiceAccount(sa *serviceaccount.ServiceAccount, projects idSet) (*serviceaccount.ServiceAccount, bool) {
-	if !projects(sa.Spec.ProjectID) {
+// sanitizeServiceAccount drops the account when its owner, a Project or a
+// Team, is missing. One owned by a User is kept: users are no catalog rows,
+// and the user's delete takes the account along in Postgres.
+func sanitizeServiceAccount(sa *serviceaccount.ServiceAccount, projects, teams idSet) (*serviceaccount.ServiceAccount, bool) {
+	var ownerExists idSet
+	switch sa.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		ownerExists = projects
+	case meta.OwnerTeam:
+		ownerExists = teams
+	case meta.OwnerUser:
+		ownerExists = func(id string) bool { return id != "" }
+	default:
+		return nil, false
+	}
+	if !ownerExists(sa.Meta.Owner.ID) {
 		return nil, false
 	}
 	clean := *sa

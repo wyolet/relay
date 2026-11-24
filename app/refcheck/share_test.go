@@ -61,14 +61,17 @@ func shareRows() *linkRows {
 	return r
 }
 
-// shareChecker adds service account sa-1 of project p-1 and the users u-alice, u-bob and u-hidden, the last one unseen by the caller.
+// shareChecker adds service account sa-1 of project p-1, service account sa-t of team t-2 and the users u-alice, u-bob and u-hidden, the last one unseen by the caller.
 func (r *linkRows) shareChecker(a authz.Authorizer) Checker {
 	c := r.checker(a)
 	c.Rows.ServiceAccount = func(_ context.Context, id string) *serviceaccount.ServiceAccount {
-		if id != "sa-1" {
-			return nil
+		switch id {
+		case "sa-1":
+			return &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: "sa-1", Name: "sa-1", Owner: projectOne}, Spec: serviceaccount.Spec{ProjectID: "p-1"}}
+		case "sa-t":
+			return &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: "sa-t", Name: "sa-t", Owner: teamTwo}, Spec: serviceaccount.Spec{TeamID: "t-2"}}
 		}
-		return &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: "sa-1", Name: "sa-1", Owner: projectOne}, Spec: serviceaccount.Spec{ProjectID: "p-1"}}
+		return nil
 	}
 	c.Rows.MissingUsers = func(_ context.Context, ids []string) ([]string, error) {
 		var out []string
@@ -127,7 +130,9 @@ func TestShare(t *testing.T) {
 		{"a missing project", as("u-alice"), editsOnly{}, "acct-alice", scope(meta.Owner{Kind: meta.OwnerProject, ID: "p-9"}), `404: project "p-9" not found`},
 		{"a project the sharer may not see", as("u-alice"), editsOnly{hidden: []string{"p-2"}}, "acct-alice", scope(projectTwo), `404: project "p-2" not found`},
 		{"a service account's share is its project's", as("u-alice"), editsOnly{}, "acct-alice", sa("sa-1", projectOne), ""},
-		{"a service account's share in another project", as("u-alice"), editsOnly{}, "acct-alice", sa("sa-1", projectTwo), `400: a share with service account "sa-1" of project "p-1" belongs to its project, project "p-1"; leave the owner out or set it to that project`},
+		{"a service account's share in another project", as("u-alice"), editsOnly{}, "acct-alice", sa("sa-1", projectTwo), `400: a share with service account "sa-1" of project "p-1" belongs to its owner, project "p-1"; leave the owner out or set it to that project`},
+		{"a team's service account's share is its team's", as("u-alice"), editsOnly{}, "acct-alice", sa("sa-t", teamTwo), ""},
+		{"a team's service account's share in a project", as("u-alice"), editsOnly{}, "acct-alice", sa("sa-t", projectTwo), `400: a share with service account "sa-t" of team "t-2" belongs to its owner, team "t-2"; leave the owner out or set it to that team`},
 		{"a missing service account", as("u-alice"), editsOnly{}, "acct-alice", sa("sa-gone", projectOne), `404: service-account "sa-gone" not found`},
 		{"the system as a receiver", as("u-alice"), editsOnly{}, "acct-alice", scope(system), "400: an account is shared with a user, a team, a project or a service account, not a system"},
 		{"sharing with its own owner", as("u-alice"), editsOnly{}, "acct-alice", user("u-alice"), `409 already_reachable: your personal scope already reaches your personal account "acct-alice" as its owner or a scope inside it, so a share adds nothing. List the account in a pool of your personal scope instead.`},

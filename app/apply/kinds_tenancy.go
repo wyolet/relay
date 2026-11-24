@@ -69,13 +69,13 @@ func (b *builder) planKeys(ctx context.Context, keyDocs []*manifest.KeyDTO) erro
 // an update keeps it. The hash, prefix and principal are immutable, as the
 // control API's update keeps them: a document may omit them or repeat the
 // stored value, and is refused if it declares another.
-// checkServiceAccount refuses moving a stored service account to another project, as the control API does, then runs the reference checks.
+// checkServiceAccount refuses moving a stored service account to another owner, as the control API does, then runs the reference checks.
 func (b *builder) checkServiceAccount() func(context.Context, *serviceaccount.ServiceAccount) error {
 	refs := refsFor(b, refcheck.Checker.ServiceAccount)
 	return func(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
 		for _, prev := range b.rows.ServiceAccounts {
-			if prev.Meta.ID == sa.Meta.ID && prev.Spec.ProjectID != sa.Spec.ProjectID {
-				return fmt.Errorf("spec.project cannot change: the service account's account and keys belong to the project it was made in; declare a new service account")
+			if prev.Meta.ID == sa.Meta.ID && prev.Meta.Owner != sa.Meta.Owner {
+				return fmt.Errorf("spec.project, spec.team and spec.user cannot change: the service account's account and keys belong to the owner it was made under; declare a new service account")
 			}
 		}
 		if refs == nil {
@@ -251,7 +251,7 @@ func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 		var err error
 		switch e.Kind {
 		case "Project", "RoleBinding", "ServiceAccount":
-			// The owner mirrors the team, the scope, and the project.
+			// The owner mirrors the team, the scope, and the project or team.
 			if gone[e.owner] {
 				err = authmanifest.ErrScopePruned
 			}
@@ -260,10 +260,10 @@ func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 				err = errOwnerPruned
 			}
 		case "Key":
-			// The key goes with its service account, so its scope is the account's project, whatever the document's owner says.
+			// The key goes with its service account, so its scope is the account's owner, whatever the document's owner says.
 			k, _ := b.declared[e.ID].(*key.Key)
 			if k != nil && k.Spec.Principal.Kind == key.PrincipalServiceAccount {
-				if sa := serviceAccount(ctx, k.Spec.Principal.ID); sa != nil && gone[meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}] {
+				if sa := serviceAccount(ctx, k.Spec.Principal.ID); sa != nil && gone[sa.Meta.Owner] {
 					err = authmanifest.ErrScopePruned
 				} else if goneAccounts[k.Spec.Principal.ID] {
 					err = errPrincipalPruned

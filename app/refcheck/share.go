@@ -48,13 +48,13 @@ func (c Checker) shareRef(ctx context.Context, a *account.Account) error {
 	return c.receiverExists(ctx, a)
 }
 
-// newShare checks what only a new share must meet: the caller sees the receiver, so ids cannot be probed and names do not leak through the share's name; a user receiver's personal account is on; and the receiver does not already reach the account by ownership, which would let it bypass the share's narrowing.
+// newShare checks what only a new share must meet: the caller sees the receiver, so ids cannot be probed and names do not leak through the share's name; the personal account is on of a user receiver, or of the user who owns a service account receiver; and the receiver does not already reach the account by ownership, which would let it bypass the share's narrowing.
 func (c Checker) newShare(ctx context.Context, src, share *account.Account) error {
 	if err := c.receiverVisible(ctx, share.Receiver()); err != nil {
 		return err
 	}
-	if r := share.Receiver(); r.Kind == account.ReceiverUser {
-		if off, name := c.personalAccountOff(ctx, r.ID); off {
+	if o := share.Meta.Owner; o.Kind == meta.OwnerUser {
+		if off, name := c.personalAccountOff(ctx, o.ID); off {
 			return personalAccountOffError("personal accounts are turned off for %s, so a share with them would serve nothing; share with their team or project instead", name)
 		}
 	}
@@ -95,7 +95,7 @@ func (c Checker) receiverVisible(ctx context.Context, r account.Receiver) error 
 	return nil
 }
 
-// receiverExists refuses a share whose receiver names no row; a service account's share must be owned by its project.
+// receiverExists refuses a share whose receiver names no row; a service account's share must be owned by the service account's owner.
 func (c Checker) receiverExists(ctx context.Context, a *account.Account) error {
 	r := a.Receiver()
 	switch r.Kind {
@@ -126,8 +126,8 @@ func (c Checker) receiverExists(ctx context.Context, a *account.Account) error {
 		if sa == nil {
 			return notVisible("service-account", r.ID)
 		}
-		if home := (meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}); a.Meta.Owner != home {
-			return badRequest("a share with %s belongs to its project, %s; leave the owner out or set it to that project", c.rowText(ctx, "service-account", sa.Meta), c.scopeText(ctx, home))
+		if home := sa.Meta.Owner; a.Meta.Owner != home {
+			return badRequest("a share with %s belongs to its owner, %s; leave the owner out or set it to that %s", c.rowText(ctx, "service-account", sa.Meta), c.scopeText(ctx, home), home.Kind)
 		}
 	default:
 		return badRequest("an account is shared with a user, a team, a project or a service account, not a %s", a.Meta.Owner.Kind)

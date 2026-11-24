@@ -108,14 +108,25 @@ func rungLimits(r *Rung, lane, group string) RungLimits {
 	return rl
 }
 
-// counterGroup is the lane's subject and the atomicity group of its caller counters: the team's, so the team's bucket and the lane's ride one store call, else the lane's own.
+// counterGroup is the lane counters with shared off count under, and the atomicity group of the caller counters: the team's, so the team's bucket and the lane's ride one store call, else the lane's own.
 func (cp *CallerPlan) counterGroup() (lane, group string) {
-	lane = cp.Rungs[rungLane].SubjectID
+	lane = cp.counterLane()
 	group = lane
 	if t := cp.Rungs[rungTeam].SubjectID; t != "" {
 		group = t
 	}
 	return lane, group
+}
+
+// counterLane is the lane a counter with shared off counts under, caller side and upstream: the lane's own subject, except that a user and every service account they own are one lane, counted under the user's personal account, so creating service accounts adds no allowance. Until relay has made the personal account, the user's service accounts count under the user.
+func (cp *CallerPlan) counterLane() string {
+	if r := &cp.Rungs[rungTeam]; r.Kind == limits.RungPersonal {
+		if r.SubjectID != "" {
+			return r.SubjectID
+		}
+		return "personal:" + cp.Lane.Meta.Owner.ID
+	}
+	return cp.Rungs[rungLane].SubjectID
 }
 
 // rateLimitCounters is a caller rung's counters for one linked rate limit: per (rule, policy, bound account) when shared, per lane under it otherwise.

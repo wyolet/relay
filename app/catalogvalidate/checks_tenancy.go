@@ -2,6 +2,7 @@ package catalogvalidate
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/wyolet/relay/app/manifest"
 )
@@ -59,18 +60,30 @@ func checkOwnerProject(g *graph, kind, name string, owner manifest.WireOwner) []
 	}}
 }
 
-// checkServiceAccountRefs validates that a ServiceAccount's project exists.
+// checkServiceAccountRefs validates that a ServiceAccount names exactly one owner, a project, a team or a user, and that a project or team it names exists; users are not catalog documents.
 func checkServiceAccountRefs(g *graph) []Issue {
 	var out []Issue
 	for _, sa := range g.ServiceAccounts {
 		src := Ref{Kind: "ServiceAccount", Name: sa.Metadata.Name}
-		if sa.Spec.Project == "" {
+		if len(slices.DeleteFunc([]string{sa.Spec.Project, sa.Spec.Team, sa.Spec.User}, func(n string) bool { return n == "" })) != 1 {
 			out = append(out, Issue{
 				Severity: SeverityError,
 				Kind:     KindIncomplete,
-				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.project"},
-				Message:  "project is required",
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec"},
+				Message:  "exactly one of project, team and user is required",
 			})
+		} else if sa.Spec.User != "" {
+			continue
+		} else if sa.Spec.Team != "" {
+			if _, ok := g.Teams[sa.Spec.Team]; !ok {
+				out = append(out, Issue{
+					Severity: SeverityError,
+					Kind:     KindRefMissing,
+					Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.team"},
+					Target:   Ref{Kind: "Team", Name: sa.Spec.Team},
+					Message:  fmt.Sprintf("team %q not found", sa.Spec.Team),
+				})
+			}
 		} else if _, ok := g.Projects[sa.Spec.Project]; !ok {
 			out = append(out, Issue{
 				Severity: SeverityError,

@@ -131,3 +131,51 @@ func TestTenancy(t *testing.T) {
 	must(t, h.d.CreateProject(ctx, p2))
 	must(t, h.d.DeleteProject(ctx, p2.Meta.ID))
 }
+
+func TestTeamOwnedServiceAccount(t *testing.T) {
+	h := newHarness(t)
+	team := &directory.Team{Meta: directory.Metadata{Name: "core"}}
+	must(t, h.d.CreateTeam(ctx, team))
+	p := &directory.Project{Meta: directory.Metadata{Name: "api"}, Spec: directory.ProjectSpec{TeamID: team.Meta.ID}}
+	must(t, h.d.CreateProject(ctx, p))
+
+	sa := &directory.ServiceAccount{Meta: directory.Metadata{Name: "bot", Owner: authz.Owner{Kind: directory.OwnerProject, ID: p.Meta.ID}},
+		Spec: directory.ServiceAccountSpec{TeamID: team.Meta.ID}}
+	must(t, h.d.CreateServiceAccount(ctx, sa))
+	if sa.Meta.Owner != (authz.Owner{Kind: directory.OwnerTeam, ID: team.Meta.ID}) {
+		t.Fatalf("service account owner = %+v, want its team", sa.Meta.Owner)
+	}
+	got, err := h.s.ServiceAccounts.Get(ctx, sa.Meta.ID)
+	must(t, err)
+	if got.Spec.TeamID != team.Meta.ID || got.Spec.ProjectID != "" || got.Meta.Owner != sa.Meta.Owner {
+		t.Fatalf("stored service account = %+v %+v", got.Meta.Owner, got.Spec)
+	}
+
+	wantErr(t, "account in a missing team", h.d.CreateServiceAccount(ctx, &directory.ServiceAccount{Meta: directory.Metadata{Name: "x"},
+		Spec: directory.ServiceAccountSpec{TeamID: "nope"}}), directory.ErrInvalid)
+	wantErr(t, "account with a project and a team", h.d.CreateServiceAccount(ctx, &directory.ServiceAccount{Meta: directory.Metadata{Name: "x"},
+		Spec: directory.ServiceAccountSpec{ProjectID: p.Meta.ID, TeamID: team.Meta.ID}}), directory.ErrInvalid)
+	wantErr(t, "delete of a team owning an account", h.d.DeleteTeam(ctx, team.Meta.ID), directory.ErrInvalid)
+
+	must(t, h.d.DeleteServiceAccount(ctx, sa.Meta.ID))
+	must(t, h.d.DeleteTeam(ctx, team.Meta.ID))
+}
+
+func TestUserOwnedServiceAccount(t *testing.T) {
+	h := newHarness(t)
+	u := &directory.User{Username: "ada"}
+	must(t, h.d.CreateUser(ctx, nil, u))
+
+	sa := &directory.ServiceAccount{Meta: directory.Metadata{Name: "ada-bot"}, Spec: directory.ServiceAccountSpec{UserID: u.ID}}
+	must(t, h.d.CreateServiceAccount(ctx, sa))
+	if sa.Meta.Owner != (authz.Owner{Kind: directory.OwnerUser, ID: u.ID}) {
+		t.Fatalf("service account owner = %+v, want its user", sa.Meta.Owner)
+	}
+	wantErr(t, "account of a missing user", h.d.CreateServiceAccount(ctx, &directory.ServiceAccount{Meta: directory.Metadata{Name: "x"},
+		Spec: directory.ServiceAccountSpec{UserID: "nope"}}), directory.ErrInvalid)
+
+	must(t, h.d.DeleteUser(ctx, u.ID))
+	if got, _ := h.s.ServiceAccounts.Get(ctx, sa.Meta.ID); got != nil {
+		t.Fatal("user delete left the user's service account")
+	}
+}

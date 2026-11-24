@@ -91,7 +91,7 @@ func newBindingFixture(t *testing.T) (bindingFixture, context.Context) {
 	if err := stores.ServiceAccount.Upsert(ctx, w.account); err != nil {
 		t.Fatalf("upsert service account: %v", err)
 	}
-	w.accountID, err = stores.Account.EnsureManaged(ctx, account.ForServiceAccount(w.account.Meta.ID, w.account.Meta.Name, "", w.mine.Meta.ID))
+	w.accountID, err = stores.Account.EnsureManaged(ctx, account.ForServiceAccount(w.account.Meta.ID, w.account.Meta.Name, "", w.account.Meta.Owner))
 	if err != nil {
 		t.Fatalf("ensure the service account's account: %v", err)
 	}

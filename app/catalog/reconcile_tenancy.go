@@ -7,13 +7,21 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ── ServiceAccount ────────────────────────────────────────────────────────
 
 func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) error {
 	if !sa.IsEnabled() {
-		return c.ApplyServiceAccountDelete(sa.Meta.ID)
+		// Disabling stops it serving but leaves it in its owner's read scope: the traffic it already produced stays theirs.
+		c.rmu.Lock()
+		defer c.rmu.Unlock()
+		s := c.snap.Load().clone()
+		deleteServiceAccount(s, sa.Meta.ID)
+		s.indexServiceAccountOwner(sa)
+		c.snap.Store(s)
+		return nil
 	}
 	if err := sa.Validate(); err != nil {
 		return err
@@ -24,7 +32,8 @@ func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) e
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID))
+	s.indexServiceAccountOwner(sa)
+	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), snapIDs(s.teamsByID))
 	if !keep {
 		deleteServiceAccount(s, sa.Meta.ID)
 		c.snap.Store(s)
@@ -41,6 +50,7 @@ func (c *Catalog) ApplyServiceAccountDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteServiceAccount(s, id)
+	s.dropServiceAccountOwner(id)
 	c.snap.Store(s)
 	return nil
 }
@@ -50,11 +60,11 @@ func insertServiceAccount(s *Snapshot, sa *serviceaccount.ServiceAccount) {
 		s.unregisterRefs(refKey{Kind: refServiceAccount, ID: old.Meta.ID}, outboundServiceAccountRefs(old))
 		delete(s.serviceAccountsByName, old.Meta.Name)
 		delete(s.serviceAccountsByID, old.Meta.ID)
-		removeServiceAccountFromProject(s, old)
+		removeServiceAccountFromOwner(s, old)
 	}
 	s.serviceAccountsByID[sa.Meta.ID] = sa
 	s.serviceAccountsByName[sa.Meta.Name] = sa
-	insertServiceAccountIntoProject(s, sa)
+	insertServiceAccountIntoOwner(s, sa)
 	s.registerRefs(refKey{Kind: refServiceAccount, ID: sa.Meta.ID}, outboundServiceAccountRefs(sa))
 }
 
@@ -66,20 +76,20 @@ func deleteServiceAccount(s *Snapshot, id string) {
 	s.unregisterRefs(refKey{Kind: refServiceAccount, ID: id}, outboundServiceAccountRefs(sa))
 	delete(s.serviceAccountsByID, id)
 	delete(s.serviceAccountsByName, sa.Meta.Name)
-	removeServiceAccountFromProject(s, sa)
+	removeServiceAccountFromOwner(s, sa)
 	cascadeDelete(s, refServiceAccount, id)
 }
 
-// insertServiceAccountIntoProject keeps serviceAccountsByProject sorted by
+// insertServiceAccountIntoOwner keeps serviceAccountsByOwner sorted by
 // account name, the order build() produces.
-func insertServiceAccountIntoProject(s *Snapshot, sa *serviceaccount.ServiceAccount) {
-	list := append(s.serviceAccountsByProject[sa.Spec.ProjectID], sa)
+func insertServiceAccountIntoOwner(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	list := append(s.serviceAccountsByOwner[sa.Meta.Owner], sa)
 	sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
-	s.serviceAccountsByProject[sa.Spec.ProjectID] = list
+	s.serviceAccountsByOwner[sa.Meta.Owner] = list
 }
 
-func removeServiceAccountFromProject(s *Snapshot, sa *serviceaccount.ServiceAccount) {
-	list := s.serviceAccountsByProject[sa.Spec.ProjectID]
+func removeServiceAccountFromOwner(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	list := s.serviceAccountsByOwner[sa.Meta.Owner]
 	out := make([]*serviceaccount.ServiceAccount, 0, len(list))
 	for _, cur := range list {
 		if cur.Meta.ID != sa.Meta.ID {
@@ -87,10 +97,10 @@ func removeServiceAccountFromProject(s *Snapshot, sa *serviceaccount.ServiceAcco
 		}
 	}
 	if len(out) == 0 {
-		delete(s.serviceAccountsByProject, sa.Spec.ProjectID)
+		delete(s.serviceAccountsByOwner, sa.Meta.Owner)
 		return
 	}
-	s.serviceAccountsByProject[sa.Spec.ProjectID] = out
+	s.serviceAccountsByOwner[sa.Meta.Owner] = out
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────
@@ -108,7 +118,14 @@ func (c *Catalog) ApplyTeamUpsert(t *team.Team) error {
 		return err
 	}
 	s := c.snap.Load().clone()
+	// A team's slug is part of the subjects of the service accounts it owns itself, so a rename reaches their keys.
+	old, existed := s.teamsByID[t.Meta.ID]
 	insertTeam(s, t)
+	if existed && old.Meta.Name != t.Meta.Name {
+		for _, sa := range s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}] {
+			reindexKeySubjects(s, key.PrincipalServiceAccount, sa.Meta.ID)
+		}
+	}
 	c.snap.Store(s)
 	return nil
 }

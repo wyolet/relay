@@ -21,7 +21,7 @@ func stepTargets() map[string]*account.Account {
 	team.Meta.ID = "team-acct"
 	project := account.ForProject("proj", "search", "Search")
 	project.Meta.ID = "proj-acct"
-	lane := account.ForServiceAccount("sa", "ci-bot", "CI bot", "proj")
+	lane := account.ForServiceAccount("sa", "ci-bot", "CI bot", meta.Owner{Kind: meta.OwnerProject, ID: "proj"})
 	lane.Meta.ID = "sa-acct"
 	return map[string]*account.Account{"team": team, "project": project, "service-account": lane}
 }

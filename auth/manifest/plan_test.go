@@ -25,10 +25,10 @@ func TestPlanReportsTheChangedFields(t *testing.T) {
 	wantLines(t, actions(p), []string{
 		"update Team/platform metadata.displayName,spec.costCenter",
 		"unchanged Project/search",
-		"update ServiceAccount/indexer spec.budget",
 		"update Role/model-reader spec.rules",
 		"update User/alice spec.email",
 		"unchanged User/bob",
+		"update ServiceAccount/indexer spec.budget",
 		"update Group/eng spec.members",
 		"unchanged RoleBinding/search-readers",
 	})
@@ -94,7 +94,7 @@ func TestPruneLeavesRowsCreatedOutsideManifestsAlone(t *testing.T) {
 	p := e.apply(t, kept, manifest.Options{Prune: true, Selector: map[string]string{"managed-by": "gitops"}})
 	wantLines(t, actions(p), []string{
 		"unchanged Team/platform", "unchanged Project/search",
-		"delete RoleBinding/search-readers", "delete Group/eng", "delete Role/model-reader", "delete ServiceAccount/indexer",
+		"delete RoleBinding/search-readers", "delete Group/eng", "delete ServiceAccount/indexer", "delete Role/model-reader",
 	})
 	s := e.store.Stores()
 	teams, _ := s.Teams.List(ctx)

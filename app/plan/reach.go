@@ -173,7 +173,7 @@ func overridePolicy(v *engine.View, p *policy.Policy) *ExpandedPolicy {
 // foldFor folds acc's ladder as callerPlan does, from r, with over standing in for one rung's policy; nil when acc heads no ladder.
 func foldFor[R *engine.Txn | *engine.View](r R, acc *account.Account, over *rungOverride) *CallerPlan {
 	switch acc.DerivedKind() {
-	case account.KindPersonal, account.KindProvider:
+	case account.KindPersonal, account.KindProvider, account.KindService:
 		if off := personalAccountOff(r, acc.Meta.Owner); off != nil {
 			return refusedPlan(acc, personalOffRefusal(off, accountSubject(acc.Meta.ID)))
 		}

@@ -272,7 +272,7 @@ func TestKeyAccount(t *testing.T) {
 	firstUse := account.Member("u-1", "alice", meta.Owner{Kind: meta.OwnerProject, ID: "p-3"}, "p-3", "")
 	firstUse.Meta.ID = "member-first-use"
 	ownOrg := &account.Account{Meta: meta.Metadata{ID: "own-org", Name: "alice-org", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}}, Spec: account.Spec{HostID: "h-1"}}
-	service := account.ForServiceAccount("sa-1", "ci", "CI", "p-1")
+	service := account.ForServiceAccount("sa-1", "ci", "CI", meta.Owner{Kind: meta.OwnerProject, ID: "p-1"})
 	service.Meta.ID = "service-sa-1"
 	for _, a := range []*account.Account{personal, other, closed, granted, firstUse, ownOrg, service} {
 		rows.accounts[a.Meta.ID] = a

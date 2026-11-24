@@ -19,7 +19,7 @@ func TestPseudoAccess_ShareLeavesSiblingsAlone(t *testing.T) {
 	sib := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: "two-sibling"}, Spec: serviceaccount.Spec{ProjectID: w.projTwo.Meta.ID}}
 	sib.StampOwner()
 	must(t, "sibling", w.stores.ServiceAccount.Upsert(ctx, sib))
-	lane, err := w.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sib.Meta.ID, sib.Meta.Name, "", w.projTwo.Meta.ID))
+	lane, err := w.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sib.Meta.ID, sib.Meta.Name, "", sib.Meta.Owner))
 	must(t, "sibling lane", err)
 	w.loadPlans(t)
 	before := map[string]string{lane: w.reach(t, lane), w.projTwoOwn.Meta.ID: w.reach(t, w.projTwoOwn.Meta.ID)}

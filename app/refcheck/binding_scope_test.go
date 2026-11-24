@@ -20,7 +20,7 @@ func scopeChecker(a authz.Authorizer) Checker {
 	rows := newLinkRows()
 	for _, a := range []*account.Account{
 		account.ForTeam("t-1", "t-1", ""), account.ForProject("p-1", "p-1", ""), account.ForProject("p-2", "p-2", ""),
-		account.ForServiceAccount("sa-p-1", "sa-p-1", "", "p-1"), account.Personal("u-member", "u-member"),
+		account.ForServiceAccount("sa-p-1", "sa-p-1", "", projectOne), account.Personal("u-member", "u-member"),
 		account.Member("u-member", "u-member", projectOne, "p-1", ""),
 	} {
 		a.Meta.ID = "caller-" + a.Meta.Name

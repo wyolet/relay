@@ -75,7 +75,7 @@ type HostKeyReads struct {
 
 // ShareReceiver is the scope a shareWith entry names and where it stands with the account.
 type ShareReceiver struct {
-	// Owner is the owner a share with it takes: the receiver itself, or a service account's project. Name names it in the share's name.
+	// Owner is the owner a share with it takes: the receiver itself, or a service account's owner. Name names it in the share's name.
 	Owner meta.Owner
 	Name  string
 	// Share is the receiver's share of the account when it holds one already.

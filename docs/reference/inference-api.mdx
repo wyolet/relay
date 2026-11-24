@@ -370,7 +370,7 @@ The rung is `team`, `project` or `lane` on the caller side, and `account` for a 
 | Status | `code` | Cause | Fix |
 | --- | --- | --- | --- |
 | `403` | `policy_disabled` | The policy bound on that rung is disabled. Relay does not fall back to another rule. | Enable the policy, or bind the account to another one. |
-| `403` | `subject_disabled` | The caller's team or project is disabled. A disabled user or service account gets `401` instead. | Enable the team or project. |
+| `403` | `subject_disabled` | The caller's team or project is disabled, or the user who owns the caller's service account. A disabled user or service account gets `401` instead. | Enable the team, project or user. |
 | `403` | `duplicate_binding` | Two policy bindings reach one account on that rung. Saving such a binding is normally refused with `409`. | Remove the account from all but one binding. |
 | `403` | `account_closed` | The request's account is a member account whose membership ended: no role binding grants the user that team or project any more. | Grant the membership again, or use another account. |
 | `403` | `personal_account_off` | The request runs in a user's personal account, or a provider account they own personally, while that user's personal accounts are turned off. | Use a key in a team or project account; see [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off). |

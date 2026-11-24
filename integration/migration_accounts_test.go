@@ -45,7 +45,7 @@ func TestMigrateUpRefusesASubjectInTwoBindings(t *testing.T) {
 	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "dup-sa"}, Spec: serviceaccount.Spec{ProjectID: prj.Meta.ID}}
 	sa.StampOwner()
 	accounts := account.NewStore(gen.New(db))
-	saAccount, projAccount := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", prj.Meta.ID), account.ForProject(prj.Meta.ID, prj.Meta.Name, "")
+	saAccount, projAccount := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner), account.ForProject(prj.Meta.ID, prj.Meta.Name, "")
 	for _, step := range []struct {
 		name  string
 		write func() error
@@ -509,7 +509,9 @@ func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 		{"budget", func() error { return budget.NewStore(q).Upsert(ctx, bg) }},
 		{"policy", func() error { return catalogstore.NewPolicyStore(db).Upsert(ctx, pol) }},
 		{"project account", func() error { return bindAccount(account.ForProject(prj.Meta.ID, prj.Meta.Name, "")) }},
-		{"service account's account", func() error { return bindAccount(account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", prj.Meta.ID)) }},
+		{"service account's account", func() error {
+			return bindAccount(account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner))
+		}},
 		{"binding", func() error {
 			pb.Spec.AccountIDs = append(pb.Spec.AccountIDs, acct.Meta.ID)
 			return policybinding.NewStore(db).Upsert(ctx, pb)

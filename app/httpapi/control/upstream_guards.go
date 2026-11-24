@@ -103,10 +103,18 @@ func mergeAccountServerFields(existing, incoming *account.Account) {
 	}
 }
 
-// guardKeyAccount checks a key's lane when an update changes it.
+// guardKeyAccount refuses an update that moves a key to an owner other than its principal's, and checks a key's lane when an update changes it.
 func guardKeyAccount(d Deps) mutationGuard[key.Key] {
 	return func(ctx context.Context, action string, existing, incoming *key.Key) error {
-		if action != "update" || incoming.Spec.AccountID == existing.Spec.AccountID {
+		if action != "update" {
+			return nil
+		}
+		if incoming.Meta.Owner != existing.Meta.Owner {
+			if err := refs(d).KeyOwnedByPrincipal(ctx, incoming); err != nil {
+				return refErr(err)
+			}
+		}
+		if incoming.Spec.AccountID == existing.Spec.AccountID {
 			return nil
 		}
 		if err := refs(d).KeyAccount(ctx, incoming); err != nil {
