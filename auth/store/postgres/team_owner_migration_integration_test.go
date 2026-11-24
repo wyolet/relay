@@ -61,7 +61,7 @@ func TestServiceAccountTeamOwnerDownMigration(t *testing.T) {
 				return
 			}
 
-			wantRefusedDown(t, dsn, 5, 6,"auth migration 000006 down: 1 service accounts are owned by a team; delete them first")
+			wantRefusedDown(t, dsn, 5, 6, "auth migration 000006 down: 1 service accounts are owned by a team; delete them first")
 			must(t, stores.ServiceAccounts.Delete(ctx, bot.Meta.ID))
 			migrateModule(t, dsn, 5)
 			if nullable, teamColumns := serviceAccountOwnerColumns(t, dsn); nullable != "NO" || teamColumns != 0 {
