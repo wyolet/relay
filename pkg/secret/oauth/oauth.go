@@ -204,9 +204,12 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 
 // IsPermanent reports whether a refresh error is unrecoverable without
 // operator re-authorization (the provider rejected the grant itself, e.g.
-// a revoked or reused refresh token), as opposed to a transient
-// network/server failure worth retrying.
+// a revoked or reused refresh token, or a success carrying no access token),
+// as opposed to a transient network/server failure worth retrying.
 func IsPermanent(err error) bool {
+	if errors.Is(err, sdkoauth.ErrNoAccessToken) {
+		return true
+	}
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) {
 		switch re.ErrorCode {
@@ -233,6 +236,9 @@ func IsPermanent(err error) bool {
 type rejectedError struct{ err error }
 
 func (e rejectedError) Error() string {
+	if errors.Is(e.err, sdkoauth.ErrNoAccessToken) {
+		return sdkoauth.ErrNoAccessToken.Error()
+	}
 	msg := "the token endpoint rejected the credential"
 	var re *oauth2.RetrieveError
 	if !errors.As(e.err, &re) {

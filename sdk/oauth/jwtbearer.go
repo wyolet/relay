@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -57,7 +59,7 @@ func (g JWTBearer) Validate() error {
 // bounded by ctx's deadline and at most 15s. Errors carry the token endpoint's
 // HTTP status and RFC 6749 error fields (as *oauth2.RetrieveError), never its
 // response body. An *http.Client set on ctx under oauth2.HTTPClient lends its
-// Transport.
+// Transport. A success response without an access token is ErrNoAccessToken.
 func (g JWTBearer) Token(ctx context.Context) (*Token, error) {
 	if err := g.Validate(); err != nil {
 		return nil, err
@@ -69,11 +71,12 @@ func (g JWTBearer) Token(ctx context.Context) (*Token, error) {
 	if wait <= 0 {
 		return nil, context.DeadlineExceeded
 	}
-	// jwt.Config posts without the request context, so only the client's timeout bounds the call.
-	hc := &http.Client{Timeout: wait}
-	if base, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && base != nil {
-		hc.Transport = base.Transport
+	status := &statusRecorder{next: http.DefaultTransport}
+	if base, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && base != nil && base.Transport != nil {
+		status.next = base.Transport
 	}
+	// jwt.Config posts without the request context, so only the client's timeout bounds the call.
+	hc := &http.Client{Timeout: wait, Transport: status}
 	cfg := &jwt.Config{
 		Email:        g.Issuer,
 		Subject:      g.Subject,
@@ -84,13 +87,53 @@ func (g JWTBearer) Token(ctx context.Context) (*Token, error) {
 		Scopes:       g.Scopes,
 	}
 	tok, err := cfg.TokenSource(context.WithValue(ctx, oauth2.HTTPClient, hc)).Token()
+	// A success the grant cannot read a token from (an id_token alone, say) is the endpoint refusing what was asked, not an outage.
+	if status.code >= 200 && status.code < 300 && status.read.Load() && (err != nil || tok.AccessToken == "") {
+		return nil, ErrNoAccessToken
+	}
 	if err != nil {
 		return nil, withoutBody(err)
 	}
 	if tok.AccessToken == "" {
-		return nil, errors.New("oauth: token endpoint returned no access token")
+		return nil, ErrNoAccessToken
 	}
 	return tok, nil
+}
+
+// ErrNoAccessToken is a token endpoint answering success without an access
+// token, as one does for scopes it does not grant the account.
+var ErrNoAccessToken = errors.New("oauth: the token endpoint returned no access token; check the scopes")
+
+// statusRecorder keeps the status of the one response a token exchange
+// receives, and whether its body was read to the end: a body cut short by
+// the timeout is an outage, not an answer.
+type statusRecorder struct {
+	next http.RoundTripper
+	code int
+	read atomic.Bool
+}
+
+func (s *statusRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := s.next.RoundTrip(r)
+	if err != nil {
+		return nil, err
+	}
+	s.code = resp.StatusCode
+	resp.Body = &eofBody{ReadCloser: resp.Body, read: &s.read}
+	return resp, nil
+}
+
+type eofBody struct {
+	io.ReadCloser
+	read *atomic.Bool
+}
+
+func (b *eofBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if errors.Is(err, io.EOF) {
+		b.read.Store(true)
+	}
+	return n, err
 }
 
 // withoutBody replaces a token-endpoint error with one carrying only its status

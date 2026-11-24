@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -389,6 +390,17 @@ func TestPrepareValue_RejectedGrantFailsTheWrite(t *testing.T) {
 	}
 	if want := "the token endpoint rejected the credential with HTTP 400: invalid_grant (bad signature)"; err.Error() != want {
 		t.Fatalf("err = %q, want %q", err, want)
+	}
+}
+
+func TestPrepareValue_SuccessWithoutAccessTokenFailsTheWrite(t *testing.T) {
+	srv, ctx, _ := tokenServer(t, http.StatusOK, `{"id_token":"x","token_type":"Bearer"}`)
+	_, err := pkgoauth.PrepareValue(ctx, keyFile(srv.URL))
+	if !errors.Is(err, sdkoauth.ErrNoAccessToken) || !pkgoauth.IsPermanent(err) {
+		t.Fatalf("err = %v, want a permanent ErrNoAccessToken", err)
+	}
+	if err.Error() != sdkoauth.ErrNoAccessToken.Error() {
+		t.Fatalf("message = %q, want %q", err, sdkoauth.ErrNoAccessToken)
 	}
 }
 

@@ -33,6 +33,8 @@ func TestHostKeyCreateRefusesABadOAuthValue(t *testing.T) {
 		case "/reject":
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"bad signature"}`))
+		case "/id-token-only":
+			_, _ = w.Write([]byte(`{"id_token":"x","token_type":"Bearer"}`))
 		default:
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
@@ -112,6 +114,14 @@ func TestHostKeyCreateRefusesABadOAuthValue(t *testing.T) {
 		wantStatus(t, w, http.StatusBadRequest)
 		typ, msg := errorBody(t, w)
 		if typ != "invalid_request_error" || !strings.Contains(msg, "invalid_grant") || !strings.Contains(msg, "400") || strings.Contains(msg, "PRIVATE KEY") {
+			t.Fatalf("error %s: %q", typ, msg)
+		}
+	})
+	t.Run("token endpoint returns no access token", func(t *testing.T) {
+		w := create(t, "sa-no-token", keyFile(tokenEndpoint.URL+"/id-token-only"))
+		wantStatus(t, w, http.StatusBadRequest)
+		typ, msg := errorBody(t, w)
+		if typ != "invalid_request_error" || !strings.Contains(msg, "no access token") || !strings.Contains(msg, "scopes") {
 			t.Fatalf("error %s: %q", typ, msg)
 		}
 	})

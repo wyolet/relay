@@ -139,12 +139,9 @@ func TestRefresher_RenewsDueCredential(t *testing.T) {
 	}
 }
 
-func TestRefresher_RenewsDueJWTBearerCredential(t *testing.T) {
-	hits := 0
-	srv := httptest.NewTLSServer(tokenEndpoint(&hits, ""))
-	defer srv.Close()
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client())
-
+// storeDueGrant stores a service-account credential whose token is inside the renewal lead.
+func storeDueGrant(t *testing.T, vault *memVault, id, tokenURL string) *sdkoauth.JWTBearer {
+	t.Helper()
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -156,11 +153,9 @@ func TestRefresher_RenewsDueJWTBearerCredential(t *testing.T) {
 	grant := &sdkoauth.JWTBearer{
 		Issuer:     "svc@example.test",
 		PrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
-		TokenURL:   srv.URL,
+		TokenURL:   tokenURL,
 		Scopes:     []string{"scope-a"},
 	}
-	// The provider config testRefresher wires points at an http URL; a grant never consults it.
-	f, vault, notified := testRefresher(t, "http://unused")
 	b, err := json.Marshal(sdkoauth.Credential{
 		Token:     sdkoauth.Token{AccessToken: "at-old", Expiry: time.Now().Add(5 * time.Minute)},
 		JWTBearer: grant,
@@ -168,7 +163,44 @@ func TestRefresher_RenewsDueJWTBearerCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vault.blobs["k1"] = b
+	vault.blobs[id] = b
+	return grant
+}
+
+// A token endpoint answering success without an access token refuses the grant: the key is reported revoked, not retried.
+func TestRefresher_SuccessWithoutAccessTokenRevokes(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id_token":"x","token_type":"Bearer"}`))
+	}))
+	defer srv.Close()
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client())
+
+	f, vault, notified := testRefresher(t, "http://unused")
+	storeDueGrant(t, vault, "k1", srv.URL)
+
+	f.sweep(ctx)
+	f.sweep(ctx)
+
+	if hits != 1 {
+		t.Fatalf("token endpoint hits = %d, want 1 (revoked keys leave the source)", hits)
+	}
+	if len(*notified) != 1 || (*notified)[0] != "revoked:k1" {
+		t.Fatalf("events = %v, want [revoked:k1]", *notified)
+	}
+}
+
+func TestRefresher_RenewsDueJWTBearerCredential(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(tokenEndpoint(&hits, ""))
+	defer srv.Close()
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client())
+
+	// The provider config testRefresher wires points at an http URL; a grant never consults it.
+	f, vault, notified := testRefresher(t, "http://unused")
+	grant := storeDueGrant(t, vault, "k1", srv.URL)
 
 	f.sweep(ctx)
 

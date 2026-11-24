@@ -164,6 +164,41 @@ func TestJWTBearerRejectionCarriesNoBody(t *testing.T) {
 	}
 }
 
+func TestJWTBearerSuccessWithoutAccessToken(t *testing.T) {
+	for _, body := range []string{`{"id_token":"x","token_type":"Bearer"}`, `{"token_type":"Bearer"}`} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			if _, err := grant(t, srv.URL).Token(withClient(srv)); !errors.Is(err, oauth.ErrNoAccessToken) {
+				t.Fatalf("err = %v, want ErrNoAccessToken", err)
+			}
+		})
+	}
+}
+
+// A success whose body never finishes is an outage, not an answer without a token.
+func TestJWTBearerCutShortSuccessIsNotARefusal(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":`))
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithTimeout(withClient(srv), 300*time.Millisecond)
+	defer cancel()
+	_, err := grant(t, srv.URL).Token(ctx)
+	if err == nil || errors.Is(err, oauth.ErrNoAccessToken) {
+		t.Fatalf("err = %v, want a transport error", err)
+	}
+}
+
 func TestJWTBearerTokenReturnsByContextDeadline(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
