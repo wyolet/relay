@@ -398,9 +398,18 @@ func (c Checker) KeyOwnedByPrincipal(ctx context.Context, k *key.Key) error {
 }
 
 // ServiceAccount stamps the owner (metadata.owner, or the project
-// spec.projectId names) and checks the project or team it names.
+// spec.projectId names) and checks the project, team or user it names.
 func (c Checker) ServiceAccount(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
 	sa.StampOwner()
+	if o := sa.Meta.Owner; o.Kind == meta.OwnerUser && c.Rows.MissingUsers != nil {
+		missing, err := c.Rows.MissingUsers(ctx, []string{o.ID})
+		if err != nil {
+			return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
+		}
+		if len(missing) > 0 {
+			return badRequest("user %q does not exist", o.ID)
+		}
+	}
 	return c.ownerScopeRef(ctx, sa.Meta.Owner)
 }
 
@@ -471,8 +480,13 @@ func (c Checker) Account(ctx context.Context, a *account.Account) error {
 	return nil
 }
 
-// KeyAccount checks the key's default lane against account.TakesKeysOf, and refuses a closed one. An empty accountId takes the principal's own account (Rows.DefaultAccount), made on first use.
+// KeyAccount checks the key's default lane against account.TakesKeysOf, and refuses a closed one. An empty accountId takes the principal's own account (Rows.DefaultAccount), made on first use. A key of a user's service account is refused while that user's personal account is off, as a key in the personal account is: the service account's lane is closed then.
 func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
+	if k.Spec.Principal.Kind == key.PrincipalServiceAccount && k.Meta.Owner.Kind == meta.OwnerUser {
+		if off, name := c.personalAccountOff(ctx, k.Meta.Owner.ID); off {
+			return personalAccountOffError("personal accounts are turned off for %s, so a key of their service account cannot run; use a team or project key", name)
+		}
+	}
 	if k.Spec.AccountID == "" {
 		if c.Rows.DefaultAccount == nil {
 			return nil

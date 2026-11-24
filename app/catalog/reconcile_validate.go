@@ -85,6 +85,8 @@ func validateServiceAccountInSnap(sa *serviceaccount.ServiceAccount, s *Snapshot
 		_, ok = s.projectsByID[o.ID]
 	case meta.OwnerTeam:
 		_, ok = s.teamsByID[o.ID]
+	case meta.OwnerUser:
+		ok = o.ID != ""
 	}
 	if !ok {
 		return fmt.Errorf("serviceaccount %q: owner %s %q does not resolve", sa.Meta.Name, sa.Meta.Owner.Kind, sa.Meta.Owner.ID)

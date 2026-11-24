@@ -138,7 +138,7 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 		t.Errorf("team-owned service account spec = %+v, want spec.teamId mirroring its team", teamSA.Spec)
 	}
 	err := guardServiceAccount(Deps{})(ctx, "create", nil, mismatched)
-	if want := `serviceaccount "sa": owner.kind must be project or team, got "user"`; err != nil || mismatched.Validate() == nil || mismatched.Validate().Error() != want {
+	if want := `serviceaccount "sa": owner is user "u-alice" but spec.projectId names project "` + projectID + `"; a service account has one owner`; err != nil || mismatched.Validate() == nil || mismatched.Validate().Error() != want {
 		t.Errorf("service account with a mismatched owner: guard %v, then Validate %v; want Validate %q", err, mismatched.Validate(), want)
 	}
 }

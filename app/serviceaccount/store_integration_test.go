@@ -1,24 +1,135 @@
 //go:build integration
 
-// store_integration_test.go covers the ServiceAccount store's two owners and migration 000047 against a real Postgres. Run with: make test-integration.
+// store_integration_test.go covers the ServiceAccount store's owners and migrations 000047 and 000048 against a real Postgres. Run with: make test-integration.
 
 package serviceaccount_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/meta"
 )
+
+// A user's service account is stored with the user as its owner; deleting the user deletes it, its account and its keys, and leaves a project's service account alone.
+func TestIntegration_UserServiceAccountGoesWithItsUser(t *testing.T) {
+	ctx := context.Background()
+	pool := storagetest.Pool(t)
+	x := newTenancy(t, pool)
+	users := user.NewStore(pool)
+	ada := &user.User{ID: meta.NewID(), Username: "ada"}
+	if err := users.Upsert(ctx, ada); err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "ada-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: ada.ID}}}
+	inProject := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer"}, Spec: serviceaccount.Spec{ProjectID: x.project.Meta.ID}}
+	for _, sa := range []*serviceaccount.ServiceAccount{bot, inProject} {
+		if err := x.accounts.Upsert(ctx, sa); err != nil {
+			t.Fatalf("upsert %s: %v", sa.Meta.Name, err)
+		}
+	}
+	got, err := x.accounts.Get(ctx, bot.Meta.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get = %v, %v", got, err)
+	}
+	if diff := cmp.Diff(bot, got, ignoreStoreFields); diff != "" || got.Spec.UserID != ada.ID {
+		t.Errorf("round trip (-want +got):\n%s", diff)
+	}
+	q := gen.New(pool)
+	acctID, err := account.NewStore(q).EnsureManaged(ctx, account.ForServiceAccount(bot.Meta.ID, bot.Meta.Name, "", bot.Meta.Owner))
+	if err != nil {
+		t.Fatalf("ensure the bot's account: %v", err)
+	}
+	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "ada-bot-key", Owner: bot.Meta.Owner},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: bot.Meta.ID}, AccountID: acctID, KeyHash: strings.Repeat("a", 64), Prefix: "sk-ada-bot"}}
+	if err := key.NewStore(q).Upsert(ctx, k); err != nil {
+		t.Fatalf("upsert key: %v", err)
+	}
+
+	if err := users.Delete(ctx, ada.ID); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+	if got, err := x.accounts.Get(ctx, bot.Meta.ID); err != nil || got != nil {
+		t.Errorf("the user's service account after the user's delete = %v, %v", got, err)
+	}
+	if got, err := account.NewStore(q).Get(ctx, acctID); err != nil || got != nil {
+		t.Errorf("the bot's account after the user's delete = %v, %v", got, err)
+	}
+	if got, err := key.NewStore(q).Get(ctx, k.Meta.ID); err != nil || got != nil {
+		t.Errorf("the bot's key after the user's delete = %v, %v", got, err)
+	}
+	if got, err := x.accounts.Get(ctx, inProject.Meta.ID); err != nil || got == nil {
+		t.Errorf("a project's service account after a user's delete = %v, %v", got, err)
+	}
+}
+
+// Migration 000048's down refuses while a user owns a service account, and once none does drops the user column; up again restores user owners.
+func TestIntegration_ServiceAccountUserOwnerMigrationDown(t *testing.T) {
+	ctx := context.Background()
+	dsn := storagetest.DB(t)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	x := newTenancy(t, pool)
+	users := user.NewStore(pool)
+	ada := &user.User{ID: meta.NewID(), Username: "ada"}
+	if err := users.Upsert(ctx, ada); err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "ada-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: ada.ID}}}
+	inTeam := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: x.team.Meta.ID}}}
+	for _, sa := range []*serviceaccount.ServiceAccount{bot, inTeam} {
+		if err := x.accounts.Upsert(ctx, sa); err != nil {
+			t.Fatalf("upsert %s: %v", sa.Meta.Name, err)
+		}
+	}
+	pool.Reset()
+
+	if err := storage.MigrateTo(dsn, 47); err == nil || !strings.Contains(err.Error(), "owned by a user") {
+		t.Fatalf("migrate down to 47 = %v, want 000048's refusal", err)
+	}
+	if err := x.accounts.Delete(ctx, bot.Meta.ID); err != nil {
+		t.Fatalf("delete the user's service account: %v", err)
+	}
+	pool.Reset()
+	if err := storage.MigrateTo(dsn, 47); err != nil {
+		t.Fatalf("migrate down to 47: %v", err)
+	}
+	var userColumns int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name = 'service_accounts' AND column_name = 'user_id'`).Scan(&userColumns); err != nil {
+		t.Fatal(err)
+	}
+	if userColumns != 0 {
+		t.Fatalf("user_id columns after the down = %d, want none", userColumns)
+	}
+
+	pool.Reset()
+	if err := storage.MigrateUp(dsn); err != nil {
+		t.Fatalf("migrate up again: %v", err)
+	}
+	if got, err := x.accounts.Get(ctx, inTeam.Meta.ID); err != nil || got == nil || got.Meta.Owner != inTeam.Meta.Owner {
+		t.Fatalf("team service account after down and up = %+v, %v", got, err)
+	}
+	if err := x.accounts.Upsert(ctx, bot); err != nil {
+		t.Fatalf("user service account after down and up: %v", err)
+	}
+}
 
 type tenancy struct {
 	teams    *team.Store

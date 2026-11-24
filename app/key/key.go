@@ -113,7 +113,7 @@ func (k *Key) InGrace(now time.Time) bool {
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is project or team (serviceaccount principal) or user.
+//   - Owner.Kind is the service account's project, team or user (serviceaccount principal), or the user (user principal).
 //   - a user principal is owned by that same user.
 //
 // That the owner is the serviceaccount's own is checked by app/refcheck
@@ -133,9 +133,9 @@ func (k *Key) Validate() error {
 		}
 	case PrincipalServiceAccount:
 		switch k.Meta.Owner.Kind {
-		case meta.OwnerProject, meta.OwnerTeam:
+		case meta.OwnerProject, meta.OwnerTeam, meta.OwnerUser:
 		default:
-			return fmt.Errorf("key %q: serviceaccount-principal key must be owned by the service account's project or team, got %q", k.Meta.Name, k.Meta.Owner.Kind)
+			return fmt.Errorf("key %q: serviceaccount-principal key must be owned by the service account's project, team or user, got %q", k.Meta.Name, k.Meta.Owner.Kind)
 		}
 	}
 	return nil

@@ -84,6 +84,12 @@ func (s *Snapshot) ServiceAccountsForTeam(teamID string) []*serviceaccount.Servi
 	return s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerTeam, ID: teamID}]
 }
 
+// ServiceAccountsForUser returns the accounts the user owns, their personal
+// bots, sorted by name. The returned slice must not be mutated.
+func (s *Snapshot) ServiceAccountsForUser(userID string) []*serviceaccount.ServiceAccount {
+	return s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerUser, ID: userID}]
+}
+
 // AllServiceAccounts returns every ServiceAccount in the snapshot, sorted by slug.
 func (s *Snapshot) AllServiceAccounts() []*serviceaccount.ServiceAccount {
 	out := make([]*serviceaccount.ServiceAccount, 0, len(s.serviceAccountsByID))

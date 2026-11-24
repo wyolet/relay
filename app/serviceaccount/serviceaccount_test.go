@@ -13,6 +13,7 @@ const (
 	projectID = "0195f8a0-0000-7000-8000-000000000001"
 	otherID   = "0195f8a0-0000-7000-8000-000000000002"
 	teamID    = "0195f8a0-0000-7000-8000-000000000003"
+	userID    = "0195f8a0-0000-7000-8000-000000000004"
 )
 
 func TestStampOwner(t *testing.T) {
@@ -39,9 +40,18 @@ func TestStampOwner(t *testing.T) {
 		{"a team owner leaves a stray spec.projectId for Validate",
 			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}, Spec: Spec{ProjectID: projectID}},
 			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}, Spec: Spec{ProjectID: projectID, TeamID: teamID}}},
-		{"an owner of another kind is left for Validate",
+		{"a user owner fills spec.userId and clears spec.teamId",
+			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}}, Spec: Spec{TeamID: teamID}},
+			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}}, Spec: Spec{UserID: userID}}},
+		{"a project owner clears spec.userId",
+			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}}, Spec: Spec{UserID: userID}},
+			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}}, Spec: Spec{ProjectID: projectID}}},
+		{"a user owner leaves a stray spec.projectId for Validate",
 			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: otherID}}, Spec: Spec{ProjectID: projectID}},
-			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: otherID}}, Spec: Spec{ProjectID: projectID}}},
+			ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: otherID}}, Spec: Spec{ProjectID: projectID, UserID: otherID}}},
+		{"an owner of another kind is left for Validate",
+			ServiceAccount{Meta: meta.Metadata{Owner: meta.Global}, Spec: Spec{ProjectID: projectID}},
+			ServiceAccount{Meta: meta.Metadata{Owner: meta.Global}, Spec: Spec{ProjectID: projectID}}},
 	} {
 		got := tc.in
 		got.StampOwner()
@@ -71,10 +81,13 @@ func TestValidate(t *testing.T) {
 		{"team owner with a teamId sent back that is no id", team, Spec{TeamID: "platform"}, ""},
 		{"team owner and a projectId", team, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner is team "0195f8a0-0000-7000-8000-000000000003" but spec.projectId names project "0195f8a0-0000-7000-8000-000000000001"; a service account has one owner`},
 		{"team owner without an id", meta.Owner{Kind: meta.OwnerTeam}, Spec{}, `serviceaccount "indexer": a team owner needs metadata.owner.id`},
-		{"user owner", meta.Owner{Kind: meta.OwnerUser, ID: projectID}, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner.kind must be project or team, got "user"`},
-		{"organization owner", meta.Global, Spec{}, `serviceaccount "indexer": owner.kind must be project or team, got "organization"`},
-		{"system owner", meta.Owner{Kind: meta.OwnerSystem}, Spec{}, `serviceaccount "indexer": owner.kind must be project or team, got "system"`},
-		{"no owner", meta.Owner{}, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner.kind must be project or team, got ""`},
+		{"user owner", meta.Owner{Kind: meta.OwnerUser, ID: userID}, Spec{UserID: userID}, ""},
+		{"user owner with userId left to be stamped", meta.Owner{Kind: meta.OwnerUser, ID: userID}, Spec{}, ""},
+		{"user owner and a projectId", meta.Owner{Kind: meta.OwnerUser, ID: userID}, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner is user "0195f8a0-0000-7000-8000-000000000004" but spec.projectId names project "0195f8a0-0000-7000-8000-000000000001"; a service account has one owner`},
+		{"user owner without an id", meta.Owner{Kind: meta.OwnerUser}, Spec{}, `serviceaccount "indexer": a user owner needs metadata.owner.id`},
+		{"organization owner", meta.Global, Spec{}, `serviceaccount "indexer": owner.kind must be project, team or user, got "organization"`},
+		{"system owner", meta.Owner{Kind: meta.OwnerSystem}, Spec{}, `serviceaccount "indexer": owner.kind must be project, team or user, got "system"`},
+		{"no owner", meta.Owner{}, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner.kind must be project, team or user, got ""`},
 	} {
 		sa := &ServiceAccount{Meta: meta.Metadata{ID: otherID, Name: "indexer", Owner: tc.owner}, Spec: tc.spec}
 		got := ""
@@ -93,13 +106,14 @@ func TestDirectoryRoundTrip(t *testing.T) {
 	for _, sa := range []*ServiceAccount{
 		{Meta: meta.Metadata{ID: otherID, Name: "in-project", Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}}, Spec: Spec{ProjectID: projectID, Enabled: &no}},
 		{Meta: meta.Metadata{ID: otherID, Name: "in-team", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}, Spec: Spec{TeamID: teamID}},
+		{Meta: meta.Metadata{ID: otherID, Name: "of-a-user", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}}, Spec: Spec{UserID: userID}},
 	} {
 		row, err := sa.ToDirectory()
 		if err != nil {
 			t.Fatal(err)
 		}
 		row.StampOwner()
-		if diff := cmp.Diff(directory.ServiceAccountSpec{ProjectID: sa.Spec.ProjectID, TeamID: sa.Spec.TeamID, Enabled: sa.Spec.Enabled}, row.Spec); diff != "" {
+		if diff := cmp.Diff(directory.ServiceAccountSpec{ProjectID: sa.Spec.ProjectID, TeamID: sa.Spec.TeamID, UserID: sa.Spec.UserID, Enabled: sa.Spec.Enabled}, row.Spec); diff != "" {
 			t.Errorf("%s: directory spec (-want +got):\n%s", sa.Meta.Name, diff)
 		}
 		back, err := FromDirectory(row)

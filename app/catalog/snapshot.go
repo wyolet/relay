@@ -177,7 +177,7 @@ type Snapshot struct {
 
 	serviceAccountsByID   map[string]*serviceaccount.ServiceAccount
 	serviceAccountsByName map[string]*serviceaccount.ServiceAccount
-	// serviceAccountsByOwner groups a project's or a team's own accounts (sorted by name).
+	// serviceAccountsByOwner groups a project's, a team's or a user's own accounts (sorted by name).
 	serviceAccountsByOwner map[meta.Owner][]*serviceaccount.ServiceAccount
 
 	groupsByID   map[string]*group.Group

@@ -205,6 +205,10 @@ var graphCases = []struct {
 	}},
 	{name: "service account in a missing project, and in none", add: []manifest.Document{serviceAccount("indexer", "ghost"), serviceAccount("drifter", "")}},
 	{name: "service account of a present team", add: []manifest.Document{teamServiceAccount("deployer", "platform")}},
+	{name: "service account of a user, and of a team and a user", add: []manifest.Document{
+		{ServiceAccount: &manifest.ServiceAccountDTO{Metadata: manifest.WireMeta{Name: "alice-bot"}, Spec: manifest.ServiceAccountSpec{User: "alice"}}},
+		{ServiceAccount: &manifest.ServiceAccountDTO{Metadata: manifest.WireMeta{Name: "both-owners"}, Spec: manifest.ServiceAccountSpec{Team: "platform", User: "alice"}}},
+	}},
 	{name: "service account of a missing team, and of a project and a team", add: []manifest.Document{
 		teamServiceAccount("deployer", "ghost-team"),
 		{ServiceAccount: &manifest.ServiceAccountDTO{Metadata: manifest.WireMeta{Name: "both"}, Spec: manifest.ServiceAccountSpec{Project: "ml-search", Team: "platform"}}},
@@ -494,12 +498,15 @@ var wantReports = map[string][]string{
 	},
 	"rows owned by a present project": nil,
 	"service account in a missing project, and in none": {
-		"error incomplete ServiceAccount/drifter.spec: exactly one of project and team is required",
+		"error incomplete ServiceAccount/drifter.spec: exactly one of project, team and user is required",
 		"error ref_missing ServiceAccount/indexer.spec.project → Project/ghost: project \"ghost\" not found",
 	},
 	"service account of a present team": nil,
+	"service account of a user, and of a team and a user": {
+		"error incomplete ServiceAccount/both-owners.spec: exactly one of project, team and user is required",
+	},
 	"service account of a missing team, and of a project and a team": {
-		"error incomplete ServiceAccount/both.spec: exactly one of project and team is required",
+		"error incomplete ServiceAccount/both.spec: exactly one of project, team and user is required",
 		"error ref_missing ServiceAccount/deployer.spec.team → Team/ghost-team: team \"ghost-team\" not found",
 	},
 	"tier policy linking pools": {

@@ -35,7 +35,7 @@ func TestValidate(t *testing.T) {
 	}{
 		{"serviceaccount principal with project owner", func(*Key) {}, ""},
 		{"serviceaccount principal with team owner", func(k *Key) { k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: otherID} }, ""},
-		{"serviceaccount principal owned by the organization", func(k *Key) { k.Meta.Owner = meta.Global }, `key "k": serviceaccount-principal key must be owned by the service account's project or team, got "organization"`},
+		{"serviceaccount principal owned by the organization", func(k *Key) { k.Meta.Owner = meta.Global }, `key "k": serviceaccount-principal key must be owned by the service account's project, team or user, got "organization"`},
 		{"user principal owned by that user", userKey, ""},
 		{"user principal with the owner id left to be stamped", func(k *Key) { userKey(k); k.Meta.Owner.ID = "" }, ""},
 		{"account id", func(k *Key) { k.Spec.AccountID = otherID }, ""},
@@ -45,7 +45,8 @@ func TestValidate(t *testing.T) {
 		{"account id not an id", func(k *Key) { k.Spec.AccountID = "personal" }, "Key: 'Key.Spec.AccountID' Error:Field validation for 'AccountID' failed on the 'uuid' tag"},
 		{"user principal owned by a different user", func(k *Key) { userKey(k); k.Meta.Owner.ID = otherID }, `key "k": owner.id "01a19bc3-0000-7000-8000-000000000002" does not match principal.id "01a19bc3-0000-7000-8000-000000000001"`},
 		{"user principal owned by a project", func(k *Key) { k.Spec.Principal = Principal{Kind: PrincipalUser, ID: userID} }, `key "k": user-principal key must be owned by a user, got "project"`},
-		{"serviceaccount principal owned by a user", func(k *Key) { k.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: userID} }, `key "k": serviceaccount-principal key must be owned by the service account's project or team, got "user"`},
+		{"serviceaccount principal owned by its user", func(k *Key) { k.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: userID} }, ""},
+		{"serviceaccount principal owned by a host", func(k *Key) { k.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: otherID} }, `key "k": serviceaccount-principal key must be owned by the service account's project, team or user, got "host"`},
 		{"missing keyhash", func(k *Key) { k.Spec.KeyHash = "" }, "Key: 'Key.Spec.KeyHash' Error:Field validation for 'KeyHash' failed on the 'required' tag"},
 		{"short keyhash", func(k *Key) { k.Spec.KeyHash = "deadbeef" }, "Key: 'Key.Spec.KeyHash' Error:Field validation for 'KeyHash' failed on the 'len' tag"},
 		{"non-hex keyhash", func(k *Key) { k.Spec.KeyHash = strings.Repeat("z", 64) }, "Key: 'Key.Spec.KeyHash' Error:Field validation for 'KeyHash' failed on the 'hexadecimal' tag"},

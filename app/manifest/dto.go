@@ -151,8 +151,9 @@ func (d *SettingDTO) SpecJSON() (json.RawMessage, error) {
 	return json.Marshal(v)
 }
 
-// ServiceAccountDTO is the wire form of a ServiceAccount. Spec.Project and
-// Spec.Team are *names*; exactly one of them names the owner.
+// ServiceAccountDTO is the wire form of a ServiceAccount. Spec.Project,
+// Spec.Team and Spec.User are *names* (a username for the user); exactly one
+// of them names the owner.
 type ServiceAccountDTO struct {
 	APIVersion string             `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string             `json:"kind"       yaml:"kind"`
@@ -163,6 +164,7 @@ type ServiceAccountDTO struct {
 type ServiceAccountSpec struct {
 	Project string `json:"project,omitempty" yaml:"project,omitempty"`
 	Team    string `json:"team,omitempty"    yaml:"team,omitempty"`
+	User    string `json:"user,omitempty"    yaml:"user,omitempty"`
 	Enabled *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 

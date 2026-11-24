@@ -6,6 +6,7 @@ package authz_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
@@ -221,6 +222,42 @@ func TestRBACTable(t *testing.T) {
 	}
 	if rbac.Visible(ctxOf(bob), "usage", "", *projectOwner(p2ID)) {
 		t.Error("bob sees a sibling project's usage")
+	}
+}
+
+// A user's service account, its account and its keys are the user's personal rows: the user holds every verb on them, and no other user does through a team or project role, the team admin included; the admin token and a global admin do.
+func TestRBACUserServiceAccountRows(t *testing.T) {
+	cat := newFixture(t)
+	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	bobs := userOwner(bobID)
+	bob := actorOf(bobID, subjectsOf(bobID))
+	others := map[string]*actor.Actor{
+		"a team admin":   actorOf(aliceID, subjectsOf(aliceID)),
+		"a team viewer":  actorOf(carolID, subjectsOf(carolID)),
+		"a group admin":  actorOf(frankID, subjectsOf(frankID, "ml")),
+		"a stranger":     actorOf(ids.New(), subjectsOf(ids.New())),
+		"a service acct": actorOf(sa1ID, []string{"serviceaccount:" + sa1ID, catalog.SubjectServiceAccounts, catalog.SubjectAuthenticated}),
+	}
+	for _, kind := range []string{"service-accounts", "accounts", "keys"} {
+		res := authz.Resource{Kind: strings.TrimSuffix(kind, "s"), Owner: bobs}
+		for _, verb := range []string{"get", "list", "create", "update", "delete"} {
+			if err := rbac.Authorize(ctxOf(bob), kind+"."+verb, res); err != nil {
+				t.Errorf("owner %s.%s = %v, want allowed", kind, verb, err)
+			}
+			for name, who := range others {
+				if err := rbac.Authorize(ctxOf(who), kind+"."+verb, res); !errors.Is(err, authz.ErrForbidden) {
+					t.Errorf("%s %s.%s = %v, want forbidden", name, kind, verb, err)
+				}
+			}
+			for name, who := range map[string]*actor.Actor{"the admin token": {AdminToken: true}, "an admin": actorOf(ids.New(), nil, user.RoleAdmin)} {
+				if err := rbac.Authorize(ctxOf(who), kind+"."+verb, res); err != nil {
+					t.Errorf("%s %s.%s = %v, want allowed", name, kind, verb, err)
+				}
+			}
+		}
+		if rbac.Visible(ctxOf(others["a team admin"]), strings.TrimSuffix(kind, "s"), "", *bobs) {
+			t.Errorf("a team admin sees a %s of another user", kind)
+		}
 	}
 }
 

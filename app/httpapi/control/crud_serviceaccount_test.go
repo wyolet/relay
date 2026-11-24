@@ -101,9 +101,34 @@ func TestCreateServiceAccountForEitherOwner(t *testing.T) {
 			`serviceaccount "x": owner is team "` + teamID + `" but spec.projectId names project "` + projectID + `"; a service account has one owner`},
 		{"a team owner without an id", `{"metadata":{"name":"x","owner":{"kind":"team"}},"spec":{}}`, `serviceaccount "x": a team owner needs metadata.owner.id`},
 		{"no owner at all", `{"metadata":{"name":"x"},"spec":{}}`, `serviceaccount "x": a project owner needs metadata.owner.id or spec.projectId`},
-		{"a user owner", `{"metadata":{"name":"x","owner":{"kind":"user"}},"spec":{"projectId":"` + projectID + `"}}`, `serviceaccount "x": owner.kind must be project or team, got "user"`},
+		{"a user owner and a spec.projectId", `{"metadata":{"name":"x","owner":{"kind":"user"}},"spec":{"projectId":"` + projectID + `"}}`,
+			`serviceaccount "x": owner is user "u-alice" but spec.projectId names project "` + projectID + `"; a service account has one owner`},
+		{"another user as the owner", `{"metadata":{"name":"x","owner":{"kind":"user","id":"u-bob"}},"spec":{}}`, `owner.id must be empty or match the calling user`},
 	} {
 		wantAPIError(t, scopeReq(t, h, "alice", http.MethodPost, "/service-accounts", tc.body), http.StatusBadRequest, "", tc.want)
+	}
+}
+
+// A user creates a service account they own, their personal bot; the admin token may create one for any user, a user only for themselves.
+func TestCreateUserServiceAccount(t *testing.T) {
+	h, _ := serviceAccountHarness(t)
+	for _, tc := range []struct {
+		name, who, body string
+		owner           meta.Owner
+	}{
+		{"the caller's own", "alice", `{"metadata":{"name":"alice-bot","owner":{"kind":"user"}},"spec":{}}`, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}},
+		{"the caller's own by id", "bob", `{"metadata":{"name":"bob-bot","owner":{"kind":"user","id":"u-bob"}},"spec":{}}`, meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}},
+		{"another user's by the admin token", "token", `{"metadata":{"name":"bob-bot-2","owner":{"kind":"user","id":"u-bob"}},"spec":{}}`, meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}},
+	} {
+		w := scopeReq(t, h, tc.who, http.MethodPost, "/service-accounts", tc.body)
+		if w.Code != http.StatusCreated {
+			t.Errorf("%s: create = %d %s, want 201", tc.name, w.Code, w.Body)
+			continue
+		}
+		got := decodeServiceAccount(t, w.Body.Bytes())
+		if diff := cmp.Diff(serviceaccount.Spec{UserID: tc.owner.ID}, got.Spec); diff != "" || got.Meta.Owner != tc.owner {
+			t.Errorf("%s: owner %+v, spec (-want +got):\n%s", tc.name, got.Meta.Owner, diff)
+		}
 	}
 }
 
@@ -113,7 +138,8 @@ func TestUpdateServiceAccountKeepsItsOwner(t *testing.T) {
 	team := meta.Owner{Kind: meta.OwnerTeam, ID: teamID}
 	inTeam := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer", Owner: team}, Spec: serviceaccount.Spec{TeamID: teamID}}
 	inProject := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "ci", Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}}, Spec: serviceaccount.Spec{ProjectID: projectID}}
-	h, store := serviceAccountHarness(t, inTeam, inProject)
+	ofAlice := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}, Spec: serviceaccount.Spec{UserID: "u-alice"}}
+	h, store := serviceAccountHarness(t, inTeam, inProject, ofAlice)
 	teamPath, projectPath := "/service-accounts/by-id/"+inTeam.Meta.ID, "/service-accounts/by-id/"+inProject.Meta.ID
 
 	w := scopeReq(t, h, "alice", http.MethodPut, teamPath, `{"metadata":{"name":"deployer","displayName":"Deployer"},"spec":{}}`)
@@ -132,7 +158,7 @@ func TestUpdateServiceAccountKeepsItsOwner(t *testing.T) {
 	}
 
 	inUse := func(name, kind string) string {
-		return fmt.Sprintf("service account %q stays in the %s it was made in: its account and keys belong there; create a new service account in the other team or project", name, kind)
+		return fmt.Sprintf("service account %q stays with the %s it was made under: its account and keys belong there; create a new service account for the other owner", name, kind)
 	}
 	wantAPIError(t, scopeReq(t, h, "alice", http.MethodPut, teamPath, `{"metadata":{"name":"deployer","owner":{"kind":"team","id":"`+otherTeamID+`"}},"spec":{}}`),
 		http.StatusConflict, "resource_in_use", inUse("deployer", "team"))
@@ -140,6 +166,10 @@ func TestUpdateServiceAccountKeepsItsOwner(t *testing.T) {
 		http.StatusConflict, "resource_in_use", inUse("deployer", "team"))
 	wantAPIError(t, scopeReq(t, h, "alice", http.MethodPut, projectPath, `{"metadata":{"name":"ci","owner":{"kind":"team","id":"`+teamID+`"}},"spec":{}}`),
 		http.StatusConflict, "resource_in_use", inUse("ci", "project"))
+	wantAPIError(t, scopeReq(t, h, "alice", http.MethodPut, "/service-accounts/by-id/"+ofAlice.Meta.ID, `{"metadata":{"name":"alice-bot","owner":{"kind":"team","id":"`+teamID+`"}},"spec":{}}`),
+		http.StatusConflict, "resource_in_use", inUse("alice-bot", "user"))
+	wantAPIError(t, scopeReq(t, h, "alice", http.MethodPut, teamPath, `{"metadata":{"name":"deployer","owner":{"kind":"user"}},"spec":{}}`),
+		http.StatusConflict, "resource_in_use", inUse("deployer", "team"))
 	wantAPIError(t, scopeReq(t, h, "alice", http.MethodPut, teamPath, `{"metadata":{"name":"deployer"},"spec":{"projectId":"`+projectID+`"}}`),
 		http.StatusBadRequest, "", `serviceaccount "deployer": owner is team "`+teamID+`" but spec.projectId names project "`+projectID+`"; a service account has one owner`)
 

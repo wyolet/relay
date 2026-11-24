@@ -73,7 +73,8 @@ func (s *Snapshot) addServiceAccounts(sas []*serviceaccount.ServiceAccount, proj
 }
 
 // sanitizeServiceAccount drops the account when its owner, a Project or a
-// Team, is missing.
+// Team, is missing. One owned by a User is kept: users are no catalog rows,
+// and the user's delete takes the account along in Postgres.
 func sanitizeServiceAccount(sa *serviceaccount.ServiceAccount, projects, teams idSet) (*serviceaccount.ServiceAccount, bool) {
 	var ownerExists idSet
 	switch sa.Meta.Owner.Kind {
@@ -81,6 +82,8 @@ func sanitizeServiceAccount(sa *serviceaccount.ServiceAccount, projects, teams i
 		ownerExists = projects
 	case meta.OwnerTeam:
 		ownerExists = teams
+	case meta.OwnerUser:
+		ownerExists = func(id string) bool { return id != "" }
 	default:
 		return nil, false
 	}

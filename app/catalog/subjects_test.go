@@ -112,6 +112,36 @@ func TestBuild_ServiceAccountAndKeyMembership(t *testing.T) {
 	}
 }
 
+// A service account a user owns is kept and indexed under the user, carries no group of its owner, and its keys resolve; deleting it takes it from the index.
+func TestBuild_UserServiceAccount(t *testing.T) {
+	f := newSubjectsFixture()
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.alice}}}
+	bot.StampOwner()
+	k := &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-bot-key", Owner: bot.Meta.Owner},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: bot.Meta.ID}, KeyHash: hash("c")},
+	}
+	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{f.k, k}, rcList{}, bndList{})
+	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa, bot}, grpList{f.group}, roleList{}, rbList{}, pbList{})
+	must(t, c.Reload(context.Background()))
+	s := c.Current()
+
+	if got := namesOf(s.ServiceAccountsForUser(f.alice), func(sa *serviceaccount.ServiceAccount) string { return sa.Meta.Name }); !slices.Equal(got, []string{"alice-bot"}) {
+		t.Errorf("ServiceAccountsForUser = %v, want [alice-bot]", got)
+	}
+	want := []string{"serviceaccount:" + bot.Meta.ID, SubjectServiceAccounts, SubjectAuthenticated}
+	if got := s.SubjectsForServiceAccount(bot.Meta.ID); !slices.Equal(got, want) {
+		t.Errorf("SubjectsForServiceAccount = %v, want %v", got, want)
+	}
+	if got, _ := s.KeyByHash(hash("c")); got == nil {
+		t.Error("key of a user's service account should be in the hash index")
+	}
+	must(t, c.ApplyServiceAccountDelete(bot.Meta.ID))
+	if got := c.Current().ServiceAccountsForUser(f.alice); len(got) != 0 {
+		t.Errorf("ServiceAccountsForUser after its delete = %v, want none", got)
+	}
+}
+
 // teamRows is a team source whose rows a test changes after the catalog loads, as the store's would.
 type teamRows []*team.Team
 

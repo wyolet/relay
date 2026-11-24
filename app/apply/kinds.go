@@ -183,6 +183,10 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := b.planTenancy(ctx, teamDocs, projDocs); err != nil {
 		return err
 	}
+	// Users before the service accounts a user owns, and before groups, keys and bindings, which name them.
+	if err := b.planUsers(ctx, userDocs); err != nil {
+		return err
+	}
 	if err := b.planServiceAccounts(ctx, saDocs); err != nil {
 		return err
 	}
@@ -190,10 +194,6 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		providers: provDocs, hosts: hostDocs, accounts: accDocs, rateLimits: rlDocs, budgets: budDocs,
 		hostKeys: hkDocs, pools: poolDocs, models: mDocs, pricings: prDocs, bindings: bndDocs, policies: polDocs,
 	}); err != nil {
-		return err
-	}
-	// Accounts before groups, keys and bindings, which name them.
-	if err := b.planUsers(ctx, userDocs); err != nil {
 		return err
 	}
 	if err := b.planGroupsAndRoles(ctx, grpDocs, roleDocs); err != nil {

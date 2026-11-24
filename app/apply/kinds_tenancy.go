@@ -75,7 +75,7 @@ func (b *builder) checkServiceAccount() func(context.Context, *serviceaccount.Se
 	return func(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
 		for _, prev := range b.rows.ServiceAccounts {
 			if prev.Meta.ID == sa.Meta.ID && prev.Meta.Owner != sa.Meta.Owner {
-				return fmt.Errorf("spec.project and spec.team cannot change: the service account's account and keys belong to the project or team it was made in; declare a new service account")
+				return fmt.Errorf("spec.project, spec.team and spec.user cannot change: the service account's account and keys belong to the owner it was made under; declare a new service account")
 			}
 		}
 		if refs == nil {
