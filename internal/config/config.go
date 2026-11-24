@@ -166,6 +166,9 @@ type Config struct {
 	// PlanResync is how often the plans are listed again from Postgres and compared with what they hold (RELAY_PLAN_RESYNC_S, default 600; 0 disables), the safety net for a catalog notification that never arrived. It publishes only when a row differs.
 	PlanResync time.Duration
 
+	// PlanCheckTimeout bounds how long the control plane checks a set of rows against the plans before writing it, the wait for another check included (RELAY_PLAN_CHECK_TIMEOUT_MS, default 5000); past it the write answers 503.
+	PlanCheckTimeout time.Duration
+
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
@@ -546,6 +549,11 @@ func Load() (*Config, error) {
 		return nil, err
 	} else {
 		cfg.PlanResync = time.Duration(v) * time.Second
+	}
+	if v, err := envPositiveInt("RELAY_PLAN_CHECK_TIMEOUT_MS", 5000); err != nil {
+		return nil, err
+	} else {
+		cfg.PlanCheckTimeout = time.Duration(v) * time.Millisecond
 	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they take a floor of 0 rather than envPositiveInt.

@@ -8,12 +8,16 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // synthetic is a deployment at the sizes the plans are designed for: 50k keys, 10k principals, 2k policies, 200 pools, 1k credentials, 100 accounts, over 500 models on 20 hosts.
@@ -161,6 +165,71 @@ func BenchmarkPlans(b *testing.B) {
 			apply(h, alt[i%2])
 		}
 	})
+}
+
+// BenchmarkCheck measures one plan check of an agent's rows (service account, lane, pool, policy, binding, key) over 2k models on 4k bindings, 500 credentials, 300 service accounts with a key each. Run with a short fixed -benchtime: each check builds every plan.
+func BenchmarkCheck(b *testing.B) {
+	w := &world{}
+	var provs []*provider.Provider
+	for i := range 5 {
+		provs = append(provs, w.provider(fmt.Sprintf("prov-%d", i)))
+	}
+	var hosts []*host.Host
+	for i := range 20 {
+		hosts = append(hosts, w.host(fmt.Sprintf("host-%d", i)))
+	}
+	for i := range 2000 {
+		m := w.model(provs[i%5], fmt.Sprintf("model-%d", i))
+		for j := range 2 {
+			h := hosts[(i+j*7)%20]
+			w.bind(m, h)
+			w.price(m, h)
+		}
+	}
+	var accounts []*account.Account
+	for i := range 100 {
+		a := w.account(hosts[i%20])
+		accounts = append(accounts, a)
+		for range 5 {
+			w.cred(hosts[i%20], a, system)
+		}
+	}
+	var pools []*pool.Pool
+	for i := range 100 {
+		p := w.pool(hosts[i%20])
+		p.Spec.AccountIDs = []string{accounts[i].Meta.ID}
+		pools = append(pools, p)
+	}
+	var proj *project.Project
+	for ti := range 20 {
+		t := w.team()
+		w.bindPolicy(w.policy(fmt.Sprintf("team-%d", ti), policy.Spec{PoolIDs: []string{pools[ti%100].Meta.ID, pools[(ti+50)%100].Meta.ID}}), w.teamAccount(t))
+		for range 5 {
+			proj = w.project(t)
+			for range 3 {
+				w.saKey(w.sa(proj))
+			}
+		}
+	}
+	h := w.start(b)
+	b.Logf("rows: models=%d bindings=%d credentials=%d service accounts=%d keys=%d", len(w.models), len(w.bindings), len(w.creds), len(w.sas), len(w.keys))
+
+	scope := meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}
+	sa := &serviceaccount.ServiceAccount{Meta: md("agent-"+seq(), scope), Spec: serviceaccount.Spec{ProjectID: proj.Meta.ID}}
+	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", proj.Meta.ID)
+	lane.Meta.ID = meta.NewID()
+	agentPool := &pool.Pool{Meta: md("agent-pool-"+seq(), scope), Spec: pool.Spec{HostID: hosts[0].Meta.ID, AccountIDs: []string{accounts[0].Meta.ID}}}
+	pol := &policy.Policy{Meta: md("agent-policy-"+seq(), scope), Spec: policy.Spec{PoolIDs: []string{agentPool.Meta.ID}, Models: []string{"prov-0"}}}
+	pb := &policybinding.PolicyBinding{Meta: md("agent-pb-"+seq(), scope), Spec: policybinding.Spec{PolicyID: pol.Meta.ID, AccountIDs: []string{lane.Meta.ID}}}
+	k := &key.Key{Meta: md("agent-key-"+seq(), scope), Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID}, AccountID: lane.Meta.ID, KeyHash: keyHash("agent")}}
+	rows := []any{sa, lane, agentPool, pol, pb, k}
+
+	c := NewCheck(false, time.Minute)
+	for b.Loop() {
+		if _, err := c.NewIssues(b.Context(), h.e.View(), rows); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 // BenchmarkRequestPath is the read side a request walks once the route is filled: key lookup, route hit, the first hop's counters.
