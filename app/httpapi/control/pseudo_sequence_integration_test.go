@@ -8,16 +8,20 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/pseudo"
+	"github.com/wyolet/relay/auth/apikey"
 	"github.com/wyolet/relay/pkg/catalogkind/pricing"
+	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// The four kinds the way a team admin uses them, one after another: bring a provider key for the team, make an agent drawing on that account, narrow the agent's access to a provider's models, cap its spend. Each answer says what it did, and the plans end with no issue.
+// The five kinds the way a team admin uses them, one after another: bring a provider key for the team, make an agent drawing on that account, narrow the agent's access to a provider's models, cap its spend, remove it. Each answer says what it did, the removed agent's key stops authenticating while the team's rows stay, and the plans end with no issue.
 func TestPseudoKinds_InSequence(t *testing.T) {
 	w := newHostKeyFormWorld(t, func(d *Deps) { d.PseudoKinds = []string{"all"} })
 	send := func(path string, body any, out any) *httptest.ResponseRecorder {
@@ -78,6 +82,44 @@ func TestPseudoKinds_InSequence(t *testing.T) {
 	}
 
 	w.loadPlans(t)
+	hash := apikey.Hash(agent.Key.Plaintext)
+	if engine.Get[plan.KeyPlanIndex](w.plans.View(), "").Lookup(hash, time.Now()) == nil {
+		t.Fatal("the agent's key does not authenticate before the removal")
+	}
+	var dry, removal PseudoAgentRemovalAnswer
+	rec = send("/pseudo-agent-removals?dryRun=true", map[string]any{"spec": map[string]any{"serviceAccountId": agent.ServiceAccount.ID}}, &dry)
+	wantStatus(t, rec, http.StatusOK)
+	rec = send("/pseudo-agent-removals", map[string]any{"spec": map[string]any{"serviceAccountId": agent.ServiceAccount.ID, "expect": idsOf(dry.Deleted)}}, &removal)
+	wantStatus(t, rec, http.StatusOK)
+	var removed []string
+	for _, r := range removal.Deleted {
+		removed = append(removed, r.Kind+"/"+r.ID)
+	}
+	wantRemoved := []string{"key/" + agent.Key.ID, "policy-binding/" + removal.Deleted[1].ID, "service-account/" + agent.ServiceAccount.ID, "account/" + agent.Account.ID, "policy/" + agent.Policy.ID, "pool/" + agent.Pools[0].ID}
+	if diff := cmp.Diff(wantRemoved, removed); diff != "" || len(removal.Kept) != 0 || removal.Warnings == nil {
+		t.Errorf("removal kept %v, warnings %v, deleted (-want +got):\n%s", removal.Kept, removal.Warnings, diff)
+	}
+	ctx := t.Context()
+	if p, err := w.stores.Policy.Get(ctx, agent.Policy.ID); err != nil || p != nil {
+		t.Errorf("the labelled policy is still stored: %+v %v", p, err)
+	}
+	if p, err := w.stores.Pool.Get(ctx, agent.Pools[0].ID); err != nil || p != nil {
+		t.Errorf("the labelled pool is still stored: %+v %v", p, err)
+	}
+	if a, err := w.stores.Account.Get(ctx, key.Account.ID); err != nil || a == nil {
+		t.Errorf("the team's account is gone: %v", err)
+	}
+	if k, err := w.stores.HostKey.Get(ctx, key.HostKey.ID); err != nil || k == nil {
+		t.Errorf("the team's host key is gone: %v", err)
+	}
+	if b, err := w.stores.Budget.Get(ctx, limits.Budget.ID); err != nil || b == nil {
+		t.Errorf("the project's budget is gone: %v", err)
+	}
+
+	w.loadPlans(t)
+	if kp := engine.Get[plan.KeyPlanIndex](w.plans.View(), "").Lookup(hash, time.Now()); kp != nil {
+		t.Errorf("the deleted key still authenticates as %+v", kp)
+	}
 	req := httptest.NewRequest(http.MethodGet, "/plan-issues", nil)
 	req.Header.Set("X-Test-User", "root")
 	got := httptest.NewRecorder()

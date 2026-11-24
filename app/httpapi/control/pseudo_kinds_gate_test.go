@@ -13,7 +13,7 @@ import (
 
 // Each pseudo kind is absent from the document and answers 404 unless RELAY_PSEUDO_KINDS names it, alone or as all; a served one is documented without problems and answers its warnings.
 func TestPseudoKinds_EachAloneAllAndNone(t *testing.T) {
-	paths := map[string]string{"agents": "/pseudo-agents", "access": "/pseudo-access", "limits": "/pseudo-limits", "host-keys": "/pseudo-host-keys"}
+	paths := map[string]string{"agents": "/pseudo-agents", "access": "/pseudo-access", "limits": "/pseudo-limits", "host-keys": "/pseudo-host-keys", "agent-removals": "/pseudo-agent-removals"}
 	cases := map[string][]string{"none": nil, "all": {"all"}}
 	for kind := range paths {
 		cases[kind+" alone"] = []string{kind}
@@ -45,17 +45,21 @@ func TestPseudoKinds_EachAloneAllAndNone(t *testing.T) {
 					t.Errorf("%s: documented %v, POST %d; want %v, %d", path, inDoc, rec.Code, served, want)
 				}
 				if served && !answersWarnings(t, doc, path) {
-					t.Errorf("%s: the 201 answer declares no warnings", path)
+					t.Errorf("%s: the success answer declares no warnings", path)
 				}
 			}
 		})
 	}
 }
 
-// answersWarnings reports whether the 201 answer of the POST at path declares a required warnings list.
+// answersWarnings reports whether the success answer of the POST at path (201, or 200 for a route that makes nothing) declares a required warnings list.
 func answersWarnings(t *testing.T, doc map[string]any, path string) bool {
 	t.Helper()
-	ref := responseRef(operation(t, doc, path, "post"), "201")
+	op := operation(t, doc, path, "post")
+	ref := responseRef(op, "201")
+	if responses, _ := op["responses"].(map[string]any); responses["201"] == nil {
+		ref = responseRef(op, "200")
+	}
 	schemas, _ := doc["components"].(map[string]any)["schemas"].(map[string]any)
 	s, _ := schemas[strings.TrimPrefix(ref, "#/components/schemas/")].(map[string]any)
 	props, _ := s["properties"].(map[string]any)
