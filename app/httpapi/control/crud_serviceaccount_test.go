@@ -130,6 +130,8 @@ func TestCreateUserServiceAccount(t *testing.T) {
 			t.Errorf("%s: owner %+v, spec (-want +got):\n%s", tc.name, got.Meta.Owner, diff)
 		}
 	}
+	wantAPIError(t, scopeReq(t, h, "token", http.MethodPost, "/service-accounts", `{"metadata":{"name":"x","owner":{"kind":"user"}},"spec":{}}`), http.StatusBadRequest, "",
+		`serviceaccount "x": owner.kind must be project, team or user, got "organization"; the admin token is no user, so a user owner needs metadata.owner.id`)
 }
 
 // A service account keeps the owner it was made under: a team's stays the team's, and a project's never moves to a team.

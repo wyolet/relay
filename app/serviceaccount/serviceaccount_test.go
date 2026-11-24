@@ -85,7 +85,7 @@ func TestValidate(t *testing.T) {
 		{"user owner with userId left to be stamped", meta.Owner{Kind: meta.OwnerUser, ID: userID}, Spec{}, ""},
 		{"user owner and a projectId", meta.Owner{Kind: meta.OwnerUser, ID: userID}, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner is user "0195f8a0-0000-7000-8000-000000000004" but spec.projectId names project "0195f8a0-0000-7000-8000-000000000001"; a service account has one owner`},
 		{"user owner without an id", meta.Owner{Kind: meta.OwnerUser}, Spec{}, `serviceaccount "indexer": a user owner needs metadata.owner.id`},
-		{"organization owner", meta.Global, Spec{}, `serviceaccount "indexer": owner.kind must be project, team or user, got "organization"`},
+		{"organization owner", meta.Global, Spec{}, `serviceaccount "indexer": owner.kind must be project, team or user, got "organization"; the admin token is no user, so a user owner needs metadata.owner.id`},
 		{"system owner", meta.Owner{Kind: meta.OwnerSystem}, Spec{}, `serviceaccount "indexer": owner.kind must be project, team or user, got "system"`},
 		{"no owner", meta.Owner{}, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner.kind must be project, team or user, got ""`},
 	} {

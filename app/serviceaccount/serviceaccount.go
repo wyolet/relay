@@ -91,6 +91,9 @@ func (s *ServiceAccount) Validate() error {
 		if s.Spec.ProjectID != "" {
 			return fmt.Errorf("serviceaccount %q: owner is %s %q but spec.projectId names project %q; a service account has one owner", s.Meta.Name, o.Kind, o.ID, s.Spec.ProjectID)
 		}
+	case meta.OwnerOrganization:
+		// The admin token's create reads an id-less user owner as the organization's, which owns no service account.
+		return fmt.Errorf("serviceaccount %q: owner.kind must be project, team or user, got %q; the admin token is no user, so a user owner needs metadata.owner.id", s.Meta.Name, o.Kind)
 	default:
 		return fmt.Errorf("serviceaccount %q: owner.kind must be project, team or user, got %q", s.Meta.Name, o.Kind)
 	}
