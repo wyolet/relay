@@ -143,7 +143,7 @@ var generationErrors = map[int]string{
 	http.StatusRequestEntityTooLarge: "Code request_too_large: the body exceeds the listener's limit.",
 	http.StatusTooManyRequests:       "A limit refused the request before any upstream call. Codes: rate_limit_exceeded (a rate limit on the ladder, or every host key over its upstream limit), budget_exceeded (a budget on the ladder is spent). Retry-After says when to retry: the limit's refill, or the start of the budget's next period.",
 	http.StatusInternalServerError:   "Relay is misconfigured or failed. Codes such as no_adapter, no_translator, marshal_request, serialize_response, pre_flight_aborted.",
-	http.StatusBadGateway:            "The upstream failed. Codes: upstream_unreachable, upstream_unavailable, upstream_error, upstream_stalled, read_response, translate_response.",
+	http.StatusBadGateway:            "The upstream failed. Codes: upstream_unreachable, host_misconfigured (the host's upstream path has a placeholder its backend does not set), upstream_unavailable, upstream_error, upstream_stalled, read_response, translate_response.",
 	http.StatusServiceUnavailable:    "Relay cannot serve now. Codes: overloaded (the pod is at capacity; Retry-After set; a path whose shape defines its own overload error answers with that instead), no_keys (no host key the caller can reach serves the model), no_healthy_keys (every host key that serves it is out of rotation after failing), no_host_binding, not_ready, catalog_unavailable.",
 }
 

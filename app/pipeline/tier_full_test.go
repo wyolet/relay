@@ -28,7 +28,7 @@ type keyRecordingAdapter struct {
 	used *[]string
 }
 
-func (a keyRecordingAdapter) Call(_ context.Context, _ string, _ *string, key string, _ []byte, _ http.Header, _ string, _ bool, _ bool) (*http.Response, error) {
+func (a keyRecordingAdapter) Call(_ context.Context, _ Upstream, key string, _ []byte, _ http.Header, _ string, _ bool, _ bool) (*http.Response, error) {
 	*a.used = append(*a.used, key)
 	return ok200(), nil
 }

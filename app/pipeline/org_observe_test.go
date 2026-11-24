@@ -15,7 +15,7 @@ import (
 // orgAdapter answers 200 naming the organization in X-Org.
 type orgAdapter struct{ reservationTestAdapter }
 
-func (orgAdapter) Call(context.Context, string, *string, string, []byte, http.Header, string, bool, bool) (*http.Response, error) {
+func (orgAdapter) Call(context.Context, Upstream, string, []byte, http.Header, string, bool, bool) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{"X-Org": {"org-1"}}}, nil
 }
 

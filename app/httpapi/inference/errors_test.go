@@ -93,6 +93,9 @@ func TestMapPipelineErr_RelayAnswers(t *testing.T) {
 			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_unreachable", Refusal: unreachable, Message: `upstream host "h" unreachable after 2 attempt(s)`}},
 		{"last host down after another connected", &pipeline.UpstreamUnreachableError{Host: "h", Attempts: 2, Cause: errors.New("dial")}, 502, "",
 			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_unreachable", Message: `upstream host "h" unreachable after 2 attempt(s)`}},
+		// The path template stays in the error; the caller is told the host and the key it lacks.
+		{"host path placeholder unfilled", &pipeline.PathPlaceholderError{Host: "h", Path: "/v1/projects/{project}/chat", Key: "project"}, 502, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "host_misconfigured", Refusal: unreachable, Message: `upstream host "h" is misconfigured: its backend sets no value for the path placeholder {project}`}},
 		{"keys exhausted without a response", pipeline.ErrAllKeysExhausted, 502, "",
 			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_unavailable", Message: "all upstream keys failed"}},
 		{"upstream failure without a status", &pipeline.UpstreamFailureError{Cause: pipeline.ErrAllKeysExhausted}, 502, "",

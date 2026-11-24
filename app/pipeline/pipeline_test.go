@@ -392,6 +392,14 @@ func TestAnswerOf(t *testing.T) {
 		{"no credentials", pipeline.ErrNoKeys, plan.Answer{
 			Status: 503, Type: "server_error", Code: "no_keys", Kind: plan.RefusalHostNotReachable, Message: "no host keys",
 		}, true},
+		{"unfilled path placeholder", &pipeline.PathPlaceholderError{Host: "h", Path: "/v1/{project}", Key: "project"}, plan.Answer{
+			Status: 502, Type: "server_error", Code: "host_misconfigured", Kind: plan.RefusalHostNotReachable,
+			Message: `upstream host "h" is misconfigured: its backend sets no value for the path placeholder {project}`,
+		}, true},
+		{"malformed path placeholder", &pipeline.PathPlaceholderError{Host: "h", Path: "/v1/{pro-ject}"}, plan.Answer{
+			Status: 502, Type: "server_error", Code: "host_misconfigured", Kind: plan.RefusalHostNotReachable,
+			Message: `upstream host "h" is misconfigured: its upstream path has a malformed placeholder`,
+		}, true},
 		{"upstream answered", &pipeline.UpstreamFailureError{Status: 500, Cause: pipeline.ErrAllKeysExhausted}, plan.Answer{}, false},
 		{"caller gone", context.Canceled, plan.Answer{}, false},
 		{"nil", nil, plan.Answer{}, false},
@@ -437,6 +445,99 @@ func TestRun_UnreachableIsARefusalOnlyWhenNoCandidateConnected(t *testing.T) {
 		if d := cmp.Diff(tc.wantCalls, adp.calls); d != "" {
 			t.Errorf("%s: credentials called (-want +got):\n%s", name, d)
 		}
+	}
+}
+
+// An upstream path the host's backend does not fill is the hop's configuration fault: the walk moves to the next hop at once, with no re-dial, no other credential of the hop, no key failure and no reachability write.
+func TestRun_UnfilledPathMovesToTheNextHop(t *testing.T) {
+	t.Parallel()
+	unfilled := &host.Host{Meta: meta.Metadata{ID: "unfilled", Name: "unfilled"}, Spec: host.Spec{BaseURL: "http://unfilled"}}
+	served := &host.Host{Meta: meta.Metadata{ID: "served", Name: "served"}, Spec: host.Spec{BaseURL: "http://served"}}
+	for name, tc := range map[string]struct {
+		hops      []plan.RouteHop
+		wantCalls []string
+	}{
+		"a later hop serves": {[]plan.RouteHop{
+			hopAt(unfilled, []*hostkey.HostKey{makeKey("p1", "sk-p1"), makeKey("p2", "sk-p2")}),
+			hopAt(served, []*hostkey.HostKey{makeKey("s1", "sk-s1")}),
+		}, []string{"sk-p1", "sk-s1"}},
+		"no hop left": {[]plan.RouteHop{
+			hopAt(unfilled, []*hostkey.HostKey{makeKey("p3", "sk-p3"), makeKey("p4", "sk-p4")}),
+		}, []string{"sk-p3"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			adp := newKeyedAdapter()
+			for _, k := range []string{"sk-p1", "sk-p2", "sk-p3", "sk-p4"} {
+				adp.errs[k] = &pipeline.PathPlaceholderError{Path: "/v1/{project}", Key: "project"}
+			}
+			agent := &scriptedAgent{}
+			health := make(hostHealthLog, 4)
+			p := newPipeline()
+			p.KeyAgent, p.HostHealth = agent, health
+			events := make(chan failureEvent, 2)
+			p.Lifecycle = lifecycle.New()
+			p.Lifecycle.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+				events <- failureEvent{ev.ErrorKind, ev.Status, ev.Refusal, ev.ErrorMessage}
+				return nil, nil
+			}})
+			res, err := p.Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: tc.hops, Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now())})
+			if len(tc.hops) > 1 {
+				if err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				drainResult(t, res)
+				if got := <-health; got != "reachable:served" {
+					t.Errorf("reachability write = %q, want reachable:served", got)
+				}
+			} else {
+				if _, ok := errors.AsType[*pipeline.PathPlaceholderError](err); !ok {
+					t.Fatalf("err = %v, want *pipeline.PathPlaceholderError", err)
+				}
+				want := failureEvent{"host_misconfigured", 502, "host_not_reachable", `upstream host "unfilled" is misconfigured: its backend sets no value for the path placeholder {project}`}
+				if got := <-events; got != want {
+					t.Errorf("failure event = %+v, want %+v", got, want)
+				}
+			}
+			if d := cmp.Diff(tc.wantCalls, adp.calls); d != "" {
+				t.Errorf("credentials called (-want +got):\n%s", d)
+			}
+			if len(agent.asked) != 0 {
+				t.Errorf("key agent consulted on %v; an unfilled path is no credential's failure", agent.asked)
+			}
+		})
+	}
+}
+
+// An upstream's answer on one hop outranks an unfilled path on another, in either order: the caller gets the upstream's failure, not host_misconfigured.
+func TestRun_UnfilledPathDoesNotMaskAnUpstreamAnswer(t *testing.T) {
+	t.Parallel()
+	unfilled := &host.Host{Meta: meta.Metadata{ID: "unfilled", Name: "unfilled"}, Spec: host.Spec{BaseURL: "http://unfilled"}}
+	rejects := &host.Host{Meta: meta.Metadata{ID: "rejects", Name: "rejects"}, Spec: host.Spec{BaseURL: "http://rejects"}}
+	for name, hops := range map[string][]plan.RouteHop{
+		"unfilled after": {
+			hopAt(rejects, []*hostkey.HostKey{makeKey("r1", "sk-r1"), makeKey("r2", "sk-r2")}),
+			hopAt(unfilled, []*hostkey.HostKey{makeKey("u1", "sk-u1")}),
+		},
+		"unfilled before": {
+			hopAt(unfilled, []*hostkey.HostKey{makeKey("u1", "sk-u1")}),
+			hopAt(rejects, []*hostkey.HostKey{makeKey("r1", "sk-r1"), makeKey("r2", "sk-r2")}),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			adp := newKeyedAdapter()
+			adp.status["sk-r1"], adp.status["sk-r2"] = 401, 401
+			adp.errs["sk-u1"] = &pipeline.PathPlaceholderError{Path: "/v1/{project}", Key: "project"}
+			_, err := newPipeline().Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: hops})
+			upstream, ok := errors.AsType[*pipeline.UpstreamFailureError](err)
+			if !ok || upstream.Status != 401 {
+				t.Fatalf("err = %v, want the upstream's 401", err)
+			}
+			if _, refused := pipeline.AnswerOf(err); refused {
+				t.Errorf("AnswerOf(%v) answered for relay; want the upstream's failure", err)
+			}
+		})
 	}
 }
 
