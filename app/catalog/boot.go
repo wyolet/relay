@@ -228,7 +228,7 @@ func (o BootstrapOptions) masterKeys() [][]byte {
 
 // secrets is the secret stack seeding writes stored values through.
 func (s *Stores) secrets() *appsecret.Secrets {
-	return &appsecret.Secrets{Registry: s.Secrets, Stored: s.Stored}
+	return &appsecret.Secrets{Registry: s.Secrets, Stored: s.Stored, OAuth: s.OAuthResolver}
 }
 
 // Hydrate is the expensive half of bootstrap: reload settings, optionally

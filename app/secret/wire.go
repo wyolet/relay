@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/secret/stored"
+	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	"github.com/wyolet/relay/secret"
 	"github.com/wyolet/relay/secret/backend/aws"
 	"github.com/wyolet/relay/secret/backend/azure"
@@ -19,6 +20,8 @@ import (
 type Secrets struct {
 	Registry *secret.Registry
 	Stored   *stored.Backend
+	// OAuth checks new oauth host-key values against the configured token hosts (RELAY_OAUTH_TOKEN_HOSTS). Wire leaves it nil; a host-key store without one refuses service-account credentials.
+	OAuth *pkgoauth.Resolver
 }
 
 // Wire builds the stack over pool. masterKeys are RELAY_MASTER_KEY followed by RELAY_MASTER_KEY_EXTRA; with none, stored refs fail loudly while env and external refs keep working. External backends (AWS, Azure, GCP, Bitwarden, 1Password) register when their environment is present.
