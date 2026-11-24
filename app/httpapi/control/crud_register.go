@@ -79,12 +79,13 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		nil,
 	))
 
+	sac := serviceAccountChecks(d)
 	rows.add(registerKind[serviceaccount.ServiceAccount](
-		api, "service-accounts", "service-account", dk.serviceAccounts, d.Authz, sameta,
-		func(sa *serviceaccount.ServiceAccount) error { return sa.Validate() },
+		api, sac.plural, sac.singular, dk.serviceAccounts, d.Authz, sameta,
+		sac.validate,
 		meta.OwnerProject,
 		listScanResolver(d.Stores.ServiceAccount, sameta),
-		guardServiceAccount(d),
+		sac.guard,
 		nil,
 		nil,
 		d.refuseInUse,

@@ -213,6 +213,11 @@ func (d Deps) createAccountBinding(ctx context.Context, acc *account.Account, po
 		Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{acc.Meta.ID}},
 	}
 	b.Meta.Name = slug.Unique(slug.From(name+"-"+acc.Meta.Name), slugTakenFn(d.Stores.PolicyBinding, pbmeta))
+	return d.createBinding(ctx, b)
+}
+
+// createBinding runs the checks POST /policy-bindings runs on b, which has its id, name and owner, and writes it.
+func (d Deps) createBinding(ctx context.Context, b *policybinding.PolicyBinding) (*policybinding.PolicyBinding, audit.Row, error) {
 	checks := policyBindingChecks(d)
 	if err := checks.guarded(ctx, "create", nil, b); err != nil {
 		return nil, audit.Row{}, err

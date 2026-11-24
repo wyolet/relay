@@ -121,6 +121,57 @@ func refuseOrganizationOwner(ctx context.Context, a authz.Authorizer, singular s
 	return nil
 }
 
+// checkCreate settles a new row's owner and runs the create checks on it, as the generic create route does once the row has its id and name: m is v's metadata, defaultOwnerKind fills an omitted owner kind ("" for none).
+func checkCreate[T any](ctx context.Context, checks kindChecks[T], defaultOwnerKind meta.OwnerKind, m *meta.Metadata, v *T) error {
+	singular := checks.singular
+	// system is reserved for seed paths; where it names the global scope
+	// it is read as the organization.
+	readSystemAsGlobal(singular, &m.Owner, meta.Owner{})
+	if m.Owner.Kind == meta.OwnerSystem {
+		return huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
+	}
+	if m.Owner.Kind == "" && defaultOwnerKind != "" {
+		m.Owner.Kind = defaultOwnerKind
+	}
+	if err := refuseTenantOwner(singular, m.Owner); err != nil {
+		return err
+	}
+	if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
+		return err
+	}
+	if err := refuseOrganizationOwner(ctx, checks.authz, singular, m.Owner); err != nil {
+		return err
+	}
+	if err := stampOwnerID(ctx, &m.Owner); err != nil {
+		return huma.Error400BadRequest(err.Error())
+	}
+	// The guard runs first: on kinds whose owner mirrors a spec field
+	// (Project, ServiceAccount) it is what re-derives
+	// the owner, and the owner is what the decision below turns on.
+	if err := checks.guarded(ctx, "create", nil, v); err != nil {
+		return err
+	}
+	// Authorize AFTER owner stamping so an owner-aware Authorizer can
+	// decide on the row's final provenance (user-owned rows are open to
+	// any authenticated caller; anything else needs a binding).
+	if err := checks.mayCreate(ctx, &m.Owner); err != nil {
+		return err
+	}
+	// Validate AFTER stamping id+slug so the entity's Validate() sees
+	// the same shape the store will persist. Rejecting here keeps bad
+	// rows out of PG (which would otherwise break Bootstrap).
+	return checks.valid(v)
+}
+
+// insertRow writes a new row through the store's create when it has one, else its upsert.
+func insertRow[T any](ctx context.Context, store entityStore[T], v *T) error {
+	create := store.Upsert
+	if w, ok := store.(kindWriter[T]); ok {
+		create = w.Create
+	}
+	return create(ctx, v)
+}
+
 // registerKind installs the five CRUD operations for kind T on api and returns how they find a row. The metaOf, validate, defaultOwnerKind, and resolveSlug closures supply the kind-specific glue.
 //
 // defaultOwnerKind is stamped on Create when the caller omits
@@ -356,51 +407,11 @@ func registerKind[T any](
 				}
 				m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
 			}
-			// system is reserved for seed paths; where it names the global scope
-			// it is read as the organization.
-			readSystemAsGlobal(singular, &m.Owner, meta.Owner{})
-			if m.Owner.Kind == meta.OwnerSystem {
-				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
-			}
-			if m.Owner.Kind == "" && defaultOwnerKind != "" {
-				m.Owner.Kind = defaultOwnerKind
-			}
-			if err := refuseTenantOwner(singular, m.Owner); err != nil {
-				return nil, err
-			}
-			if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
-				return nil, err
-			}
-			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
-				return nil, err
-			}
-			if err := stampOwnerID(ctx, &m.Owner); err != nil {
-				return nil, huma.Error400BadRequest(err.Error())
-			}
-			// The guard runs first: on kinds whose owner mirrors a spec field
-			// (Project, ServiceAccount) it is what re-derives
-			// the owner, and the owner is what the decision below turns on.
-			if err := checks.guarded(ctx, "create", nil, v); err != nil {
-				return nil, err
-			}
-			// Authorize AFTER owner stamping so an owner-aware Authorizer can
-			// decide on the row's final provenance (user-owned rows are open to
-			// any authenticated caller; anything else needs a binding).
-			if err := checks.mayCreate(ctx, &m.Owner); err != nil {
-				return nil, err
-			}
-			// Validate AFTER stamping id+slug so the entity's Validate() sees
-			// the same shape the store will persist. Rejecting here keeps bad
-			// rows out of PG (which would otherwise break Bootstrap).
-			if err := checks.valid(v); err != nil {
+			if err := checkCreate(ctx, checks, defaultOwnerKind, m, v); err != nil {
 				return nil, err
 			}
 			audit.Changed(ctx, []string{audit.AnyField})
-			create := store.Upsert
-			if w, ok := store.(kindWriter[T]); ok {
-				create = w.Create
-			}
-			if err := create(ctx, v); err != nil {
+			if err := insertRow(ctx, store, v); err != nil {
 				return nil, mapWriteErr(singular, m.ID, err)
 			}
 			created, err := store.Get(ctx, m.ID)

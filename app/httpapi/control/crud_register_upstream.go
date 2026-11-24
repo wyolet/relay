@@ -39,12 +39,13 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		}},
 	))
 
+	plc := poolChecks(d)
 	rows.add(registerKind[pool.Pool](
-		api, "pools", "pool", d.Stores.Pool, d.Authz, plmeta,
-		func(p *pool.Pool) error { p.Default(); return p.Validate() },
+		api, plc.plural, plc.singular, d.Stores.Pool, d.Authz, plmeta,
+		plc.validate,
 		meta.OwnerUser,
 		listScanResolver(d.Stores.Pool, plmeta),
-		guardPool(d),
+		plc.guard,
 		nil,
 		nil,
 		d.refuseInUse,

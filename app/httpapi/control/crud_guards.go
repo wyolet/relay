@@ -41,6 +41,15 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 	}
 }
 
+// serviceAccountChecks are the checks the service-accounts routes run.
+func serviceAccountChecks(d Deps) kindChecks[serviceaccount.ServiceAccount] {
+	return kindChecks[serviceaccount.ServiceAccount]{
+		plural: "service-accounts", singular: "service-account", authz: d.Authz, gov: d.Catalog,
+		validate: func(sa *serviceaccount.ServiceAccount) error { return sa.Validate() },
+		guard:    guardServiceAccount(d),
+	}
+}
+
 func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 	return func(ctx context.Context, action string, existing, incoming *serviceaccount.ServiceAccount) error {
 		if action == "delete" || incoming == nil {

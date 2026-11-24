@@ -116,6 +116,15 @@ func guardKeyAccount(d Deps) mutationGuard[key.Key] {
 	}
 }
 
+// poolChecks are the checks the pools routes run; a pool takes its defaults before it is validated.
+func poolChecks(d Deps) kindChecks[pool.Pool] {
+	return kindChecks[pool.Pool]{
+		plural: "pools", singular: "pool", authz: d.Authz, gov: d.Catalog,
+		validate: func(p *pool.Pool) error { p.Default(); return p.Validate() },
+		guard:    guardPool(d),
+	}
+}
+
 // guardPool checks the pool's host and keys, and refuses an owner move away
 // from the policies drawing on it.
 func guardPool(d Deps) mutationGuard[pool.Pool] {
