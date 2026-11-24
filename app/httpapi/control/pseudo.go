@@ -371,14 +371,28 @@ func (d Deps) pseudoError(ctx context.Context, err error) error {
 	if storage.IsDuplicate(err) || errors.Is(err, directory.ErrConflict) {
 		return refusal(conflictError("another row holds a name or id this row takes: the given metadata.name, or one another change took at the same time; nothing was written"), pointer)
 	}
-	if re != nil {
-		var se huma.StatusError
-		if !errors.As(err, &se) {
-			err = mapWriteErr(re.Row.Kind, re.Row.Meta.ID, err)
-		}
+	if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		return refusal(&httpapi.APIError{
+			Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeClientCanceled, Message: "the request ended before the write did; nothing was written"},
+			HTTPStatus: statusClientClosed,
+		}, pointer)
 	}
-	return refusal(err, pointer)
+	var se huma.StatusError
+	if !errors.As(err, &se) && re != nil {
+		err = mapWriteErr(re.Row.Kind, re.Row.Meta.ID, err)
+	}
+	if errors.As(err, &se) && se.GetStatus() < http.StatusInternalServerError {
+		return refusal(err, pointer)
+	}
+	slog.ErrorContext(ctx, "control: pseudo write failed; nothing was written", "pointer", pointer, "err", err)
+	return refusal(huma.Error500InternalServerError("the write failed on the server; nothing was written"), pointer)
 }
+
+// A request whose client went away before the write ended: no one reads the answer, but the audit row and the access log do.
+const (
+	codeClientCanceled = "client_canceled"
+	statusClientClosed = 499
+)
 
 // refusal puts err in the pseudo refusal envelope with pointer.
 func refusal(err error, pointer string) *pseudoRefusal {

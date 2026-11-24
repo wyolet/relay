@@ -59,6 +59,7 @@ func TestPseudoError(t *testing.T) {
 	}
 	const conflictMsg = "another change touched the same rows at the same time; nothing was written, retry the request"
 	const dupMsg = "another row holds a name or id this row takes: the given metadata.name, or one another change took at the same time; nothing was written"
+	const serverFailed = "the write failed on the server; nothing was written"
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -78,8 +79,18 @@ func TestPseudoError(t *testing.T) {
 			&pseudoRefusal{APIError: apiErr(409, "conflict", conflictMsg)}},
 		{"a name taken", &pseudo.RowError{Row: keyRow, Err: fmt.Errorf("upsert: %w: service_accounts_name_key", directory.ErrConflict)},
 			&pseudoRefusal{APIError: apiErr(409, "conflict", dupMsg), Pointer: "/spec/key"}},
-		{"a store failing", &pseudo.RowError{Row: keyRow, Err: errors.New("connection reset")},
-			&pseudoRefusal{APIError: apiErr(500, "", "connection reset"), Pointer: "/spec/key"}},
+		{"a store failing under a row", &pseudo.RowError{Row: keyRow, Err: errors.New("connection reset")},
+			&pseudoRefusal{APIError: apiErr(500, "", serverFailed), Pointer: "/spec/key"}},
+		{"a row check failing on the server", &pseudo.RowError{Row: keyRow, Err: huma.Error500InternalServerError("hostkey.Get: dial tcp 10.0.0.5:5432")},
+			&pseudoRefusal{APIError: apiErr(500, "", serverFailed), Pointer: "/spec/key"}},
+		{"a store failing while reading", fmt.Errorf("account.List: %w", errors.New("conn busy")),
+			&pseudoRefusal{APIError: apiErr(500, "", serverFailed)}},
+		{"a transaction that did not begin", errors.New("storage: begin: dial tcp: i/o timeout"),
+			&pseudoRefusal{APIError: apiErr(500, "", serverFailed)}},
+		{"a scratch build failing", errors.New("plan: check: engine: list account: boom"),
+			&pseudoRefusal{APIError: apiErr(500, "", serverFailed)}},
+		{"the client went away", fmt.Errorf("plan check: %w", context.Canceled),
+			&pseudoRefusal{APIError: httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeClientCanceled, Message: "the request ended before the write did; nothing was written"}, HTTPStatus: statusClientClosed}}},
 		{"a slow check", plan.ErrCheckTimeout,
 			&pseudoRefusal{APIError: apiErr(503, "", "checking the rows against the plans took too long; nothing was written, retry the request")}},
 		{"no plans", pseudo.ErrNoPlans,
