@@ -166,7 +166,7 @@ const (
 	IssueRateLimitScopeOutsideModels = "rate_limit_scope_outside_models"
 	// IssueModelRefBlocked is a policy model entry that a rung above the policy, or an upstream tier, keeps from accounts bound to it.
 	IssueModelRefBlocked = "model_ref_blocked"
-	// IssueModelUnservable is an enabled model with bindings, none of them enabled at an enabled host.
+	// IssueModelUnservable is an enabled model with bindings, none of them enabled at an enabled host and serving one of its snapshots.
 	IssueModelUnservable = "model_unservable"
 )
 

@@ -210,3 +210,60 @@ func TestPolicyCheck_ModelRefFollowsServedSnapshots(t *testing.T) {
 		})
 	}
 }
+
+// issuesOf lists the code, field and severity of every issue on a row.
+func issuesOf(v *engine.View, ref engine.Ref) []issueAt {
+	var out []issueAt
+	for _, is := range v.Issues(ref) {
+		out = append(out, issueAt{Code: is.Code, Field: is.Field, Severity: is.Severity})
+	}
+	return out
+}
+
+// A model whose only binding lists none of its snapshots is unservable: every request for it is refused, so a policy granting it is told.
+func TestModelUnservable_BindingServingNoSnapshot(t *testing.T) {
+	s := newSnapshotWorld()
+	grant := s.w.Policy("grants-m3", policy.Spec{Models: []string{"acme/m3"}})
+	plans := s.w.Load(t)
+	var m3 string
+	for _, m := range s.w.Models {
+		if m.Meta.Name == "m3" {
+			m3 = m.Meta.ID
+		}
+	}
+	got := plans.Engine.View().Issues(engine.Ref{Kind: plan.KindModel, ID: m3})
+	if len(got) != 1 || got[0].Code != plan.IssueModelUnservable || got[0].Target != (engine.Ref{Kind: plan.KindPolicy, ID: grant.Meta.ID}) || got[0].Severity != engine.SeverityError {
+		t.Errorf("m3 issues = %+v, want one %s error naming %s", got, plan.IssueModelUnservable, grant.Meta.Name)
+	}
+}
+
+// A rung above that allows a model only at a host whose binding serves none of its snapshots blocks the entry: every request is refused by that rung, though the binding there is enabled.
+func TestModelRefBlocked_RungAllowsOnlyAHostServingNoSnapshot(t *testing.T) {
+	w := &plantest.World{}
+	prov := w.Provider("acme")
+	ha, hb := w.Host("host-a", "http://a.invalid"), w.Host("host-b", "http://b.invalid")
+	m1 := w.Model(prov, "m1")
+	w.Bind(m1, ha, adapters.OpenAI, "m1-retired")
+	w.Bind(m1, hb, adapters.OpenAI)
+	pa := w.Pool(ha, w.Credential(ha, nil, plantest.System, "sk-a"))
+	pb := w.Pool(hb, w.Credential(hb, nil, plantest.System, "sk-b"))
+	tm := w.Team()
+	proj := w.Project(tm)
+	sa := w.ServiceAccount(proj)
+	k := w.ServiceAccountKey(sa, "sk-"+sa.Meta.ID)
+	w.BindPolicy(w.Policy("team", policy.Spec{Models: []string{"acme/m1@host-a"}}), w.TeamAccount(tm))
+	projPol := w.Policy("project", policy.Spec{Models: []string{"acme/m1"}, PoolIDs: []string{pa.Meta.ID, pb.Meta.ID}})
+	w.BindPolicy(projPol, w.ProjectAccount(proj))
+	plans := w.Load(t)
+
+	if r := keyCaller(t, plans, k).Routes.Get("m1"); r.Refused == nil || r.Refused.Code != plan.CodeModelNotAllowed {
+		t.Fatalf("m1 = %+v hops %v, want refused %s", r.Refused, routeCredentials(r), plan.CodeModelNotAllowed)
+	}
+	want := []issueAt{
+		{Code: plan.IssueModelRefBlocked, Field: "spec.models[0]", Severity: engine.SeverityWarning},
+		{Code: plan.IssuePoolOutsideModels, Field: "spec.poolIds[0]", Severity: engine.SeverityWarning},
+	}
+	if diff := cmp.Diff(want, issuesOf(plans.Engine.View(), engine.Ref{Kind: plan.KindPolicy, ID: projPol.Meta.ID})); diff != "" {
+		t.Errorf("project policy issues (-want +got):\n%s", diff)
+	}
+}

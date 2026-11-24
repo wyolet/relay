@@ -83,7 +83,7 @@ func checkGrantedModels(tx *engine.Txn, p *policy.Policy, idx *CatalogIndex, ent
 		}) {
 			continue
 		}
-		msg := "policy " + p.Meta.Name + " grants it, but no enabled binding at an enabled host serves it"
+		msg := "policy " + p.Meta.Name + " grants it, but no enabled binding at an enabled host serves any of its snapshots"
 		if u.hosts != "" {
 			msg += " (its bindings are at " + u.hosts + ")"
 		}
