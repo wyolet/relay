@@ -145,6 +145,25 @@ func TestWriter_LaysRecordedReads(t *testing.T) {
 	}
 }
 
+// A writer that waits for the check slot holds no transaction: past the bound it answers ErrCheckTimeout without having opened one; once the slot frees, it runs.
+func TestWriter_WaitsForTheSlotBeforeItsTransaction(t *testing.T) {
+	fw := newFrameWorld(t)
+	tx := &fakeTx{}
+	w := fw.writer(tx)
+	w.Check = plan.NewCheck(false, 30*time.Millisecond)
+	_, release, err := w.Check.Hold(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Run(t.Context(), expandTo(fw.good), createAll, false); !errors.Is(err, plan.ErrCheckTimeout) || len(tx.answered) != 0 {
+		t.Fatalf("while the slot is held: %v, transactions %v; want ErrCheckTimeout and none opened", err, tx.answered)
+	}
+	release()
+	if _, err := w.Run(t.Context(), expandTo(fw.good), createAll, false); err != nil || !tx.committed() {
+		t.Fatalf("once the slot is free: %v, transactions %v", err, tx.answered)
+	}
+}
+
 func TestWriter_NoPlans(t *testing.T) {
 	tx := &fakeTx{}
 	w := Writer{Stores: tx, Check: plan.NewCheck(false, time.Minute), View: func() *engine.View { return nil }}

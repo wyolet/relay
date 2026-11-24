@@ -69,12 +69,15 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 		b.RBAC = c.rbac
 		base = &b
 	}
+	held := ctx.Value(heldKey{c}) != nil
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	select {
-	case c.slot <- struct{}{}:
-	case <-ctx.Done():
-		return nil, checkStopped(ctx)
+	if !held {
+		select {
+		case c.slot <- struct{}{}:
+		case <-ctx.Done():
+			return nil, checkStopped(ctx)
+		}
 	}
 	type built struct {
 		before, after []engine.Issue
@@ -82,7 +85,9 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 	}
 	done := make(chan built, 1)
 	go func() {
-		defer func() { <-c.slot }()
+		if !held {
+			defer func() { <-c.slot }()
+		}
 		var b built
 		b.before = live.AllIssues()
 		if base != nil {
@@ -110,6 +115,21 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 	case <-ctx.Done():
 		return nil, checkStopped(ctx)
 	}
+}
+
+// heldKey marks a context whose caller holds c's slot (Hold).
+type heldKey struct{ c *Check }
+
+// Hold waits for the check slot, at most the bound and while ctx lives, and returns ctx marked as holding it with the function that frees it; a check made under that ctx runs in the slot without taking it again. A caller that writes what it checks holds the slot across its whole write, so one such write is open at a time and the others wait holding nothing. Past the bound it returns ErrCheckTimeout.
+func (c *Check) Hold(ctx context.Context) (context.Context, func(), error) {
+	wait, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	select {
+	case c.slot <- struct{}{}:
+	case <-wait.Done():
+		return ctx, func() {}, checkStopped(wait)
+	}
+	return context.WithValue(ctx, heldKey{c}, true), func() { <-c.slot }, nil
 }
 
 func checkStopped(ctx context.Context) error {

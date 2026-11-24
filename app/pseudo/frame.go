@@ -78,7 +78,7 @@ type Writer struct {
 	View func() *engine.View
 }
 
-// Run expands, creates each row in order, checks the rows against the plans and commits; a dry run does all of it but the commit. It returns the rows as created, also on a dry run. A refused row is a *RowError, a body that expands to nothing a *BodyError, rows the plans refuse an *IssuesError; nothing is written on any error. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created.
+// Run takes the check slot (plan.Check.Hold) before its transaction begins and frees it once the transaction ended, so one write is open at a time and a writer that waits holds no connection; one that waits past the bound answers plan.ErrCheckTimeout. It expands, creates each row in order, checks the rows against the plans and commits; a dry run does all of it but the commit. It returns the rows as created, also on a dry run. A refused row is a *RowError, a body that expands to nothing a *BodyError, rows the plans refuse an *IssuesError; nothing is written on any error. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created.
 func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, error) {
 	if w.Check == nil || w.View == nil {
 		return nil, ErrNoPlans
@@ -87,9 +87,14 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 	if live == nil || live.Gen() == 0 {
 		return nil, ErrNoPlans
 	}
+	ctx, release, err := w.Check.Hold(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	ctx, read := withReads(ctx)
 	var rows []Row
-	err := w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
+	err = w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
 		var err error
 		if rows, err = expand(ctx, tx); err != nil {
 			return err
