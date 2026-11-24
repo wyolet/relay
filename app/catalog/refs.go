@@ -139,10 +139,16 @@ func outboundKeyRefs(k *key.Key) []refKey {
 	return nil
 }
 
-// outboundServiceAccountRefs returns the owning Project; a dangling one drops
-// the row.
+// outboundServiceAccountRefs returns the owning Project or Team; a dangling
+// one drops the row.
 func outboundServiceAccountRefs(sa *serviceaccount.ServiceAccount) []refKey {
-	return []refKey{{Kind: refProject, ID: sa.Spec.ProjectID}}
+	switch sa.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		return []refKey{{Kind: refProject, ID: sa.Meta.Owner.ID}}
+	case meta.OwnerTeam:
+		return []refKey{{Kind: refTeam, ID: sa.Meta.Owner.ID}}
+	}
+	return nil
 }
 
 // outboundRoleBindingRefs returns the granted Role and, for a scoped

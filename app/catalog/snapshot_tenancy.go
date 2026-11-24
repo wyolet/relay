@@ -6,6 +6,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Team returns the enabled Team with this id, or false.
@@ -73,7 +74,14 @@ func (s *Snapshot) ServiceAccountByName(name string) (*serviceaccount.ServiceAcc
 // ServiceAccountsForProject returns the project's accounts, sorted by name.
 // The returned slice must not be mutated.
 func (s *Snapshot) ServiceAccountsForProject(projectID string) []*serviceaccount.ServiceAccount {
-	return s.serviceAccountsByProject[projectID]
+	return s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerProject, ID: projectID}]
+}
+
+// ServiceAccountsForTeam returns the accounts the team owns itself, not
+// those of its projects, sorted by name. The returned slice must not be
+// mutated.
+func (s *Snapshot) ServiceAccountsForTeam(teamID string) []*serviceaccount.ServiceAccount {
+	return s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerTeam, ID: teamID}]
 }
 
 // AllServiceAccounts returns every ServiceAccount in the snapshot, sorted by slug.

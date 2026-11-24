@@ -24,7 +24,7 @@ func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) e
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID))
+	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), snapIDs(s.teamsByID))
 	if !keep {
 		deleteServiceAccount(s, sa.Meta.ID)
 		c.snap.Store(s)
@@ -50,11 +50,11 @@ func insertServiceAccount(s *Snapshot, sa *serviceaccount.ServiceAccount) {
 		s.unregisterRefs(refKey{Kind: refServiceAccount, ID: old.Meta.ID}, outboundServiceAccountRefs(old))
 		delete(s.serviceAccountsByName, old.Meta.Name)
 		delete(s.serviceAccountsByID, old.Meta.ID)
-		removeServiceAccountFromProject(s, old)
+		removeServiceAccountFromOwner(s, old)
 	}
 	s.serviceAccountsByID[sa.Meta.ID] = sa
 	s.serviceAccountsByName[sa.Meta.Name] = sa
-	insertServiceAccountIntoProject(s, sa)
+	insertServiceAccountIntoOwner(s, sa)
 	s.registerRefs(refKey{Kind: refServiceAccount, ID: sa.Meta.ID}, outboundServiceAccountRefs(sa))
 }
 
@@ -66,20 +66,20 @@ func deleteServiceAccount(s *Snapshot, id string) {
 	s.unregisterRefs(refKey{Kind: refServiceAccount, ID: id}, outboundServiceAccountRefs(sa))
 	delete(s.serviceAccountsByID, id)
 	delete(s.serviceAccountsByName, sa.Meta.Name)
-	removeServiceAccountFromProject(s, sa)
+	removeServiceAccountFromOwner(s, sa)
 	cascadeDelete(s, refServiceAccount, id)
 }
 
-// insertServiceAccountIntoProject keeps serviceAccountsByProject sorted by
+// insertServiceAccountIntoOwner keeps serviceAccountsByOwner sorted by
 // account name, the order build() produces.
-func insertServiceAccountIntoProject(s *Snapshot, sa *serviceaccount.ServiceAccount) {
-	list := append(s.serviceAccountsByProject[sa.Spec.ProjectID], sa)
+func insertServiceAccountIntoOwner(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	list := append(s.serviceAccountsByOwner[sa.Meta.Owner], sa)
 	sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
-	s.serviceAccountsByProject[sa.Spec.ProjectID] = list
+	s.serviceAccountsByOwner[sa.Meta.Owner] = list
 }
 
-func removeServiceAccountFromProject(s *Snapshot, sa *serviceaccount.ServiceAccount) {
-	list := s.serviceAccountsByProject[sa.Spec.ProjectID]
+func removeServiceAccountFromOwner(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	list := s.serviceAccountsByOwner[sa.Meta.Owner]
 	out := make([]*serviceaccount.ServiceAccount, 0, len(list))
 	for _, cur := range list {
 		if cur.Meta.ID != sa.Meta.ID {
@@ -87,10 +87,10 @@ func removeServiceAccountFromProject(s *Snapshot, sa *serviceaccount.ServiceAcco
 		}
 	}
 	if len(out) == 0 {
-		delete(s.serviceAccountsByProject, sa.Spec.ProjectID)
+		delete(s.serviceAccountsByOwner, sa.Meta.Owner)
 		return
 	}
-	s.serviceAccountsByProject[sa.Spec.ProjectID] = out
+	s.serviceAccountsByOwner[sa.Meta.Owner] = out
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────

@@ -79,8 +79,15 @@ func validateKeyInSnap(k *key.Key, s *Snapshot) error {
 }
 
 func validateServiceAccountInSnap(sa *serviceaccount.ServiceAccount, s *Snapshot) error {
-	if _, ok := s.projectsByID[sa.Spec.ProjectID]; !ok {
-		return fmt.Errorf("serviceaccount %q: spec.projectId %q does not resolve", sa.Meta.Name, sa.Spec.ProjectID)
+	var ok bool
+	switch o := sa.Meta.Owner; o.Kind {
+	case meta.OwnerProject:
+		_, ok = s.projectsByID[o.ID]
+	case meta.OwnerTeam:
+		_, ok = s.teamsByID[o.ID]
+	}
+	if !ok {
+		return fmt.Errorf("serviceaccount %q: owner %s %q does not resolve", sa.Meta.Name, sa.Meta.Owner.Kind, sa.Meta.Owner.ID)
 	}
 	return nil
 }

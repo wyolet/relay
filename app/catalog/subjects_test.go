@@ -112,6 +112,61 @@ func TestBuild_ServiceAccountAndKeyMembership(t *testing.T) {
 	}
 }
 
+// A service account a team owns directly is kept while its team is, indexed under the team and not under any project, carries the team's group subject, and its keys resolve; one whose team is absent is dropped. Deleting the team evicts it as a fresh build without the team would.
+func TestBuild_TeamServiceAccount(t *testing.T) {
+	f := newSubjectsFixture()
+	teamOwned := func(name, teamID string) *serviceaccount.ServiceAccount {
+		sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}}
+		sa.StampOwner()
+		return sa
+	}
+	deployer, stray := teamOwned("deployer", f.team.Meta.ID), teamOwned("stray", meta.NewID())
+	k := &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer-prod", Owner: deployer.Meta.Owner},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: deployer.Meta.ID}, KeyHash: hash("b")},
+	}
+	load := func(teams teamList) *Catalog {
+		c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{f.k, k}, rcList{}, bndList{})
+		c.UseTenancy(teams, projList{f.project}, saList{f.sa, f.orphan, deployer, stray}, grpList{f.group}, roleList{}, rbList{}, pbList{})
+		must(t, c.Reload(context.Background()))
+		return c
+	}
+	c := load(teamList{f.team})
+	s := c.Current()
+
+	if _, ok := s.ServiceAccount(stray.Meta.ID); ok {
+		t.Error("service account whose team is absent should be dropped")
+	}
+	if got := namesOf(s.ServiceAccountsForTeam(f.team.Meta.ID), func(sa *serviceaccount.ServiceAccount) string { return sa.Meta.Name }); !slices.Equal(got, []string{"deployer"}) {
+		t.Errorf("ServiceAccountsForTeam = %v, want [deployer]", got)
+	}
+	if got := namesOf(s.ServiceAccountsForProject(f.project.Meta.ID), func(sa *serviceaccount.ServiceAccount) string { return sa.Meta.Name }); !slices.Equal(got, []string{"indexer"}) {
+		t.Errorf("ServiceAccountsForProject = %v, want [indexer]", got)
+	}
+	want := []string{"serviceaccount:" + deployer.Meta.ID, SubjectServiceAccounts, SubjectServiceAccounts + ":team:platform", SubjectAuthenticated}
+	if got := s.SubjectsForServiceAccount(deployer.Meta.ID); !slices.Equal(got, want) {
+		t.Errorf("SubjectsForServiceAccount = %v, want %v", got, want)
+	}
+	if got, _ := s.KeyByHash(hash("b")); got == nil {
+		t.Error("key of a team's service account should be in the hash index")
+	}
+
+	must(t, c.ApplyServiceAccountDelete(deployer.Meta.ID))
+	if got := c.Current().ServiceAccountsForTeam(f.team.Meta.ID); len(got) != 0 {
+		t.Errorf("ServiceAccountsForTeam after its delete = %v, want none", got)
+	}
+	must(t, c.ApplyServiceAccountUpsert(deployer))
+	if got := c.Current().ServiceAccountsForTeam(f.team.Meta.ID); len(got) != 1 {
+		t.Errorf("ServiceAccountsForTeam after its upsert = %v, want [deployer]", got)
+	}
+
+	must(t, c.ApplyTeamDelete(f.team.Meta.ID))
+	if _, ok := c.Current().ServiceAccount(deployer.Meta.ID); ok {
+		t.Error("service account of a deleted team is still in the snapshot")
+	}
+	assertSameMembership(t, c.Current(), load(teamList{}).Current())
+}
+
 func TestBuild_KeyDroppedWhenPrincipalAbsent(t *testing.T) {
 	f := newSubjectsFixture()
 	f.k.Spec.Principal.ID = meta.NewID() // points at no account

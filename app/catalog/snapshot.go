@@ -32,6 +32,7 @@ import (
 	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Snapshot is the immutable in-memory view. All maps are populated at
@@ -176,8 +177,8 @@ type Snapshot struct {
 
 	serviceAccountsByID   map[string]*serviceaccount.ServiceAccount
 	serviceAccountsByName map[string]*serviceaccount.ServiceAccount
-	// serviceAccountsByProject groups a project's accounts (sorted by name).
-	serviceAccountsByProject map[string][]*serviceaccount.ServiceAccount
+	// serviceAccountsByOwner groups a project's or a team's own accounts (sorted by name).
+	serviceAccountsByOwner map[meta.Owner][]*serviceaccount.ServiceAccount
 
 	groupsByID   map[string]*group.Group
 	groupsByName map[string]*group.Group
