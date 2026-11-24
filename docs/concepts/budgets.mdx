@@ -49,9 +49,9 @@ An **alert** budget is never checked at admission. Both modes report the charge 
 
 ## Models without pricing
 
-A budget can only count what has a price. While any budget applies to a request, on any rung, a binding that has no pricing is refused with `403 unpriced_under_budget`, naming the rung and policy whose budget applies. Requests for priced models under the same policy are unaffected, and so are unpriced models for callers with no budget on their ladder.
+A budget can only count what has a price. While any budget applies to a request, on any rung, a binding that has no pricing, or whose pricing is disabled, is refused with `403 unpriced_under_budget`, naming the rung and policy whose budget applies. Requests for priced models under the same policy are unaffected, and so are unpriced models for callers with no budget on their ladder.
 
-To allow such a model under a budget, add a pricing for its binding (`/api/pricings`). Pricing is shared catalog data, so under `RELAY_AUTHZ=rbac` writing it takes the `admin` or `catalog-editor` role; see [Ownership](/concepts/catalog#ownership).
+To allow such a model under a budget, add or enable a pricing for its binding (`/api/pricings`). Pricing is shared catalog data, so under `RELAY_AUTHZ=rbac` writing it takes the `admin` or `catalog-editor` role; see [Ownership](/concepts/catalog#ownership).
 
 ## Deleting a budget
 

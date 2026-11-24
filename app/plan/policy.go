@@ -198,7 +198,7 @@ func warnUnpriced(tx *engine.Txn, src engine.Ref, ep *ExpandedPolicy, hosts map[
 			if ep.Grant != nil && !ep.Grant.Allows(prov, m, h.Meta.Name) {
 				continue
 			}
-			if _, priced := idx.Snap.PricingForBinding(b); priced {
+			if _, priced := bindingPricing(idx.Snap, b); priced {
 				continue
 			}
 			if n++; first == "" || b.Meta.Name < first {

@@ -204,8 +204,8 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 				best.note(stepNoCredentials, &Refusal{Code: CodeNoCredentials, Message: "host " + h.Meta.Name + " needs no key and is reached only through a pool"})
 				continue
 			}
-			pr, _ := snap.PricingForBinding(b)
-			if r := cp.unpriced(b, pr != nil); r != nil {
+			pr, priced := bindingPricing(snap, b)
+			if r := cp.unpriced(b, priced); r != nil {
 				best.note(stepUnpriced, r)
 				continue
 			}
@@ -320,11 +320,18 @@ func (b *refusalAt) note(step int, r *Refusal) {
 // servesRequests reports whether requests are routed to h: it is enabled and has an upstream to dial.
 func servesRequests(h *host.Host) bool { return h.IsEnabled() && h.Routable() }
 
+// bindingPricing is b's pricing and whether it prices requests: a disabled sheet costs nothing, so it counts as none.
+func bindingPricing(snap *appcatalog.Snapshot, b *binding.Binding) (*pricing.Pricing, bool) {
+	pr, ok := snap.PricingForBinding(b)
+	return pr, ok && pr.IsEnabled()
+}
+
 // served is one binding that can serve the model, at its effective host.
 type served struct {
 	b       *binding.Binding
 	h       *host.Host
 	pricing *pricing.Pricing
+	priced  bool
 }
 
 // route walks the candidate models in order and returns the first with a hop. sn narrows bindings to those serving the snapshot; pinHostID to one host.
@@ -349,8 +356,8 @@ func (t *RouteTable) route(models []*model.Model, sn *model.Snapshot, pinHostID 
 				best.note(stepModelNotAllowed, cp.notAllowed(i))
 				continue
 			}
-			pr, _ := snap.PricingForBinding(b)
-			cands = append(cands, served{b: b, h: h, pricing: pr})
+			pr, priced := bindingPricing(snap, b)
+			cands = append(cands, served{b: b, h: h, pricing: pr, priced: priced})
 		}
 		if len(cands) == 0 {
 			best.note(stepNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
@@ -381,7 +388,7 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 			continue
 		}
 		reached = true
-		priced := sv.pricing != nil
+		priced := sv.priced
 		if r := cp.unpriced(sv.b, priced); r != nil {
 			best.note(stepUnpriced, r)
 			continue

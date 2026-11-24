@@ -289,6 +289,39 @@ func TestRoute_UnpricedUnderBudgetIsRefusedAndFlagged(t *testing.T) {
 	}
 }
 
+// A disabled pricing costs nothing, so under a budget it is refused and flagged like no pricing at all, with or without the caller's own key.
+func TestRoute_DisabledPricingUnderBudgetIsRefusedAndFlagged(t *testing.T) {
+	b := newBasic()
+	m2 := b.w.model(b.prov, "m2")
+	b.w.bind(m2, b.hostA)
+	pr := b.w.price(m2, b.hostA)
+	pr.Spec.Enabled = boolp(false)
+	bud := b.w.budget("50")
+	p := b.w.policy("capped", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	pb := b.w.bindPolicy(p, b.w.teamAccount(b.team))
+	h := b.w.start(t)
+
+	_ = wantRefused(t, h.route(b.key, "m2"), CodeUnpricedUnderBudget, limits.RungTeam)
+	wantUnkeyedRefused(t, h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed("m2"), CodeUnpricedUnderBudget, limits.RungTeam)
+	h.wantIssue(KindPolicy, p.Meta.ID, CodeUnpricedUnderBudget, true)
+
+	on := clone(pr)
+	on.Spec.Enabled = boolp(true)
+	apply(h, on)
+	wantHops(t, h.route(b.key, "m2"), ids(b.a1), ids(b.a2))
+	h.wantIssue(KindPolicy, p.Meta.ID, CodeUnpricedUnderBudget, false)
+	if hop := h.route(b.key, "m2").Hops[0]; !hop.Priced || hop.Pricing == nil {
+		t.Fatal("an enabled pricing's hop is marked unpriced")
+	}
+
+	// Without a budget the disabled pricing's binding serves, marked unpriced.
+	apply(h, pr)
+	del(h, KindPolicyBinding, pb.Meta.ID)
+	if hop := h.route(b.key, "m2").Hops[0]; hop.Priced {
+		t.Fatal("a disabled pricing's hop is marked priced")
+	}
+}
+
 func TestRoute_UpstreamBudgetRefusesUnpricedOnThatSlotOnly(t *testing.T) {
 	b := newBasic()
 	m2 := b.w.model(b.prov, "m2")
