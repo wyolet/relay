@@ -394,6 +394,8 @@ func TestAccountPayloadLogging(t *testing.T) {
 	member := account.Member("u-1", "alice", projectOne, "p-1", "")
 	teamAcct := account.ForTeam("t-1", "t-1", "")
 	provider := &account.Account{Meta: meta.Metadata{Owner: alice}, Spec: account.Spec{HostID: "h-1"}}
+	bot := account.ForServiceAccount("sa-u1", "bot", "", meta.Owner{Kind: meta.OwnerUser, ID: "u-1"})
+	projectBot := account.ForServiceAccount("sa-p1", "ci", "", projectOne)
 	for _, tc := range []struct {
 		name     string
 		ctx      context.Context
@@ -409,6 +411,11 @@ func TestAccountPayloadLogging(t *testing.T) {
 		{"member, by its holder", as("u-1"), hiding(), member, true, "403: authz: forbidden: spec.payloadLogging of your own member account is set by an admin of its project"},
 		{"member, by someone else in the scope", as("u-2"), hiding(), member, true, ""},
 		{"team account", as("u-1"), hiding(), teamAcct, true, ""},
+		{"a user's service account, by its user", as("u-1"), hiding(), bot, true, "403: authz: forbidden: spec.payloadLogging of a personal service account's account is set by an admin"},
+		{"a user's service account, by a global binding", as("u-2"), hiding(), bot, true, "403: authz: forbidden: spec.payloadLogging of a personal service account's account is set by an admin"},
+		{"a user's service account, unchanged", as("u-1"), hiding(), bot, false, ""},
+		{"a user's service account, by an admin", adminRole("u-9"), hiding(), bot, true, ""},
+		{"a project's service account", as("u-1"), hiding(), projectBot, true, ""},
 		{"provider account", as("u-1"), hiding(), provider, true, ""},
 	} {
 		incoming := *tc.existing

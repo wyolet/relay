@@ -576,7 +576,7 @@ func (c Checker) principalKeys(ctx context.Context, p key.Principal) string {
 	return c.userPossessive(ctx, p.ID) + " keys"
 }
 
-// AccountPayloadLogging refuses a change to a caller account's payloadLogging by the user it constrains, since it decides whether their request bodies are kept. A personal account's is an admin's to set; a team, project, member or service account's is its scope admin's (the caller already passed accounts.update there), never the member account's own holder.
+// AccountPayloadLogging refuses a change to a caller account's payloadLogging by the user it constrains, since it decides whether their request bodies are kept. A personal account's, and that of a service account a user owns, whose lane's value comes before the personal account's, is an admin's to set; a team, project, member or service account's is its scope admin's (the caller already passed accounts.update there), never the member account's own holder.
 func (c Checker) AccountPayloadLogging(ctx context.Context, existing, incoming *account.Account) error {
 	if existing.IsProvider() || existing.Spec.PayloadLogging == incoming.Spec.PayloadLogging {
 		return nil
@@ -588,6 +588,8 @@ func (c Checker) AccountPayloadLogging(ctx context.Context, existing, incoming *
 	switch kind := existing.DerivedKind(); {
 	case kind == account.KindPersonal:
 		return forbidden(fmt.Errorf("%w: spec.payloadLogging of a personal account is set by an admin", authz.ErrForbidden))
+	case kind == account.KindService && existing.Meta.Owner.Kind == meta.OwnerUser:
+		return forbidden(fmt.Errorf("%w: spec.payloadLogging of a personal service account's account is set by an admin", authz.ErrForbidden))
 	case kind == account.KindMember && a != nil && a.UserID == existing.Spec.Holder.ID:
 		return forbidden(fmt.Errorf("%w: spec.payloadLogging of your own member account is set by an admin of its %s", authz.ErrForbidden, existing.Meta.Owner.Kind))
 	}

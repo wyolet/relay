@@ -104,7 +104,7 @@ A WebSocket connection keeps the lane it opened in for every frame, and a [batch
 
 `spec.payloadLogging` on an account is `on`, `off` or omitted. The nearest account on the request's ladder that sets it decides whether [payload logging](/concepts/payload-logging) captures the request: the lane, then the project's account, then the team's. When none sets it, the relay key's own `payloadLoggingEnabled` decides. The operator switch in the `payload-logging` settings section must be on either way.
 
-Under `RELAY_AUTHZ=rbac`, whoever may update the account sets it, with two exceptions that keep a user from deciding whether their own bodies are kept: only an admin sets a personal account's, and a member account's own user cannot set it, whatever their role there. Both answer `403`.
+Under `RELAY_AUTHZ=rbac`, whoever may update the account sets it, with two exceptions that keep a user from deciding whether their own bodies are kept: only an admin sets a personal account's, or that of a service account a user owns, whose lane comes before the personal account, and a member account's own user cannot set it, whatever their role there. Both answer `403`.
 
 ## Reading your accounts
 
