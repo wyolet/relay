@@ -86,6 +86,9 @@ func registerPseudoAgentRemoval(api huma.API, d Deps, protect huma.Middlewares) 
 			if change, err = pseudo.ExpandAgentRemoval(in.Body, reads); err != nil {
 				return nil, err
 			}
+			if err := d.boundTo(tx).mayRemove(ctx, change.Rows); err != nil {
+				return nil, err
+			}
 			if expect := in.Body.Spec.Expect; expect != nil && !sameIDs(expect, stepRows(change.Rows, pseudo.OpDelete)) {
 				return nil, &removalChanged{
 					APIError: httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeChanged, Message: "the rows this request would delete are no longer the ones spec.expect names; nothing was deleted. deleted and kept say what the request would do now"}, HTTPStatus: http.StatusConflict},
