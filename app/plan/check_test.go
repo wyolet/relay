@@ -183,6 +183,53 @@ func TestCheck_BuildOutlivesTheBound(t *testing.T) {
 	}
 }
 
+// A baseline built after the check, under its slot, is held to the check's bound: past it, Baseline answers ErrCheckTimeout, and checks asked for meanwhile answer at once instead of waiting for it; once it ends, the next check runs.
+func TestCheck_BaselineOutlivesTheBound(t *testing.T) {
+	b := newBasic()
+	h := b.w.start(t)
+	const bound = 200 * time.Millisecond
+	c := NewCheck(false, bound)
+	gate := make(chan struct{})
+	var builds atomic.Int32
+	c.build = func(src Sources) (*engine.View, error) {
+		if builds.Add(1) > 1 {
+			<-gate
+		}
+		return scratchView(src)
+	}
+	held, release, err := c.Hold(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := c.Find(held, h.e.View(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := f.Baseline(); !errors.Is(err, ErrCheckTimeout) {
+		t.Fatalf("a baseline past the bound: %v, want ErrCheckTimeout", err)
+	}
+	if waited := time.Since(start); waited > 3*bound {
+		t.Errorf("Baseline answered after %v, want about the bound %v", waited, bound)
+	}
+	release()
+	start = time.Now()
+	if _, _, err := c.Hold(t.Context()); !errors.Is(err, ErrCheckTimeout) {
+		t.Fatalf("Hold while the baseline builds: %v, want ErrCheckTimeout", err)
+	}
+	if waited := time.Since(start); waited >= bound/2 {
+		t.Errorf("Hold waited %v while the baseline built, want an answer at once", waited)
+	}
+	close(gate)
+	deadline := time.Now().Add(5 * time.Second)
+	for c.overrun.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := c.NewIssues(t.Context(), h.e.View(), nil, nil); err != nil {
+		t.Fatalf("once it ended: %v", err)
+	}
+}
+
 // A lane bound to a disabled policy serves nothing though no row files an error: it refuses, on the binding. A lane that reaches no key refuses nothing.
 func TestCheck_RefusedLane(t *testing.T) {
 	b := newBasic()

@@ -108,7 +108,7 @@ type Findings struct {
 	baseline         func() (*engine.View, error)
 }
 
-// Baseline is the view of the same rows without the proposed ones, built at once as Result was, never the live view; it is built on the first call when the check did not need it. The caller holds the check's slot, as a writer running the check does.
+// Baseline is the view of the same rows without the proposed ones, built at once as Result was, never the live view; it is the one the check built when it needed it, else built on the first call under the check's bound and the ctx Find was given, as Find's own build: past the bound it answers ErrCheckTimeout and the slot stays taken until the build ends. The caller holds the check's slot, as a writer running the check does.
 func (f Findings) Baseline() (*engine.View, error) {
 	if f.baseline == nil {
 		return nil, errors.New("plan: the check built no result")
@@ -151,27 +151,16 @@ func (c *Check) Find(ctx context.Context, live *engine.View, read, proposed []an
 		defer release()
 		h = held.Value(heldKey{c}).(*hold)
 	}
-	type result struct {
-		found Findings
-		err   error
-	}
-	done := make(chan result, 1)
-	h.mu.Lock()
-	h.building = true
-	h.mu.Unlock()
-	go func() {
-		defer h.built()
+	return bounded(ctx, c, h, func() (Findings, error) {
 		after, err := c.build(full)
 		if err != nil {
-			done <- result{err: err}
-			return
+			return Findings{}, err
 		}
 		before := live
 		var rebuilt *engine.View
 		if stale {
 			if before, err = c.build(base); err != nil {
-				done <- result{err: err}
-				return
+				return Findings{}, err
 			}
 			rebuilt = before
 		}
@@ -181,22 +170,40 @@ func (c *Check) Find(ctx context.Context, live *engine.View, read, proposed []an
 		if len(found) > 0 && !stale {
 			// The live view was built change by change; a refusal must hold against the same rows built at once.
 			if before, err = c.build(base); err != nil {
-				done <- result{err: err}
-				return
+				return Findings{}, err
 			}
 			rebuilt = before
 			beforeIssues = before.AllIssues()
 			found = refusedBy(before, after, beforeIssues, afterIssues, proposed)
 		}
-		baseline := onceView(rebuilt, func() (*engine.View, error) { return c.build(base) })
-		done <- result{found: Findings{Errors: found, Warnings: newWarnings(beforeIssues, afterIssues), Result: after, baseline: baseline}}
+		baseline := onceView(rebuilt, func() (*engine.View, error) {
+			return bounded(ctx, c, h, func() (*engine.View, error) { return c.build(base) })
+		})
+		return Findings{Errors: found, Warnings: newWarnings(beforeIssues, afterIssues), Result: after, baseline: baseline}, nil
+	})
+}
+
+// bounded runs build under h's holding of the slot, at most c's bound and while ctx lives. Past the bound, or once ctx ends, it answers ErrCheckTimeout or ctx's error while build runs on, holding the slot, to its end, and a build past the bound makes every check asked for meanwhile answer at once.
+func bounded[T any](ctx context.Context, c *Check, h *hold, build func() (T, error)) (T, error) {
+	type result struct {
+		v   T
+		err error
+	}
+	done := make(chan result, 1)
+	h.mu.Lock()
+	h.building = true
+	h.mu.Unlock()
+	go func() {
+		defer h.built()
+		v, err := build()
+		done <- result{v, err}
 	}()
 	bound := time.NewTimer(c.timeout)
 	defer bound.Stop()
 	var stopped error
 	select {
 	case r := <-done:
-		return r.found, r.err
+		return r.v, r.err
 	case <-bound.C:
 		stopped = ErrCheckTimeout
 	case <-ctx.Done():
@@ -206,14 +213,15 @@ func (c *Check) Find(ctx context.Context, live *engine.View, read, proposed []an
 	if !h.building {
 		h.mu.Unlock()
 		r := <-done
-		return r.found, r.err
+		return r.v, r.err
 	}
 	h.abandoned = true
 	if stopped == ErrCheckTimeout {
 		c.overrun.Store(true)
 	}
 	h.mu.Unlock()
-	return Findings{}, stopped
+	var zero T
+	return zero, stopped
 }
 
 // newWarnings returns the warnings of after that before does not have.
