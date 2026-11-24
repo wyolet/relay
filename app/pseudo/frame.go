@@ -119,6 +119,12 @@ func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create C
 	if err != nil {
 		return nil, nil, err
 	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = undoOutside(ctx, written, fmt.Errorf("pseudo: panic: %v", p))
+			panic(p)
+		}
+	}()
 	var rows []Row
 	var warnings []engine.Issue
 	err = w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {

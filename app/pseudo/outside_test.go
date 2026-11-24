@@ -98,6 +98,26 @@ func TestWriter_OutsideUndone(t *testing.T) {
 	}
 }
 
+// A panic inside the transaction undoes the outside writes, the last first, and goes on up.
+func TestWriter_OutsideUndoneOnPanic(t *testing.T) {
+	fw := newFrameWorld(t)
+	s := &steps{}
+	w := fw.writer(&fakeTx{})
+	w.Outside = []Outside{s.outside("a", nil, nil), s.outside("b", nil, nil)}
+	create := func(context.Context, *appcatalog.Stores, Row) error { panic("store broke") }
+	func() {
+		defer func() {
+			if p := recover(); p != "store broke" {
+				t.Errorf("recovered %v, want the panic to go on up", p)
+			}
+		}()
+		_, _ = w.Run(t.Context(), s.expand(fw.good), create, false)
+	}()
+	if diff := cmp.Diff([]string{"write a", "write b", "transaction", "undo b", "undo a"}, s.log); diff != "" {
+		t.Errorf("steps (-want +got):\n%s", diff)
+	}
+}
+
 // An outside write that fails opens no transaction and undoes the ones made before it.
 func TestWriter_OutsideWriteFails(t *testing.T) {
 	fw := newFrameWorld(t)
