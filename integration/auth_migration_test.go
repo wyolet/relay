@@ -57,7 +57,7 @@ func TestRollbackBelowSharedTablesRestoresAuthSchema(t *testing.T) {
 	}
 }
 
-// A rollback below the shared tables that a relay down migration refuses (000047's, while a team owns a service account) leaves both schemas as they were, so the next boot finds nothing to do and the rows are intact.
+// A rollback below the shared tables that a relay down migration refuses (000047's, while a team owns a service account) leaves the auth schema as it was and relay's clean at the refusing migration, so the next boot applies the ones above it again and the rows are intact.
 func TestRollbackRefusedByARelayDownLeavesBothSchemas(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -89,8 +89,8 @@ func TestRollbackRefusedByARelayDownLeavesBothSchemas(t *testing.T) {
 	if v := authVersion(t, dsn); v != authHead {
 		t.Fatalf("auth schema at %d after the refused rollback, want %d", v, authHead)
 	}
-	if v, dirty := relayVersion(t, dsn); v != int64(relayHead) || dirty {
-		t.Fatalf("relay schema at %d (dirty %v) after the refused rollback, want %d clean", v, dirty, relayHead)
+	if v, dirty := relayVersion(t, dsn); v != teamOwnerVersion || dirty {
+		t.Fatalf("relay schema at %d (dirty %v) after the refused rollback, want %d clean", v, dirty, teamOwnerVersion)
 	}
 
 	st, err = storagemod.Open(ctx, dsn)
@@ -98,6 +98,9 @@ func TestRollbackRefusedByARelayDownLeavesBothSchemas(t *testing.T) {
 		t.Fatalf("boot after the refused rollback: %v", err)
 	}
 	st.Close()
+	if v, dirty := relayVersion(t, dsn); v != int64(relayHead) || dirty {
+		t.Fatalf("relay schema at %d (dirty %v) after the boot, want %d clean", v, dirty, relayHead)
+	}
 	pool.Reset()
 	if got, err := serviceaccount.NewStore(pool).Get(ctx, bot.Meta.ID); err != nil || got == nil {
 		t.Fatalf("service account after the refused rollback = %v, %v", got, err)
@@ -123,7 +126,10 @@ func relayVersion(t *testing.T, dsn string) (int64, bool) {
 }
 
 // authHead is the auth module's newest migration.
-const authHead = 6
+const authHead = 7
+
+// teamOwnerVersion is relay's migration that lets a team own a service account; its down refuses while one does.
+const teamOwnerVersion = 47
 
 func authVersion(t *testing.T, dsn string) int64 {
 	t.Helper()

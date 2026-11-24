@@ -102,6 +102,7 @@ type ServiceAccount struct {
 	UpdatedAt       pgtype.Timestamptz
 	ResourceVersion int64
 	TeamID          pgtype.Text
+	UserID          pgtype.Text
 }
 
 type Team struct {

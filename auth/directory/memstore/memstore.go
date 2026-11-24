@@ -86,8 +86,14 @@ func (s *Store) checkProject(p *directory.Project) error {
 }
 
 func (s *Store) checkServiceAccount(sa *directory.ServiceAccount) error {
-	if (sa.Spec.ProjectID == "") == (sa.Spec.TeamID == "") {
-		return invalid("service account %q: exactly one of project and team is set", sa.Meta.Name)
+	n := 0
+	for _, id := range []string{sa.Spec.ProjectID, sa.Spec.TeamID, sa.Spec.UserID} {
+		if id != "" {
+			n++
+		}
+	}
+	if n != 1 {
+		return invalid("service account %q: exactly one of project, team and user is set", sa.Meta.Name)
 	}
 	var found bool
 	switch o := sa.Meta.Owner; o.Kind {
@@ -95,6 +101,8 @@ func (s *Store) checkServiceAccount(sa *directory.ServiceAccount) error {
 		_, found = s.projects.rows[o.ID]
 	case directory.OwnerTeam:
 		_, found = s.teams.rows[o.ID]
+	case directory.OwnerUser:
+		_, found = s.users[o.ID]
 	}
 	if !found {
 		return invalid("service account %q: %s %q does not exist", sa.Meta.Name, sa.Meta.Owner.Kind, sa.Meta.Owner.ID)
@@ -175,6 +183,12 @@ func (s *Store) cascadeRole(id string) {
 func (s *Store) dropServiceAccount(id string) { s.dropSubject(directory.SubjectServiceAccount, id) }
 
 func (s *Store) dropUser(id string) {
+	for said, sa := range s.serviceAccounts.rows {
+		if sa.Spec.UserID == id {
+			delete(s.serviceAccounts.rows, said)
+			s.dropServiceAccount(said)
+		}
+	}
 	for _, g := range s.groups.rows {
 		g.Spec.MemberIDs = slices.DeleteFunc(g.Spec.MemberIDs, func(m string) bool { return m == id })
 		if len(g.Spec.MemberIDs) == 0 {

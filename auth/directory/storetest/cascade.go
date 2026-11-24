@@ -121,6 +121,42 @@ func testTeamOwnedServiceAccounts(t *testing.T, s directory.Stores) {
 	}
 }
 
+// testUserOwnedServiceAccounts: a user owns a service account directly, and deleting the user deletes it and drops it from every binding.
+func testUserOwnedServiceAccounts(t *testing.T, s directory.Stores) {
+	ctx := context.Background()
+	f := seed(t, s)
+
+	bot := &directory.ServiceAccount{Meta: meta("ada-bot", "", ""), Spec: directory.ServiceAccountSpec{UserID: f.user.ID}}
+	must(t, s.ServiceAccounts.Upsert(ctx, bot))
+	if bot.Meta.Owner != (authz.Owner{Kind: directory.OwnerUser, ID: f.user.ID}) {
+		t.Fatalf("service account owner = %+v, want its user", bot.Meta.Owner)
+	}
+	sameRow(t, "user-owned service account", fetch(t, get(s.ServiceAccounts, bot.Meta.ID)), bot, saMeta)
+
+	wantErr(t, "service account of a missing user", s.ServiceAccounts.Upsert(ctx,
+		&directory.ServiceAccount{Meta: meta("orphan", "", ""), Spec: directory.ServiceAccountSpec{UserID: directory.NewID()}}), directory.ErrInvalid)
+	wantErr(t, "service account with a team and a user", s.ServiceAccounts.Upsert(ctx,
+		&directory.ServiceAccount{Meta: meta("both", "", ""), Spec: directory.ServiceAccountSpec{TeamID: f.team.Meta.ID, UserID: f.user.ID}}), directory.ErrInvalid)
+
+	b := fetch(t, get(s.RoleBindings, f.binding.Meta.ID))
+	b.Spec.Subjects = append(b.Spec.Subjects, directory.Subject{Kind: directory.SubjectServiceAccount, ID: bot.Meta.ID})
+	must(t, s.RoleBindings.Upsert(ctx, b))
+
+	must(t, s.Users.Delete(ctx, f.user.ID))
+	if got := fetch(t, get(s.ServiceAccounts, bot.Meta.ID)); got != nil {
+		t.Fatal("user delete left a service account the user owns")
+	}
+	if got := fetch(t, get(s.ServiceAccounts, f.sa.Meta.ID)); got == nil {
+		t.Fatal("user delete took a service account of a project")
+	}
+	b = fetch(t, get(s.RoleBindings, f.binding.Meta.ID))
+	for _, sub := range b.Spec.Subjects {
+		if sub.Kind == directory.SubjectServiceAccount && sub.ID == bot.Meta.ID {
+			t.Fatal("a deleted user's service account is still a binding subject")
+		}
+	}
+}
+
 // testScopeCascades: deleting a team or project deletes the bindings scoped to it, and a team's delete those of its projects; bindings at any other scope stay.
 func testScopeCascades(t *testing.T, s directory.Stores) {
 	ctx := context.Background()
