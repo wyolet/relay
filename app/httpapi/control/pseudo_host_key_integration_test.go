@@ -487,7 +487,7 @@ func TestPseudoHostKey_Refusals(t *testing.T) {
 	}
 }
 
-// A write is audited as each row's create; a request refused before its write or during it as one row naming the request; a dry run, refused or not, as nothing.
+// A write is audited as each row's create; a request refused before its write or during it as one row naming the request; a dry run that asked the host as one dry-run row on the host, whatever it answered; a dry run refused before the host was asked as nothing.
 func TestPseudoHostKey_Audit(t *testing.T) {
 	type entry struct {
 		Action, Kind, Status string
@@ -495,6 +495,9 @@ func TestPseudoHostKey_Audit(t *testing.T) {
 	}
 	refused := func(status string, code int) []entry {
 		return []entry{{"pseudo-host-keys.create", "pseudo-host-key", status, code}}
+	}
+	probed := func(status string, code int) []entry {
+		return []entry{{"pseudo-host-keys.dry-run", "host", status, code}}
 	}
 	for _, tc := range []struct {
 		name, deny, value string
@@ -504,8 +507,9 @@ func TestPseudoHostKey_Audit(t *testing.T) {
 		{name: "made", value: keyOrgC, want: []entry{{"accounts.create", "account", audit.StatusAllowed, 201}, {"host-keys.create", "host-key", audit.StatusAllowed, 201}}},
 		{name: "refused by the provider", value: keyRevoked, want: refused(audit.StatusError, 422)},
 		{name: "a row refused", value: keyOrgC, deny: "host-keys.create", want: refused(audit.StatusDenied, 403)},
-		{name: "a dry run", value: keyOrgC, dry: true},
-		{name: "a dry run refused by the provider", value: keyRevoked, dry: true},
+		{name: "a dry run", value: keyOrgC, dry: true, want: probed(audit.StatusAllowed, 200)},
+		{name: "a dry run refused by the provider", value: keyRevoked, dry: true, want: probed(audit.StatusError, 422)},
+		{name: "a dry run refused before the host was asked", value: keyOrgC, deny: "host-keys.create", dry: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &auditSink{}

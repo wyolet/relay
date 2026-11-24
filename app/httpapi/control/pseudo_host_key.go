@@ -78,9 +78,9 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodPost,
 		Path:        "/pseudo-host-keys",
 		Summary:     "Create a provider key with its account, the account's tier and its shares",
-		Description: "First asks the host which organization spec.value belongs to, with the one read POST /host-keys/by-id/{id}/detect-account makes, to the host's own base URL: a 401 or 403 refuses the request with 422 provider_refused_key and nothing is stored; a host that names no organization, or does not answer, refuses nothing and is answered in detection. A detected organization another account of the owner at the host holds answers 409 organization_taken with that account. Then, in one transaction, makes the account (spec.account, taking the detected orgId) or uses spec.accountId, binds it alone to spec.tierPolicyId (one of the host's tier presets, else 400) as PUT /accounts/{ref}/policy does, makes the host key in it, and shares the account with each spec.shareWith receiver that neither holds a share of it nor reaches it by ownership; those are answered with existing: true. A host that takes no key takes no value and gets no host key. spec.value is sealed under the owner's scope before the transaction and removed if the transaction does not commit. " +
+		Description: "First asks the create grants the host key and a new account will ask for the owner, with the owner rules of POST /host-keys: a refusal answers as that create would, before the host is asked anything or a value is stored. Then asks the host which organization spec.value belongs to, with the one read POST /host-keys/by-id/{id}/detect-account makes, to the host's own base URL: a 401 or 403 refuses the request with 422 provider_refused_key and nothing is stored; a host that names no organization, or does not answer, refuses nothing and is answered in detection. A detected organization another account of the owner at the host holds answers 409 organization_taken with that account. Then, in one transaction, makes the account (spec.account, taking the detected orgId) or uses spec.accountId, binds it alone to spec.tierPolicyId (one of the host's tier presets, else 400) as PUT /accounts/{ref}/policy does, makes the host key in it, and shares the account with each spec.shareWith receiver that neither holds a share of it nor reaches it by ownership; those are answered with existing: true. A host that takes no key takes no value and gets no host key. spec.value is sealed under the owner's scope before the transaction and removed if the transaction does not commit. " +
 			"Each row passes exactly what its own create call passes (POST /accounts, PUT /accounts/{ref}/policy, POST /host-keys, POST /accounts/{ref}/shares), with the same answers; a refusal names the row by pointer, the JSON pointer of the part of the body it came from, and nothing is written. Once every row passed, the rows are checked against the plans as a whole: errors they would raise that the plans do not have now refuse the request with 422 plan_issue. " +
-			"dryRun=true asks the host the same once and does everything else but storing the value and the commit, and answers 200 with the same body, ids included. Each row made is audited as its own create. The value never appears in an answer.",
+			"dryRun=true asks the host the same once and does everything else but storing the value and the commit, and answers 200 with the same body, ids included. Each row made is audited as its own create; a dry run that asked the host is audited as one pseudo-host-keys.dry-run row on the host, whatever it answered. The value never appears in an answer or audit row.",
 		Tags:          []string{"host-keys"},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusCreated,
@@ -89,11 +89,12 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 	}, func(ctx context.Context, in *pseudoHostKeyInput) (*pseudoHostKeyOutput, error) {
 		body := in.Body
 		check, err := d.checkHostKeyForm(ctx, &body)
-		if err == nil {
-			err = d.mayCreateHostKeyForm(ctx, body)
+		if in.DryRun && check != nil {
+			defer func() { audit.RecordOnly(ctx, []audit.Row{probedDryRunRow(ctx, body.Spec.HostID, err)}) }()
 		}
 		if err != nil {
-			return nil, d.refusePseudo(ctx, err, in.DryRun)
+			err = d.refusePseudo(ctx, err, in.DryRun)
+			return nil, err
 		}
 		keyID := ids.New()
 		var outside []pseudo.Outside
@@ -127,7 +128,7 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 	}
 }
 
-// checkHostKeyForm runs what is checked before anything is written: the body's own rules, its owner settled as POST /host-keys settles it, the host, the value against the host, then the value against the provider, whose refusal of the key refuses the request. It returns what the host said of the value, nil when there was none to check.
+// checkHostKeyForm runs what is checked before anything is written: the body's own rules, its owner settled as POST /host-keys settles it, the host, the value against the host, the create grants the rows will ask (mayCreateHostKeyForm), then the value against the provider, whose refusal of the key refuses the request. It returns what the host said of the value, refused or not, nil when the provider was not asked.
 func (d Deps) checkHostKeyForm(ctx context.Context, body *pseudo.HostKeyForm) (*keyCheck, error) {
 	if err := pseudo.CheckHostKey(*body); err != nil {
 		return nil, err
@@ -142,13 +143,16 @@ func (d Deps) checkHostKeyForm(ctx context.Context, body *pseudo.HostKeyForm) (*
 	if err := pseudo.CheckHostKeyValue(body.Spec, h.Meta.Name, h.Spec.NoAuth); err != nil {
 		return nil, err
 	}
+	if err := d.mayCreateHostKeyForm(ctx, *body); err != nil {
+		return nil, err
+	}
 	v := body.Spec.Value
 	if v == "" {
 		return nil, nil
 	}
 	c := checkKeyValue(ctx, d.Catalog.Current(), d.Adapters, h.Meta.ID, v)
 	if c.Outcome == keyRefused {
-		return nil, refusal(&httpapi.APIError{
+		return &c, refusal(&httpapi.APIError{
 			Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeProviderRefusedKey, Message: c.Reason + " to the key: the provider does not accept it; nothing was written"},
 			HTTPStatus: http.StatusUnprocessableEntity,
 		}, "/spec/value")

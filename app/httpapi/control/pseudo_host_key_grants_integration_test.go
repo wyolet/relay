@@ -23,6 +23,28 @@ func (w *hostKeyFormWorld) secretRows(t *testing.T) map[string]int {
 	return out
 }
 
+// A caller who may not create the host key under its owner is refused before the host is asked anything, on a dry run too: the provider gets no request.
+func TestPseudoHostKey_RefusedBeforeTheProvider(t *testing.T) {
+	w := newHostKeyFormWorld(t)
+	for name, owner := range map[string]map[string]string{
+		"no grant in the owner's scope": {"kind": "team", "id": w.teamTwo.Meta.ID},
+		"a team that does not exist":    {"kind": "team", "id": ids.New()},
+	} {
+		for _, dry := range []bool{false, true} {
+			rec, _ := w.post(t, "carol", map[string]any{
+				"metadata": map[string]any{"displayName": "Probe", "owner": owner},
+				"spec":     map[string]any{"hostId": w.alpha.Meta.ID, "value": keyOrgA, "account": map[string]any{"displayName": "Probe"}},
+			}, dry)
+			if r := refusalOf(t, rec); rec.Code != http.StatusForbidden || r.Pointer != "/metadata/owner" {
+				t.Errorf("%s, dry run %v: %d %s, want 403 at /metadata/owner", name, dry, rec.Code, rec.Body)
+			}
+		}
+	}
+	if n := w.probes.Load(); n != 0 {
+		t.Errorf("the provider got %d requests from callers refused", n)
+	}
+}
+
 // A caller who may not create the host key under its owner, or an owner a host key cannot have, is refused before the value is sealed: no sealed value and no data key is written for any scope.
 func TestPseudoHostKey_RefusedBeforeSealing(t *testing.T) {
 	w := newHostKeyFormWorld(t)
