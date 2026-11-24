@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/limits"
@@ -276,4 +277,29 @@ func TestPool_DrawsOnAShare(t *testing.T) {
 	if got := len(get[PoolPlan](h, p.Meta.ID).Slots); got != 2 {
 		t.Errorf("pool slots = %d, want 2: each share reaches the key under its own limits", got)
 	}
+}
+
+// Deleting a share or a key a pool lists drops it from the pool through a foreign key, which leaves the pool's version alone: the pool re-read at that version lists neither, and its missing-member issues clear.
+func TestPool_ReReadAtSameVersionDropsDeletedMembers(t *testing.T) {
+	s := newSharing()
+	teamOwner := meta.Owner{Kind: meta.OwnerTeam, ID: s.team.Meta.ID}
+	shared := s.w.share(s.real, account.Receiver{Kind: account.ReceiverTeam, ID: s.team.Meta.ID}, teamOwner)
+	loose := s.w.cred(s.host, nil, system)
+	p := s.w.pool(s.host, loose, s.key)
+	p.Meta.Owner, p.Meta.ResourceVersion = teamOwner, "3"
+	p.Spec.AccountIDs = []string{shared.Meta.ID}
+	h := s.w.start(t)
+
+	del(h, KindAccount, shared.Meta.ID)
+	del(h, KindCredential, loose.Meta.ID)
+	h.wantIssue(KindPool, p.Meta.ID, IssueRefMissing, true)
+
+	reread := clone(p)
+	reread.Spec.AccountIDs, reread.Spec.CredentialIDs = nil, []string{s.key.Meta.ID}
+	apply(h, reread)
+	got := get[PoolPlan](h, p.Meta.ID).Pool.Spec
+	if diff := cmp.Diff(reread.Spec, got); diff != "" {
+		t.Errorf("pool spec (-want +got):\n%s", diff)
+	}
+	h.wantIssue(KindPool, p.Meta.ID, IssueRefMissing, false)
 }
