@@ -27,8 +27,11 @@ func TestClassifyFailure_LimitRefusals(t *testing.T) {
 			t.Errorf("classifyFailure(%v) = %q, %d; want %q, 0", err, kind, status, want)
 		}
 	}
-	if kind, _ := classifyFailure(&UpstreamLimitedError{}); kind != "rate_limited" {
-		t.Errorf("an upstream limit records %q, want rate_limited", kind)
+	// A provider account's spent budget is answered as an upstream rate limit, so it records as one.
+	for _, err := range []error{&UpstreamLimitedError{}, &UpstreamLimitedError{Refused: &limits.Refused{Counter: &limits.Counter{Kind: limits.KindBudget, Rung: limits.RungAccount}}}} {
+		if kind, _ := classifyFailure(err); kind != "rate_limited" {
+			t.Errorf("an upstream limit (%+v) records %q, want rate_limited", err, kind)
+		}
 	}
 }
 

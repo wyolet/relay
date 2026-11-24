@@ -43,7 +43,7 @@ Retry-After: 302400
 
 `Retry-After` is the time left until the next period starts.
 
-A budget on an upstream rung (a provider account) caps the total spend through that account's host keys, whoever the caller is; linked with `shared: false`, it caps each caller lane's spend through them. When it is spent, Relay skips that host key the way it skips one over an upstream rate limit, and the request fails with `429 rate_limit_exceeded` only when no other key can serve it.
+A budget on an upstream rung (a provider account) caps the total spend through that account's host keys, whoever the caller is; linked with `shared: false`, it caps each caller lane's spend through them. When it is spent, Relay skips that host key the way it skips one over an upstream rate limit, and the request fails with `429 rate_limit_exceeded` only when no other key can serve it. Its usage event records `error_kind` `rate_limited`, as for an upstream rate limit.
 
 An **alert** budget is never checked at admission. Both modes report the charge that takes a budget to its cap, once per budget and period, in the `relay_limits_budget_crossings_total` counter, labelled by `rung` and `mode`.
 
@@ -51,7 +51,7 @@ An **alert** budget is never checked at admission. Both modes report the charge 
 
 A budget can only count what has a price. While any budget applies to a request, on any rung, a binding that has no pricing, or whose pricing is disabled, is refused with `403 unpriced_under_budget`, naming the rung and policy whose budget applies. Requests for priced models under the same policy are unaffected, and so are unpriced models for callers with no budget on their ladder.
 
-To allow such a model under a budget, add or enable a pricing for its binding (`/api/pricings`). Pricing is shared catalog data, so under `RELAY_AUTHZ=rbac` writing it takes the `admin` or `catalog-editor` role; see [Ownership](/concepts/catalog#ownership).
+To allow such a model under a budget, add or enable a pricing for its binding (`/api/pricings`). A model meant to be free under a budget needs an enabled pricing with zero rates: a disabled one counts as none. Pricing is shared catalog data, so under `RELAY_AUTHZ=rbac` writing it takes the `admin` or `catalog-editor` role; see [Ownership](/concepts/catalog#ownership).
 
 ## Deleting a budget
 
