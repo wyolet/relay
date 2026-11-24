@@ -108,21 +108,10 @@ func checkAgent(s AgentSpec) error {
 	if (s.PolicyID == "") == (s.Access == nil) {
 		return &BodyError{Pointer: "/spec", Message: "exactly one of spec.policyId and spec.access is required"}
 	}
-	a := s.Access
-	switch {
-	case a == nil:
+	if s.Access == nil {
 		return nil
-	case a.EveryCredential && len(a.AccountIDs) > 0:
-		return &BodyError{Pointer: "/spec/access/accountIds", Message: "accountIds must be empty when everyCredential is true"}
-	case a.EveryCredential && len(a.PoolIDs) > 0:
-		return &BodyError{Pointer: "/spec/access/poolIds", Message: "poolIds must be empty when everyCredential is true"}
-	case !a.EveryCredential && len(a.AccountIDs) == 0 && len(a.PoolIDs) == 0:
-		return &BodyError{Pointer: "/spec/access", Message: "accountIds or poolIds is required unless everyCredential is true"}
 	}
-	if err := listedOnce("account", "accountIds", a.AccountIDs); err != nil {
-		return err
-	}
-	return listedOnce("pool", "poolIds", a.PoolIDs)
+	return checkAccess(s.Access)
 }
 
 // listedOnce refuses an id the list at field names twice.
@@ -169,29 +158,10 @@ func (x *agentExpansion) lane(sa *serviceaccount.ServiceAccount) *account.Accoun
 
 // pools makes one pool per host of the listed accounts, in the order the hosts first appear, sharing first each real account the owner neither reaches nor holds a share of; it returns the pools' ids.
 func (x *agentExpansion) pools(sa *serviceaccount.ServiceAccount, accountIDs []string) ([]string, error) {
-	var hosts []string
-	members := map[string][]string{}
-	for i, id := range accountIDs {
-		pointer := fmt.Sprintf("/spec/access/accountIds/%d", i)
-		a := x.in.Accounts[id]
-		if a == nil {
-			return nil, &BodyError{Pointer: pointer, Message: fmt.Sprintf("account %q not found", id)}
-		}
-		if x.in.KeylessHosts[a.Spec.HostID] {
-			return nil, &BodyError{Pointer: pointer, Message: fmt.Sprintf("account %q is at host %q, which takes no key, so a pool would ignore it; name that host's pool in poolIds instead", a.Meta.Name, x.in.HostNames[a.Spec.HostID])}
-		}
-		member := id
-		if a.IsProvider() && !a.IsShared() && !x.in.Reaches(a) {
-			if s := x.in.Shares[id]; s != nil {
-				member = s.Meta.ID
-			} else {
-				member = x.share(a, pointer).Meta.ID
-			}
-		}
-		if _, ok := members[a.Spec.HostID]; !ok {
-			hosts = append(hosts, a.Spec.HostID)
-		}
-		members[a.Spec.HostID] = append(members[a.Spec.HostID], member)
+	src := accountSources{accounts: x.in.Accounts, hostNames: x.in.HostNames, keyless: x.in.KeylessHosts, reaches: x.in.Reaches, shares: x.in.Shares, ownerName: x.in.OwnerName, names: x.in.Names, newID: x.in.NewID}
+	hosts, members, err := poolMembers(src, x.owner, accountIDs, x.add)
+	if err != nil {
+		return nil, err
 	}
 	ids := make([]string, 0, len(hosts))
 	for _, h := range hosts {
@@ -206,15 +176,6 @@ func (x *agentExpansion) pools(sa *serviceaccount.ServiceAccount, accountIDs []s
 	return ids, nil
 }
 
-// share is src shared with the owner scope.
-func (x *agentExpansion) share(src *account.Account, pointer string) *account.Account {
-	s := account.Share(src, account.Receiver{Kind: account.ReceiverKind(x.owner.Kind), ID: x.owner.ID}, x.owner, x.in.OwnerName)
-	s.Meta.ID = x.in.NewID()
-	s.Meta.Name = x.in.Names.Mint("account", s.Meta.Name, "account")
-	x.add("account", pointer, &s.Meta, s)
-	return s
-}
-
 func (x *agentExpansion) policy(sa *serviceaccount.ServiceAccount, poolIDs, models []string) *policy.Policy {
 	display := label(sa.Meta)
 	p := &policy.Policy{
@@ -227,11 +188,16 @@ func (x *agentExpansion) policy(sa *serviceaccount.ServiceAccount, poolIDs, mode
 
 // binding binds the lane alone to the policy in the lane's scope, as PUT /accounts/{ref}/policy does.
 func (x *agentExpansion) binding(policyID, policyName string, lane *account.Account, pointer string) {
-	b := &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: x.in.NewID(), Name: x.in.Names.Mint("policy-binding", policyName+"-"+lane.Meta.Name, "policy-binding"), Owner: lane.Meta.Owner},
-		Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{lane.Meta.ID}},
-	}
+	b := bindingAlone(x.in.Names, x.in.NewID, policyID, policyName, lane)
 	x.add("policy-binding", pointer, &b.Meta, b)
+}
+
+// bindingAlone is a binding of acc alone to policyID in acc's scope, named as PUT /accounts/{ref}/policy names it.
+func bindingAlone(names *Namer, newID func() string, policyID, policyName string, acc *account.Account) *policybinding.PolicyBinding {
+	return &policybinding.PolicyBinding{
+		Meta: meta.Metadata{ID: newID(), Name: names.Mint("policy-binding", policyName+"-"+acc.Meta.Name, "policy-binding"), Owner: acc.Meta.Owner},
+		Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{acc.Meta.ID}},
+	}
 }
 
 func (x *agentExpansion) key(sa *serviceaccount.ServiceAccount, lane *account.Account, k *AgentKey) {

@@ -111,33 +111,12 @@ func (d Deps) agentReads(ctx context.Context, body pseudo.Agent) (pseudo.AgentRe
 		pools = a.PoolIDs
 	}
 	if a := body.Spec.Access; a != nil && len(a.AccountIDs) > 0 {
-		in.Shares = map[string]*account.Account{}
-		all, err := d.Stores.Account.List(ctx)
+		ar, err := d.readAccessAccounts(ctx, a.AccountIDs, owner)
 		if err != nil {
 			return in, err
 		}
-		receiver := account.Receiver{Kind: account.ReceiverKind(owner.Kind), ID: owner.ID}
-		for _, s := range all {
-			if s.IsShared() && s.Meta.Owner == owner && s.Receiver() == receiver {
-				in.Shares[s.Spec.SourceAccountID] = s
-			}
-		}
-		for i, id := range a.AccountIDs {
-			acc, err := d.findAccount(ctx, id)
-			if err != nil {
-				return in, refusal(err, fmt.Sprintf("/spec/access/accountIds/%d", i))
-			}
-			in.Accounts[id] = acc
-			upstreamAccounts = append(upstreamAccounts, id)
-			if s := in.Shares[id]; s != nil {
-				upstreamAccounts = append(upstreamAccounts, s.Meta.ID)
-			}
-			if h, err := d.Stores.Host.Get(ctx, acc.Spec.HostID); err == nil && h != nil {
-				pseudo.Record(ctx, h.Meta.ID, h)
-				in.HostNames[h.Meta.ID] = h.Meta.Name
-				in.KeylessHosts[h.Meta.ID] = h.Spec.NoAuth
-			}
-		}
+		in.Accounts, in.HostNames, in.KeylessHosts, in.Shares = ar.accounts, ar.hostNames, ar.keyless, ar.shares
+		upstreamAccounts = append(upstreamAccounts, ar.upstream...)
 	}
 	if id := body.Spec.PolicyID; id != "" {
 		in.PolicyName = "policy"
