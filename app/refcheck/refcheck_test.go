@@ -190,12 +190,14 @@ func TestKeyOwnedByPrincipal(t *testing.T) {
 		want string
 	}{
 		{"a project's service account, in its project", sa("sa-1", projectOne), ""},
-		{"a project's service account, in another project", sa("sa-1", projectTwo), `400: a key is owned by its principal's scope, another project; it cannot move to another project. Leave metadata.owner out, or create a key for another principal`},
+		{"a project's service account, in another project", sa("sa-1", projectTwo), `400: a key is owned by its principal's scope, another project; it cannot move to a different project. Leave metadata.owner out, or create a key for another principal`},
 		{"a project's service account, in its team", sa("sa-1", teamOne), `400: a key is owned by its principal's scope, another project; it cannot move to another team. Leave metadata.owner out, or create a key for another principal`},
 		{"a team's service account, in its team", sa("sa-t", teamOne), ""},
 		{"a team's service account, in a project of the team", sa("sa-t", projectOne), `400: a key is owned by its principal's scope, another team; it cannot move to another project. Leave metadata.owner out, or create a key for another principal`},
 		{"a missing service account", sa("sa-gone", projectOne), `404: service-account "sa-gone" not found`},
 		{"a user's key, theirs", usr, ""},
+		{"a user's key, in a team", &key.Key{Meta: meta.Metadata{Owner: teamOne}, Spec: usr.Spec}, `400: a key is owned by its principal's scope, your personal scope; it cannot move to another team. Leave metadata.owner out, or create a key for another principal`},
+		{"a user's key, in another user's scope", &key.Key{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-2"}}, Spec: usr.Spec}, `400: a key is owned by its principal's scope, your personal scope; it cannot move to another user's personal scope. Leave metadata.owner out, or create a key for another principal`},
 	} {
 		wantRefused(t, tc.name, keyRows(nil).KeyOwnedByPrincipal(as("u-1"), tc.k), tc.want)
 	}

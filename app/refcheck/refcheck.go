@@ -409,7 +409,11 @@ func (c Checker) KeyOwnedByPrincipal(ctx context.Context, k *key.Key) error {
 		want = sa.Meta.Owner
 	}
 	if k.Meta.Owner != want {
-		return badRequest("a key is owned by its principal's scope, %s; it cannot move to %s. Leave metadata.owner out, or create a key for another principal", c.scopeText(ctx, want), c.scopeText(ctx, k.Meta.Owner))
+		from, to := c.scopeText(ctx, want), c.scopeText(ctx, k.Meta.Owner)
+		if to == from {
+			to = "a different " + string(k.Meta.Owner.Kind)
+		}
+		return badRequest("a key is owned by its principal's scope, %s; it cannot move to %s. Leave metadata.owner out, or create a key for another principal", from, to)
 	}
 	return nil
 }
