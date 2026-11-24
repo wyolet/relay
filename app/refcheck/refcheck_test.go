@@ -158,6 +158,29 @@ func TestPolicyRefAndRateLimitRef(t *testing.T) {
 	}
 }
 
+// A key stays owned by its principal's scope: a service account's owner, or the user it names.
+func TestKeyOwnedByPrincipal(t *testing.T) {
+	sa := func(id string, owner meta.Owner) *key.Key {
+		return &key.Key{Meta: meta.Metadata{Owner: owner}, Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: id}}}
+	}
+	usr := &key.Key{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}}, Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: "u-1"}}}
+	for _, tc := range []struct {
+		name string
+		k    *key.Key
+		want string
+	}{
+		{"a project's service account, in its project", sa("sa-1", projectOne), ""},
+		{"a project's service account, in another project", sa("sa-1", projectTwo), `400: a key is owned by its principal's scope, another project; it cannot move to another project. Leave metadata.owner out, or create a key for another principal`},
+		{"a project's service account, in its team", sa("sa-1", teamOne), `400: a key is owned by its principal's scope, another project; it cannot move to another team. Leave metadata.owner out, or create a key for another principal`},
+		{"a team's service account, in its team", sa("sa-t", teamOne), ""},
+		{"a team's service account, in a project of the team", sa("sa-t", projectOne), `400: a key is owned by its principal's scope, another team; it cannot move to another project. Leave metadata.owner out, or create a key for another principal`},
+		{"a missing service account", sa("sa-gone", projectOne), `404: service-account "sa-gone" not found`},
+		{"a user's key, theirs", usr, ""},
+	} {
+		wantRefused(t, tc.name, keyRows(nil).KeyOwnedByPrincipal(as("u-1"), tc.k), tc.want)
+	}
+}
+
 // keyRows has service account sa-1 of project p-1, service account sa-t of team t-1, and users u-1 and u-2.
 func keyRows(a authz.Authorizer) Checker {
 	return Checker{Authz: a, Rows: Lookup{

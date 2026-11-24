@@ -457,6 +457,35 @@ func TestDeleteTeam_ItsServiceAccountsBlock(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "teams", tm.Meta.ID, false), http.StatusNoContent)
 }
 
+// A key's row stays with its principal's owner: an update naming another project or team is refused, even from a caller who may create keys there, and the stored owner is kept.
+func TestUpdateKey_OwnerStaysWithItsPrincipal(t *testing.T) {
+	f, ctx := newPolicyDeleteFixture(t)
+	k := f.projectKey(t, ctx, "key-c")
+	other := &project.Project{Meta: meta.Metadata{ID: meta.NewID(), Name: "other-project"}, Spec: project.Spec{TeamID: f.proj.Spec.TeamID}}
+	other.StampOwner()
+	must(t, "upsert project", f.stores.Project.Upsert(ctx, other))
+	put := func(owner string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/keys/by-id/"+k.Meta.ID, strings.NewReader(`{"metadata":{"name":"key-c"`+owner+`},"spec":{"principal":{"kind":"serviceaccount","id":"`+f.account.Meta.ID+`"}}}`))
+		req.Header.Set("Authorization", "Bearer test-admin-token")
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, req)
+		return w
+	}
+	for name, owner := range map[string]string{
+		"another project": `,"owner":{"kind":"project","id":"` + other.Meta.ID + `"}`,
+		"the team":        `,"owner":{"kind":"team","id":"` + f.proj.Spec.TeamID + `"}`,
+	} {
+		if w := put(owner); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "a key is owned by its principal's scope") {
+			t.Errorf("move to %s = %d %s, want 400", name, w.Code, w.Body)
+		}
+	}
+	if got, err := f.stores.Key.Get(ctx, k.Meta.ID); err != nil || got.Meta.Owner != k.Meta.Owner {
+		t.Fatalf("key after refused moves = %+v, %v; want owner %+v", got, err, k.Meta.Owner)
+	}
+	wantStatus(t, put(""), http.StatusOK)
+}
+
 func TestDeleteProject_RowsUnderItBlock(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	f.policy(t, ctx, "project-policy", f.projectOwner())

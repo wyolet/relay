@@ -116,8 +116,9 @@ func (k *Key) InGrace(now time.Time) bool {
 //   - Owner.Kind is project or team (serviceaccount principal) or user.
 //   - a user principal is owned by that same user.
 //
-// That the owner is the serviceaccount's own is checked against the
-// snapshot, not here: this package sees one row at a time.
+// That the owner is the serviceaccount's own is checked by app/refcheck
+// (KeyOwner on create, KeyOwnedByPrincipal on update), not here: this
+// package sees one row at a time.
 func (k *Key) Validate() error {
 	if err := meta.Validator.Struct(k); err != nil {
 		return err

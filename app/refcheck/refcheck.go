@@ -378,6 +378,25 @@ func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 	return nil
 }
 
+// KeyOwnedByPrincipal refuses a key whose owner is not the one KeyOwner gives its principal: a write that would move a key's row out of its principal's scope while it keeps running in the principal's lane.
+func (c Checker) KeyOwnedByPrincipal(ctx context.Context, k *key.Key) error {
+	want := meta.Owner{Kind: meta.OwnerUser, ID: k.Spec.Principal.ID}
+	if k.Spec.Principal.Kind == key.PrincipalServiceAccount {
+		if c.Rows.ServiceAccount == nil {
+			return nil
+		}
+		sa := c.Rows.ServiceAccount(ctx, k.Spec.Principal.ID)
+		if sa == nil {
+			return notVisible("service-account", k.Spec.Principal.ID)
+		}
+		want = sa.Meta.Owner
+	}
+	if k.Meta.Owner != want {
+		return badRequest("a key is owned by its principal's scope, %s; it cannot move to %s. Leave metadata.owner out, or create a key for another principal", c.scopeText(ctx, want), c.scopeText(ctx, k.Meta.Owner))
+	}
+	return nil
+}
+
 // ServiceAccount stamps the owner (metadata.owner, or the project
 // spec.projectId names) and checks the project or team it names.
 func (c Checker) ServiceAccount(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
