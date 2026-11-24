@@ -338,6 +338,67 @@ func TestPseudoAgentRemoval_HiddenRowOfARevoke(t *testing.T) {
 	}
 }
 
+// A dry run's deleted, sent back as expect, is the set the removal finds at submit, also when a share the service account holds empties one binding, shrinks another and leaves a pool, and also for a caller who may read only part of it; the removal then answers 200 and its audit trail is one row per row deleted or changed.
+func TestPseudoAgentRemoval_ExpectFromADryRunWithAShare(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		w := newAgentRemovalWorld(t)
+		ctx := t.Context()
+		receiver := account.Receiver{Kind: account.ReceiverServiceAccount, ID: w.agent.ServiceAccount.ID}
+		sh := account.Share(w.teamTwoAcct, receiver, w.owner, "ci-bot")
+		sh.Meta.ID = ids.New()
+		sh2 := account.Share(w.secondHostAcct, receiver, w.owner, "ci-bot")
+		sh2.Meta.ID = ids.New()
+		for _, s := range []*account.Account{sh, sh2} {
+			must(t, "share", w.stores.Account.Upsert(ctx, s))
+		}
+		alone := w.bind(t, w.policy(t, "share-host-tier", meta.Owner{Kind: meta.OwnerHost, ID: w.host.Meta.ID}, policy.Spec{}), w.owner, sh)
+		shared := w.bind(t, w.policy(t, "second-host-tier", meta.Owner{Kind: meta.OwnerHost, ID: w.secondHostAcct.Spec.HostID}, policy.Spec{}), w.owner, sh2, w.secondHostAcct)
+		p := &pool.Pool{Meta: meta.Metadata{ID: ids.New(), Name: "uses-share", Owner: w.owner}, Spec: pool.Spec{HostID: w.host.Meta.ID, AccountIDs: []string{sh.Meta.ID, w.teamTwoAcct.Meta.ID}}}
+		p.Default()
+		must(t, "pool", w.stores.Pool.Upsert(ctx, p))
+		if partial {
+			w.hidden[alone.Meta.ID], w.hidden[shared.Meta.ID] = true, true
+		}
+		w.loadPlans(t)
+
+		rec, dry := w.remove(t, "bob", map[string]any{}, true)
+		wantStatus(t, rec, http.StatusOK)
+		if hidden := map[bool]int{false: 0, true: 1}[partial]; dry.DeletedHidden != hidden || dry.UpdatedHidden != hidden {
+			t.Errorf("partial %v: hidden deleted %d, updated %d; want %d each", partial, dry.DeletedHidden, dry.UpdatedHidden, hidden)
+		}
+		rec, got := w.remove(t, "bob", map[string]any{"expect": idsOf(dry.Deleted)}, false)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("partial %v: %d %s, want 200 with the dry run's deleted as expect", partial, rec.Code, rec.Body)
+		}
+		if diff := cmp.Diff(dry.Deleted, got.Deleted); diff != "" || got.DeletedHidden != dry.DeletedHidden || got.UpdatedHidden != dry.UpdatedHidden {
+			t.Errorf("partial %v: the removal answered another set than its dry run (-dry +got):\n%s", partial, diff)
+		}
+		held := w.holdingOf(t, w.agent.Account.ID)
+		if held != nil {
+			t.Fatalf("partial %v: the lane is still held by %s", partial, held.Meta.Name)
+		}
+		want := []string{
+			"keys.delete " + w.agent.Key.ID, "policy-bindings.delete " + dryHeld(dry),
+			"accounts.delete " + sh.Meta.ID, "policy-bindings.delete " + alone.Meta.ID, "pools.update " + p.Meta.ID,
+			"accounts.delete " + sh2.Meta.ID, "policy-bindings.update " + shared.Meta.ID,
+			"service-accounts.delete " + w.agent.ServiceAccount.ID, "policies.delete " + w.agent.Policy.ID, "pools.delete " + w.agent.Pools[0].ID,
+		}
+		if diff := cmp.Diff(want, w.removalAudit(), cmpopts.SortSlices(func(a, b string) bool { return a < b })); diff != "" {
+			t.Errorf("partial %v: audit, one row per row deleted or changed (-want +got):\n%s", partial, diff)
+		}
+	}
+}
+
+// dryHeld is the id of the binding a dry run deleted for the service account's account.
+func dryHeld(a PseudoAgentRemovalAnswer) string {
+	for _, r := range a.Deleted {
+		if r.Kind == "policy-binding" && strings.HasPrefix(r.Name, "ci-bot-") {
+			return r.ID
+		}
+	}
+	return ""
+}
+
 // A delete its own call would refuse refuses the request with that refusal at /spec/serviceAccountId; nothing is deleted and one audit row names the route.
 func TestPseudoAgentRemoval_Refused(t *testing.T) {
 	for _, tc := range []struct {
