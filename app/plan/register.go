@@ -125,7 +125,8 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	input(e, KindBinding, src.Bindings, metaOf(func(r *binding.Binding) meta.Metadata { return r.Meta }), 16)
 	input(e, KindPricing, src.Pricings, metaOf(func(r *pricing.Pricing) meta.Metadata { return r.Meta }), 16)
 	input(e, KindOverlay, src.Overlays, func(o *overlay.Overlay) engine.Meta { return engine.Meta{ID: OverlayID(o.Kind, o.ResourceID)} }, 1)
-	input(e, KindPolicy, src.Policies, metaOf(func(r *policy.Policy) meta.Metadata { return r.Meta }), 16)
+	// Version 0: deleting a rate limit or budget a policy links drops the link through a foreign key, which leaves the policy row's version alone, so policies are compared by value.
+	input(e, KindPolicy, src.Policies, func(r *policy.Policy) engine.Meta { return engine.Meta{ID: r.Meta.ID, Name: r.Meta.Name} }, 16)
 	input(e, KindPolicyBinding, src.PolicyBindings, metaOf(func(r *policybinding.PolicyBinding) meta.Metadata { return r.Meta }), 16)
 	input(e, KindRateLimit, src.RateLimits, metaOf(func(r *ratelimit.RateLimit) meta.Metadata { return r.Meta }), 1)
 	input(e, KindBudget, src.Budgets, metaOf(func(r *budget.Budget) meta.Metadata { return r.Meta }), 1)
