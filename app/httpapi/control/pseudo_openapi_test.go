@@ -1,6 +1,7 @@
 package control
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -33,6 +34,21 @@ func TestPseudoKinds_DocumentBlockers(t *testing.T) {
 		if got := blockersOf(path, "post"); !sameRef(got, want) {
 			t.Errorf("%s: 409 blockers items %v, want %v", path, got, want)
 		}
+	}
+}
+
+// The agent body's owner kinds are those a service account may be owned by: project, team and user.
+func TestPseudoAgent_OwnerKinds(t *testing.T) {
+	d := mountDeps(t)
+	d.PseudoKinds = []string{"all"}
+	doc, err := openapitest.Decode(Mount(chi.NewRouter(), d).OpenAPI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := doc["components"].(map[string]any)["schemas"].(map[string]any)["AgentOwner"].(map[string]any)
+	kind, _ := s["properties"].(map[string]any)["kind"].(map[string]any)
+	if got := fmt.Sprint(kind["enum"]); got != "[project team user]" {
+		t.Errorf("AgentOwner.kind enum = %s, want [project team user]", got)
 	}
 }
 
