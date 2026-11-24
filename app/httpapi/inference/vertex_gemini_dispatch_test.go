@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -99,29 +100,75 @@ func TestDispatch_VertexGeminiPathAndAuth(t *testing.T) {
 	}
 }
 
-// A host whose backend leaves {project} unset answers host_misconfigured and calls nothing; a file URL whose media type cannot be told is refused before any call rather than sent without one.
+// A host whose backend leaves {project} unset answers host_misconfigured, and a file URL whose media type cannot be told is refused rather than sent without one; neither calls the upstream.
 func TestDispatch_VertexGeminiRefusals(t *testing.T) {
+	const image = `{"model":"test-model","messages":[{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"https://example.com/cat.png"}}]}]}`
+	const textFile = `{"model":"test-model","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"read this"},{"type":"input_file","file_url":"https://example.com/notes.txt"}]}]}`
 	for name, tc := range map[string]struct {
 		backend map[string]string
-		image   string
+		inbound adapters.Name
+		body    string
 		status  int
 		code    string
 	}{
-		"backend without project":      {map[string]string{"location": "us-central1"}, "https://example.com/cat.png", http.StatusBadGateway, "host_misconfigured"},
-		"image URL with no media type": {vertexBackend, "https://example.com/cat", http.StatusBadRequest, "unsupported_request"},
+		"backend without project":     {map[string]string{"location": "us-central1"}, adapters.OpenAI, image, http.StatusBadGateway, "host_misconfigured"},
+		"file URL with no media type": {vertexBackend, adapters.Canonical, textFile, http.StatusBadRequest, "unsupported_request"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			upURL, calls := vertexUpstream(t, "application/json", vertexReply)
 			d, pr := vertexDeps(t, upURL, tc.backend)
 
-			body := `{"model":"test-model","messages":[{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"` + tc.image + `"}}]}]}`
-			w := dispatch(d, pr, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(body), ModelName: "test-model"})
+			w := dispatch(d, pr, DispatchInput{Inbound: tc.inbound, Body: []byte(tc.body), ModelName: "test-model"})
 
 			if w.Code != tc.status || errCode(t, w.Body.Bytes()) != tc.code {
 				t.Errorf("status %d: %s; want %d %s", w.Code, w.Body, tc.status, tc.code)
 			}
 			if got := calls(); len(got) != 0 {
 				t.Errorf("upstream was called: %+v", got)
+			}
+		})
+	}
+}
+
+// An image URL whose extension names no image type goes as image/*, which Vertex accepts for any image.
+func TestDispatch_VertexGeminiUntypedImage(t *testing.T) {
+	upURL, calls := vertexUpstream(t, "application/json", vertexReply)
+	d, pr := vertexDeps(t, upURL, vertexBackend)
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"https://example.com/cat"}}]}]}`
+	w := dispatch(d, pr, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(body), ModelName: "test-model"})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	got := calls()
+	if len(got) != 1 {
+		t.Fatalf("upstream calls = %+v, want one", got)
+	}
+	wantJSON(t, "Gemini request sent upstream", got[0].Body, `{"contents":[{"role":"user","parts":[{"text":"what is this?"},{"fileData":{"mimeType":"image/*","fileUri":"https://example.com/cat"}}]}]}`)
+}
+
+// A host path for vertex_gemini replaces the whole default path, the model and the generateContent verb included, on sync and stream alike; only its placeholders are filled.
+func TestDispatch_VertexGeminiHostPathOverride(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run("stream="+strconv.FormatBool(stream), func(t *testing.T) {
+			reply, contentType := vertexReply, "application/json"
+			if stream {
+				reply, contentType = vertexStream, "text/event-stream"
+			}
+			upURL, calls := vertexUpstream(t, contentType, reply)
+			cat, pr := buildDispatchCatalog(t, "vertex", adapters.VertexGemini)
+			setHostSpec(t, cat, host.Spec{BaseURL: upURL, Backend: vertexBackend, Paths: map[adapters.Name]string{adapters.VertexGemini: "/custom/{project}/generate"}})
+			d := buildRunnableDeps(t, cat)
+			useSpecs(&d, productionSpecs())
+
+			w := dispatch(d, pr, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":` + strconv.FormatBool(stream) + `}`), ModelName: "test-model", Stream: stream})
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", w.Code, w.Body)
+			}
+			if got := calls(); len(got) != 1 || got[0].Path != "/custom/proj-1/generate" || got[0].Query != "" {
+				t.Errorf("upstream calls = %+v, want one to /custom/proj-1/generate with no query", got)
 			}
 		})
 	}

@@ -11,7 +11,7 @@ import (
 // GeminiTranslator implements v1.Translator for the Gemini generateContent
 // wire shape. Stateless value type; per-stream state lives in closures.
 type GeminiTranslator struct {
-	// Vertex selects the Vertex AI form of the request: every fileData part carries a mimeType, taken from the part's media type or its URL's extension, and a part with neither is refused with v1.ErrUnsupportedRequest. Responses, streams and usage read the same either way.
+	// Vertex selects the Vertex AI form of the request: every fileData part carries a mimeType. An image URL takes its extension's image type, else image/*; a file URL its part's media type, else the one its URL names (a YouTube video, an extension), and a file URL with none is refused with v1.ErrUnsupportedRequest. Responses, streams and usage read the same either way.
 	Vertex bool
 }
 
