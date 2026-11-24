@@ -32,6 +32,7 @@ type PseudoAccessAnswer struct {
 	Updated         []CreatedRow      `json:"updated,omitempty"   doc:"Every row updated, in write order."`
 	Deleted         []CreatedRow      `json:"deleted,omitempty"   doc:"Every row deleted, in write order."`
 	Warnings        []PseudoIssue     `json:"warnings"            doc:"Plan warnings the rows written would raise that are not there now, on those rows (as the row carrying the warning, or the row it names). They refuse nothing; [] when none, and on the dry run without access. A row the caller may not see keeps its code and kind only."`
+	Under           *PseudoUnder      `json:"under,omitempty"     doc:"For a team or project target: what the change does to the lanes under it, which it applies to. Never a refusal; absent for a service account target and on the dry run without access."`
 }
 
 type pseudoAccessOutput struct {
@@ -61,10 +62,16 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 			return out, err
 		}
 		var change pseudo.AccessChange
-		var targetID string
+		var target *account.Account
+		var under *PseudoUnder
 		poolNames := map[string]string{}
 		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
-			return checkPolicyStep(targetID)(f)
+			if err := checkPolicyStep(target.Meta.ID)(f); err != nil {
+				return err
+			}
+			var err error
+			under, err = d.under(ctx, f, target)
+			return err
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
 			if err := pseudo.CheckAccess(in.Body); err != nil {
@@ -74,7 +81,7 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 			if err != nil {
 				return nil, err
 			}
-			targetID = reads.Policy.Account.Meta.ID
+			target = reads.Policy.Account
 			for id, name := range names {
 				poolNames[id] = name
 			}
@@ -86,7 +93,7 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, err
 		}
 		out.Body = accessAnswer(change, rows, poolNames)
-		out.Body.Warnings = w.warnings
+		out.Body.Warnings, out.Body.Under = w.warnings, under
 		if !in.DryRun && len(rows) > 0 {
 			out.Status = http.StatusCreated
 		}

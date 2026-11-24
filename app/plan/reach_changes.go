@@ -30,28 +30,74 @@ func ChangedReach(before, after *engine.View, mine func(*CallerPlan) bool) []Rea
 		if was == nil || is == nil || mine(was) || mine(is) || laneState(was) == laneState(is) {
 			continue
 		}
-		if narrowed, changed := compareReach(ReachOf(before, acc.Meta.ID, nil), ReachOf(after, acc.Meta.ID, nil)); changed {
-			out = append(out, ReachChange{AccountID: acc.Meta.ID, Narrowed: narrowed})
+		if lost, gained := diffReach(ReachOf(before, acc.Meta.ID, nil), ReachOf(after, acc.Meta.ID, nil)); lost || gained {
+			out = append(out, ReachChange{AccountID: acc.Meta.ID, Narrowed: lost})
 		}
 	}
 	slices.SortFunc(out, func(a, b ReachChange) int { return strings.Compare(a.AccountID, b.AccountID) })
 	return out
 }
 
-// compareReach reports whether after differs from before and, if so, whether it lost anything before had.
-func compareReach(before, after *Reach) (narrowed, changed bool) {
+// LaneReachChange is one lane and how its reach changed between two views: it lost something, gained something, or, Unreachable, served a model at some host before and serves none after.
+type LaneReachChange struct {
+	AccountID                      string
+	Narrowed, Widened, Unreachable bool
+}
+
+// LanesUnder counts the lanes after holds that under reports, and lists, by account id, those of them whose reach differs from before's.
+func LanesUnder(before, after *engine.View, under func(*CallerPlan) bool) (lanes int, changed []LaneReachChange) {
+	for cp := range engine.All[CallerPlan](after) {
+		if cp.Lane == nil || !under(cp) {
+			continue
+		}
+		lanes++
+		id := cp.Lane.Meta.ID
+		if prev := LanePlan(before, id); prev != nil && laneState(prev) == laneState(cp) {
+			continue
+		}
+		was, is := ReachOf(before, id, nil), ReachOf(after, id, nil)
+		if lost, gained := diffReach(was, is); lost || gained {
+			changed = append(changed, LaneReachChange{AccountID: id, Narrowed: lost, Widened: gained, Unreachable: serves(was) && !serves(is)})
+		}
+	}
+	slices.SortFunc(changed, func(a, b LaneReachChange) int { return strings.Compare(a.AccountID, b.AccountID) })
+	return lanes, changed
+}
+
+// serves reports whether r reaches some model at some host.
+func serves(r *Reach) bool {
+	if r == nil || r.Refused != nil {
+		return false
+	}
+	for _, m := range r.Models {
+		if len(m.Hosts) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// diffReach reports whether after lost anything before had (a refusal it did not have, or with another code, counts) and whether it gained anything (a refusal lifted counts).
+func diffReach(before, after *Reach) (lost, gained bool) {
 	was, is := reachEntries(before), reachEntries(after)
 	wasRefused, isRefused := refusalCode(before), refusalCode(after)
 	for e := range was {
 		if !is[e] {
-			narrowed = true
+			lost = true
+		}
+	}
+	for e := range is {
+		if !was[e] {
+			gained = true
 		}
 	}
 	if isRefused != "" && isRefused != wasRefused {
-		narrowed = true
+		lost = true
 	}
-	changed = narrowed || wasRefused != isRefused || len(is) != len(was)
-	return narrowed, changed
+	if wasRefused != "" && isRefused == "" {
+		gained = true
+	}
+	return lost, gained
 }
 
 func refusalCode(r *Reach) string {

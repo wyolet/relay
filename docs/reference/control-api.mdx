@@ -349,7 +349,14 @@ The dry run without a change answers the case and what you may see of the curren
   "pools": [{ "id": "…", "name": "gold-openai", "host": { "id": "…", "name": "openai" }, "accounts": [{ "id": "…", "name": "team-openai" }], "hiddenAccounts": 0, "labelled": false }] } }
 ```
 
-Each row passes what its own create, update or delete call passes, with the same answers and pointers, and is audited as that call; then the result is checked against the plans as for `POST /api/pseudo-agents`, and against what every other account reaches: Relay compares what each account reaches with and without the request's rows, whichever row changes it, and a request that would give any account other than the target, and those under a team or project target, more or less (a model, a host, or a pool or account a model comes through) answers `422` `other_accounts_changed`, counting them and naming none, accounts you may not see included. A share made for the target reaches no other account: an account reaches by ownership only the host keys its scopes own, and a share's keys stay its real account's. A request that would leave the target's account refusing every request answers `422` `plan_issue`. A concurrent change to a row the request read answers `409` `conflict`. Nothing is written on any refusal.
+Each row passes what its own create, update or delete call passes, with the same answers and pointers, and is audited as that call; then the result is checked against the plans as for `POST /api/pseudo-agents`, and against what every other account reaches: Relay compares what each account reaches with and without the request's rows, whichever row changes it, and a request that would give any account other than the target, and those under a team or project target, more or less (a model, a host, or a pool or account a model comes through) answers `422` `other_accounts_changed`, counting them and naming none, accounts you may not see included. A share made for the target reaches no other account: an account reaches by ownership only the host keys its scopes own, and a share's keys stay its real account's. A request that would leave the target's account refusing every request answers `422` `plan_issue`.
+
+A change on a team or project applies to everything under it: the lanes of its projects, service accounts and members climb its policy. That is never a refusal; `under`, answered on the dry run and the save for a team or project target, is how to see the effect before saving: `lanes` counts the lanes under the target, `narrowed` and `widened` those that lose or gain a model, host, or pool or account a model comes through, and `unreachable` lists, up to 20 with `unreachableMore` counting the rest, the lanes that served a model before and serve none after (`kind`, `id`, and `name` when you may see the lane):
+
+```json
+{ "under": { "lanes": 3, "narrowed": 1, "widened": 0,
+             "unreachable": [{ "kind": "account", "id": "…", "name": "sa-ci-bot" }] } }
+``` A concurrent change to a row the request read answers `409` `conflict`. Nothing is written on any refusal.
 
 ### Provider keys in one request
 

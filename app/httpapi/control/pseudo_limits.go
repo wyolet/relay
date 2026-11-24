@@ -9,6 +9,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/pseudo"
@@ -32,6 +33,7 @@ type PseudoLimitsAnswer struct {
 	Updated        []CreatedRow      `json:"updated,omitempty"        doc:"Every row updated, in write order."`
 	Deleted        []CreatedRow      `json:"deleted,omitempty"        doc:"Every row deleted, in write order."`
 	Warnings       []PseudoIssue     `json:"warnings"                 doc:"Plan warnings the rows written would raise that are not there now, on those rows (as the row carrying the warning, or the row it names). They refuse nothing; [] when none, and on the dry run without a limit. A row the caller may not see keeps its code and kind only."`
+	Under          *PseudoUnder      `json:"under,omitempty"          doc:"For a team or project target: what the limit does to the lanes under it, which it applies to, such as a budget leaving a lane only unpriced models. Never a refusal; absent for a service account target and on the dry run without a limit."`
 }
 
 type pseudoLimitsOutput struct {
@@ -62,20 +64,22 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 			return out, err
 		}
 		var change pseudo.LimitsChange
-		var targetID string
+		var target *account.Account
 		var unpriced []string
+		var under *PseudoUnder
 		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
-			if err := checkPolicyStep(targetID)(f); err != nil {
+			if err := checkPolicyStep(target.Meta.ID)(f); err != nil {
 				return err
 			}
-			if s.Budget == nil {
-				return nil
+			var err error
+			if under, err = d.under(ctx, f, target); err != nil || s.Budget == nil {
+				return err
 			}
 			base, err := f.Baseline()
 			if err != nil {
 				return err
 			}
-			unpriced = unpricedModels(base, f.Result, targetID)
+			unpriced = unpricedModels(base, f.Result, target.Meta.ID)
 			return nil
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
@@ -86,7 +90,7 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 			if err != nil {
 				return nil, err
 			}
-			targetID = reads.Account.Meta.ID
+			target = reads.Account
 			if reads.Case() != pseudo.CaseAbove {
 				if err := d.checkLinkModels(&in.Body, reads.Account.Meta.Owner, reads.Account.Meta.Name); err != nil {
 					return nil, err
@@ -99,7 +103,7 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, err
 		}
-		out.Body = PseudoLimitsAnswer{Case: change.Case, UnpricedModels: unpriced, Created: stepRows(rows, pseudo.OpCreate), Updated: stepRows(rows, pseudo.OpUpdate), Deleted: stepRows(rows, pseudo.OpDelete), Warnings: w.warnings}
+		out.Body = PseudoLimitsAnswer{Case: change.Case, UnpricedModels: unpriced, Created: stepRows(rows, pseudo.OpCreate), Updated: stepRows(rows, pseudo.OpUpdate), Deleted: stepRows(rows, pseudo.OpDelete), Warnings: w.warnings, Under: under}
 		if p := change.Policy; p != nil {
 			ref := rowRef(&p.Meta)
 			out.Body.Policy = &ref

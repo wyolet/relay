@@ -58,18 +58,7 @@ func othersUnchanged(targetID string) func(plan.Findings) error {
 		if err != nil {
 			return err
 		}
-		mine := func(cp *plan.CallerPlan) bool {
-			if cp.Lane != nil && cp.Lane.Meta.ID == targetID {
-				return true
-			}
-			for _, r := range cp.Rungs {
-				if r.Account != nil && r.Account.Meta.ID == targetID {
-					return true
-				}
-			}
-			return false
-		}
-		changed := plan.ChangedReach(base, f.Result, mine)
+		changed := plan.ChangedReach(base, f.Result, inSubtree(targetID))
 		if len(changed) == 0 {
 			return nil
 		}
