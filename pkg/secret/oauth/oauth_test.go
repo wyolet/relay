@@ -378,7 +378,7 @@ func keyFile(tokenURL string) []byte {
 }
 
 func prepare(raw []byte, opts ...pkgoauth.Option) ([]byte, error) {
-	return pkgoauth.NewResolver(nil, nil, opts...).PrepareValue(context.Background(), raw)
+	return pkgoauth.NewResolver(nil, nil, opts...).PrepareValue(context.Background(), "k1", raw)
 }
 
 func TestPrepareValue_KeyFileStoresMintedToken(t *testing.T) {

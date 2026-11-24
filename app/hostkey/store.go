@@ -46,7 +46,7 @@ type Store struct {
 
 // ValuePreparer checks a new oauth value and returns what to store; see pkg/secret/oauth.Resolver.PrepareValue.
 type ValuePreparer interface {
-	PrepareValue(ctx context.Context, raw []byte) ([]byte, error)
+	PrepareValue(ctx context.Context, id string, raw []byte) ([]byte, error)
 }
 
 // NewStore constructs a Store over db. Pass the shared secret Registry + the
@@ -142,7 +142,7 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
 		}
 		if k.Spec.ValueFrom.Kind == ValueKindOAuth && k.Spec.Value != "" {
-			prepared, err := s.oauth.PrepareValue(ctx, []byte(k.Spec.Value))
+			prepared, err := s.oauth.PrepareValue(ctx, k.Meta.ID, []byte(k.Spec.Value))
 			if err != nil {
 				return &ValueRefusedError{Err: err}
 			}

@@ -102,13 +102,21 @@ func (r *Resolver) backedOff(id string, blob [sha256.Size]byte) error {
 }
 
 // recordExchange forgets the credential's failures on success and otherwise
-// doubles its backoff, from firstBackoff up to maxBackoff.
+// doubles its backoff, from firstBackoff up to maxBackoff. Adding a failure
+// drops every entry whose backoff ended more than maxBackoff ago, so ids that
+// stopped failing, or no longer exist, do not pile up.
 func (r *Resolver) recordExchange(id string, blob [sha256.Size]byte, err error) {
+	if err == nil {
+		r.forget(id)
+		return
+	}
 	r.failuresMu.Lock()
 	defer r.failuresMu.Unlock()
-	if err == nil {
-		delete(r.failures, id)
-		return
+	now := r.now()
+	for other, f := range r.failures {
+		if now.After(f.until.Add(maxBackoff)) {
+			delete(r.failures, other)
+		}
 	}
 	wait := firstBackoff
 	if f, ok := r.failures[id]; ok && f.blob == blob {
@@ -117,7 +125,14 @@ func (r *Resolver) recordExchange(id string, blob [sha256.Size]byte, err error) 
 	if r.failures == nil {
 		r.failures = map[string]exchangeFailure{}
 	}
-	r.failures[id] = exchangeFailure{blob: blob, err: err, wait: wait, until: r.now().Add(wait)}
+	r.failures[id] = exchangeFailure{blob: blob, err: err, wait: wait, until: now.Add(wait)}
+}
+
+// forget drops the credential's remembered failure after any exchange for it succeeds.
+func (r *Resolver) forget(id string) {
+	r.failuresMu.Lock()
+	delete(r.failures, id)
+	r.failuresMu.Unlock()
 }
 
 // Option configures a Resolver.
@@ -298,6 +313,7 @@ func (r *Resolver) refreshTok(ctx context.Context, ref secret.Ref, cur *sdkoauth
 		if r.shortLived(nt) {
 			return nil, false, fmt.Errorf("secret/oauth: token exchange %q: %w", ref.ID, errShortLifetime)
 		}
+		r.forget(ref.ID)
 	} else {
 		cfg, ok := r.cfg(ref.Provider)
 		if !ok {
@@ -470,8 +486,8 @@ const prepareWait = 10 * time.Second
 // exchanged once: a rejected grant fails the write, while a transient failure
 // stores the credential without a token, minted on the next resolve. Every
 // error is a refusal of the value, worded for the operator and never quoting
-// it.
-func (r *Resolver) PrepareValue(ctx context.Context, raw []byte) ([]byte, error) {
+// it. id names the host key the value is for.
+func (r *Resolver) PrepareValue(ctx context.Context, id string, raw []byte) ([]byte, error) {
 	cred, err := sdkoauth.ParseCredential(raw)
 	if err != nil {
 		return nil, err
@@ -488,6 +504,7 @@ func (r *Resolver) PrepareValue(ctx context.Context, raw []byte) ([]byte, error)
 		return nil, errShortLifetime
 	case err == nil:
 		next.Token = *tok
+		r.forget(id)
 	case IsPermanent(err), errors.Is(err, sdkoauth.ErrNoAccessToken), refusedURL(err):
 		return nil, rejectedError{err}
 	default:

@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -12,6 +13,54 @@ import (
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
 	"github.com/wyolet/relay/secret"
 )
+
+// Keys created, failing once and deleted, over and over, leave no growing trail of remembered failures; a successful save or renewal forgets one at once.
+func TestResolve_FailureMemoryIsBounded(t *testing.T) {
+	var up atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if up.Load() == 0 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"access_token":"minted","token_type":"Bearer","expires_in":86400}`))
+	}))
+	defer srv.Close()
+
+	f, vault, _ := testRefresher(t, "http://unused", allowLocal(srv))
+	r := f.resolver
+	clock := time.Now()
+	r.now = func() time.Time { return clock }
+	grant := storeDueGrant(t, vault, "seed", srv.URL)
+	expired, err := json.Marshal(sdkoauth.Credential{JWTBearer: grant})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range 200 {
+		id := fmt.Sprintf("k%d", i)
+		vault.blobs[id] = expired
+		if _, err := r.Resolve(context.Background(), secret.Ref{Kind: secret.KindOAuth, ID: id}); err == nil {
+			t.Fatal("Resolve succeeded against a failing endpoint")
+		}
+		delete(vault.blobs, id)
+		clock = clock.Add(5 * time.Minute)
+	}
+	// An entry outlives its backoff (at most firstBackoff here) by maxBackoff, so only the last few remain.
+	if n := len(r.failures); n > 3 {
+		t.Fatalf("%d failures remembered after 200 deleted keys, want at most 3", n)
+	}
+
+	vault.blobs["kept"] = expired
+	_, _ = r.Resolve(context.Background(), secret.Ref{Kind: secret.KindOAuth, ID: "kept"})
+	up.Store(1)
+	if _, err := r.PrepareValue(context.Background(), "kept", vault.blobs["kept"]); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.failures["kept"]; ok {
+		t.Fatal("a successful save left the key's failure remembered")
+	}
+}
 
 // A read whose exchange failed answers the same error without calling the token endpoint until the backoff passes; the backoff doubles up to its cap, and a success or a new stored value starts over.
 func TestResolve_FailedExchangeBacksOff(t *testing.T) {
