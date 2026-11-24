@@ -204,6 +204,10 @@ hops:
 	if err == nil {
 		err = ErrAllKeysExhausted
 	}
+	// An upstream that answered is the caller's verdict, not another hop's configuration fault: host_misconfigured answers only a route where none connected.
+	if _, ok := errors.AsType[*PathPlaceholderError](err); ok && connected {
+		err = ErrAllKeysExhausted
+	}
 	if errors.Is(err, ErrAllKeysExhausted) && lastStatus != 0 {
 		err = &UpstreamFailureError{Status: lastStatus, Header: lastHeader, Body: lastBody, Cause: err}
 	}

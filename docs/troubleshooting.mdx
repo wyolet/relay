@@ -60,7 +60,7 @@ Each host key has a circuit breaker. A key that the upstream rejects with `401` 
 | The provider's own status and body, `X-WR-Origin: upstream` | Every key was tried and failed; this is the last provider response. |
 | `upstream_unavailable` | Every key failed and the provider sent no body. |
 | `upstream_unreachable` | Relay could not connect to the host at all (refused, DNS, TLS). This is the host's base URL or network, not a key. |
-| `host_misconfigured` | The host's `path` or `paths` has a `{key}` placeholder that its `backend` does not set; the message names the key. Set it in the host's `backend`. |
+| `host_misconfigured` | The host's `path`, or its `paths` entry for the request's wire shape, has a `{key}` placeholder that its `backend` does not set; the message names the key. Set it in the host's `backend`. A malformed placeholder, or one after `?`, is refused when the host is saved. |
 
 To recover:
 

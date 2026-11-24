@@ -82,31 +82,34 @@ func pathSegment(model string) string {
 	return url.PathEscape(model)
 }
 
-// FillPath replaces each {key} in path with backend[key] as one path segment. A placeholder the backend leaves unset or empty, or a { that opens no well-formed placeholder, is a *pipeline.PathPlaceholderError: the request must not go out to a malformed URL.
+// FillPath replaces each {key} in path with backend[key] as one path segment. A placeholder the backend leaves unset or empty, a { or } that is not part of a well-formed placeholder, or a placeholder after the ? (a path segment's escaping is wrong in a query) is a *pipeline.PathPlaceholderError: the request must not go out to a malformed URL.
 func FillPath(path string, backend map[string]string) (string, error) {
-	open := strings.IndexByte(path, '{')
-	if open < 0 {
+	next := strings.IndexAny(path, "{}")
+	if next < 0 {
 		return path, nil
 	}
+	query := strings.IndexByte(path, '?')
 	var b strings.Builder
 	b.Grow(len(path))
-	rest := path
-	for open >= 0 {
-		b.WriteString(rest[:open])
-		n := placeholderKeyLen(rest[open+1:])
-		if n == 0 || open+1+n >= len(rest) || rest[open+1+n] != '}' {
+	done := 0
+	for next >= 0 {
+		at := done + next
+		n := placeholderKeyLen(path[at+1:])
+		end := at + 1 + n
+		if path[at] != '{' || (query >= 0 && at > query) || n == 0 || end >= len(path) || path[end] != '}' {
 			return "", &pipeline.PathPlaceholderError{Path: path}
 		}
-		key := rest[open+1 : open+1+n]
+		key := path[at+1 : end]
 		v := backend[key]
 		if v == "" {
 			return "", &pipeline.PathPlaceholderError{Path: path, Key: key}
 		}
+		b.WriteString(path[done:at])
 		b.WriteString(pathSegment(v))
-		rest = rest[open+n+2:]
-		open = strings.IndexByte(rest, '{')
+		done = end + 1
+		next = strings.IndexAny(path[done:], "{}")
 	}
-	b.WriteString(rest)
+	b.WriteString(path[done:])
 	return b.String(), nil
 }
 

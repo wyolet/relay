@@ -132,37 +132,40 @@ func TestSpecDefaults(t *testing.T) {
 	}
 }
 
-// A path override is routable only when its backend fills every placeholder; Validate accepts it either way, as the operator may fill backend after install.
-func TestRoutable_PathPlaceholders(t *testing.T) {
-	filled := map[string]string{"project": "p1", "location": "global"}
-	for _, tc := range []struct {
-		name     string
-		path     string
-		paths    map[adapters.Name]string
-		backend  map[string]string
-		routable bool
-	}{
-		{name: "no placeholder", path: "/v1/chat", routable: true},
-		{name: "path filled", path: "/v1/projects/{project}/locations/{location}/chat", backend: filled, routable: true},
-		{name: "paths filled", paths: map[adapters.Name]string{adapters.OpenAI: "/v1/{project}/chat"}, backend: filled, routable: true},
-		{name: "path missing a key", path: "/v1/{project}/{zone}", backend: filled},
-		{name: "path with an empty value", path: "/v1/{project}", backend: map[string]string{"project": ""}},
-		{name: "no backend", path: "/v1/{project}"},
-		{name: "one paths entry unfilled", paths: map[adapters.Name]string{adapters.OpenAI: "/v1/{project}", adapters.Anthropic: "/v1/{zone}"}, backend: filled},
-		{name: "malformed: unclosed", path: "/v1/{project", backend: filled},
-		{name: "malformed: empty key", path: "/v1/{}/chat", backend: filled},
-		{name: "malformed: key with a dash", path: "/v1/{pro-ject}", backend: map[string]string{"pro-ject": "x"}},
-		{name: "malformed: nested", path: "/v1/{{project}}", backend: filled},
-	} {
-		h := &Host{Meta: meta.Metadata{Name: "h"}, Spec: Spec{BaseURL: "https://x", Paths: tc.paths, Backend: tc.backend}}
-		if tc.path != "" {
-			h.Spec.Path = &tc.path
-		}
-		if got := h.Routable(); got != tc.routable {
-			t.Errorf("%s: Routable() = %v, want %v", tc.name, got, tc.routable)
-		}
-		if err := h.Validate(); err != nil {
-			t.Errorf("%s: Validate() = %v, want nil", tc.name, err)
+// placeholderSyntax is which paths hold only well-formed placeholders. app/adapter's FillPath test keeps a copy, so the two parsers agree.
+var placeholderSyntax = []struct {
+	path       string
+	wellFormed bool
+}{
+	{"", true},
+	{"/v1/chat/completions", true},
+	{"/v1/projects/{project}/locations/{location}/chat", true},
+	{"/m/x-{location}:generate", true},
+	{"/{a_1}/{project}", true},
+	{"/{project}?alt=sse", true},
+	{"/v1/chat?alt=sse", true},
+	{"/v1/{project", false},
+	{"/v1/{}/chat", false},
+	{"/v1/{pro-ject}", false},
+	{"/v1/{{project}}", false},
+	{"/v1/{", false},
+	{"/v1/}", false},
+	{"/a}/{project}", false},
+	{"/v1/chat?alt={project}", false},
+	{"/v1/{project}?x={location}", false},
+}
+
+// Validate refuses a malformed placeholder in path or paths and accepts a well-formed one whatever backend sets: the operator may fill backend after install, and a request then answers host_misconfigured.
+func TestValidate_PathPlaceholders(t *testing.T) {
+	for _, tc := range placeholderSyntax {
+		path := tc.path
+		for name, h := range map[string]*Host{
+			"path":  {Meta: meta.Metadata{Name: "h"}, Spec: Spec{Path: &path}},
+			"paths": {Meta: meta.Metadata{Name: "h"}, Spec: Spec{Paths: map[adapters.Name]string{adapters.OpenAI: "/ok", adapters.Anthropic: path}}},
+		} {
+			if err := h.Validate(); (err == nil) != tc.wellFormed {
+				t.Errorf("%s %q: Validate() = %v, want well-formed %v", name, tc.path, err, tc.wellFormed)
+			}
 		}
 	}
 }

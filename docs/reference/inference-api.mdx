@@ -329,7 +329,7 @@ Relay writes errors in one envelope:
 | `413` | `request_too_large` | The body exceeds `RELAY_MAX_REQUEST_BYTES` (default 32 MiB), or in proxy mode has no top-level `model` in its first 32 MiB. |
 | `429` | `rate_limit_exceeded`, `budget_exceeded` | A rate limit or budget on a caller rung is spent, or every host key for the model is over an upstream limit or cooling. `Retry-After` says when it refills, or when the budget's next period starts. |
 | `502` | `upstream_unreachable` | The upstream host could not be dialled. |
-| `502` | `host_misconfigured` | The host's upstream path has a `{key}` placeholder its `backend` does not set, so nothing was sent. |
+| `502` | `host_misconfigured` | The host's upstream path for the request's wire shape has a `{key}` placeholder its `backend` does not set, so nothing was sent to it. Returned only when no host of the route answered; otherwise the caller gets that host's failure. |
 | `502` | `upstream_stalled` | Proxy mode: the request body stopped moving for `RELAY_PROXY_BODY_IDLE_S` seconds, the upstream no longer reading it. |
 | `502` | `upstream_unavailable`, `upstream_error` | Every key failed without a usable upstream response, or the upstream call failed. |
 | `503` | `no_host_binding` | The model has no enabled host binding. |

@@ -79,7 +79,7 @@ type Spec struct {
 	// when this host's endpoint doesn't follow the vendor-canonical layout.
 	// Used when set, {key} placeholders filled from Backend — an explicit "" means BaseURL is the complete
 	// endpoint URL and nothing is appended. Unset (nil) keeps the shape default.
-	Path *string `json:"path,omitempty" yaml:"path,omitempty" doc:"Upstream path used instead of the wire shape's default. An empty string means baseURL is the complete endpoint; omitted keeps the default. Each {key} placeholder is replaced with backend[key], and the host is unroutable while one is unset."`
+	Path *string `json:"path,omitempty" yaml:"path,omitempty" doc:"Upstream path used instead of the wire shape's default. An empty string means baseURL is the complete endpoint; omitted keeps the default. Each {key} placeholder (key of letters, digits and _, before any ?) is replaced with backend[key]; a request through the host answers host_misconfigured while one is unset."`
 
 	// Paths overrides Path for single wire shapes, on a host that serves
 	// several under one BaseURL at different locations. Same
@@ -126,40 +126,8 @@ type Spec struct {
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (h *Host) IsEnabled() bool { return h.Spec.Enabled == nil || *h.Spec.Enabled }
 
-// Routable reports whether the host has an upstream to dial: a base URL, and
-// path overrides whose {key} placeholders its backend fills.
-func (h *Host) Routable() bool {
-	if h.Spec.BaseURL == "" || (h.Spec.Path != nil && !fillsPlaceholders(*h.Spec.Path, h.Spec.Backend)) {
-		return false
-	}
-	for _, p := range h.Spec.Paths {
-		if !fillsPlaceholders(p, h.Spec.Backend) {
-			return false
-		}
-	}
-	return true
-}
-
-// fillsPlaceholders reports whether every { in path opens a {key} placeholder,
-// key [A-Za-z0-9_]+, that backend sets to a non-empty value.
-func fillsPlaceholders(path string, backend map[string]string) bool {
-	for {
-		open := strings.IndexByte(path, '{')
-		if open < 0 {
-			return true
-		}
-		path = path[open+1:]
-		end := strings.IndexByte(path, '}')
-		if end <= 0 || strings.IndexFunc(path[:end], notKeyRune) >= 0 || backend[path[:end]] == "" {
-			return false
-		}
-		path = path[end+1:]
-	}
-}
-
-func notKeyRune(r rune) bool {
-	return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '_')
-}
+// Routable reports whether the host has an upstream to dial.
+func (h *Host) Routable() bool { return h.Spec.BaseURL != "" }
 
 // PathFor returns the host's upstream path override for shape: its Paths
 // entry, else Path. nil keeps the shape's default path.
@@ -228,10 +196,45 @@ func (h *Host) Validate() error {
 	if _, ok := h.Spec.Paths[""]; ok {
 		return fmt.Errorf("host %q: paths: adapter name must not be empty", h.Meta.Name)
 	}
+	if h.Spec.Path != nil {
+		if err := checkPlaceholders(*h.Spec.Path); err != nil {
+			return fmt.Errorf("host %q: path: %w", h.Meta.Name, err)
+		}
+	}
+	for _, shape := range slices.Sorted(maps.Keys(h.Spec.Paths)) {
+		if err := checkPlaceholders(h.Spec.Paths[shape]); err != nil {
+			return fmt.Errorf("host %q: paths[%s]: %w", h.Meta.Name, shape, err)
+		}
+	}
 	if err := validateParamRenames(h.Spec.RequestParamRenames); err != nil {
 		return fmt.Errorf("host %q: %w", h.Meta.Name, err)
 	}
 	return nil
+}
+
+// checkPlaceholders refuses a { or } in path that is not part of a {key} placeholder, key [A-Za-z0-9_]+, and a placeholder after the ?: a value is filled in escaped as a path segment, which is wrong in a query. Whether backend sets the key is left to request time.
+func checkPlaceholders(path string) error {
+	query := strings.IndexByte(path, '?')
+	for i := 0; i < len(path); i++ {
+		switch path[i] {
+		case '}':
+			return fmt.Errorf("%q: } at offset %d closes no placeholder", path, i)
+		case '{':
+			if query >= 0 && i > query {
+				return fmt.Errorf("%q: placeholder at offset %d is in the query", path, i)
+			}
+			end := strings.IndexByte(path[i:], '}')
+			if end <= 1 || strings.IndexFunc(path[i+1:i+end], notKeyRune) >= 0 {
+				return fmt.Errorf("%q: { at offset %d opens no {key} placeholder (key of letters, digits and _)", path, i)
+			}
+			i += end
+		}
+	}
+	return nil
+}
+
+func notKeyRune(r rune) bool {
+	return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '_')
 }
 
 // validateParamRenames refuses a table whose result would depend on the order

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
@@ -58,7 +60,13 @@ func TestProxyShape_AnonymousPinGoesThrough(t *testing.T) {
 	}
 }
 
-// Proxy mode fills a host path's placeholders from the host's backend, and refuses before sending anything when one is unfilled.
+// proxyFailure is what a proxy request's failure record carries.
+type proxyFailure struct {
+	Kind, Refusal, Message, Host string
+	Status                       int
+}
+
+// Proxy mode fills a host path's placeholders from the host's backend, and refuses before sending anything when one is unfilled, recording the failure as the pipeline does.
 func TestProxyShape_HostPathPlaceholders(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -66,9 +74,13 @@ func TestProxyShape_HostPathPlaceholders(t *testing.T) {
 		status   int
 		code     string
 		wantURIs []string
+		failure  *proxyFailure
 	}{
-		{"filled", map[string]string{"project": "p 1"}, http.StatusOK, "", []string{"/v1/projects/p%201/messages"}},
-		{"unfilled", map[string]string{"location": "global"}, http.StatusBadGateway, plan.CodeHostMisconfigured, nil},
+		{"filled", map[string]string{"project": "p 1"}, http.StatusOK, "", []string{"/v1/projects/p%201/messages"}, nil},
+		{"unfilled", map[string]string{"location": "global"}, http.StatusBadGateway, plan.CodeHostMisconfigured, nil, &proxyFailure{
+			Kind: "host_misconfigured", Refusal: "host_not_reachable", Host: "anthropic", Status: 502,
+			Message: `upstream host "anthropic" is misconfigured: its backend sets no value for the path placeholder {project}`,
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -85,14 +97,31 @@ func TestProxyShape_HostPathPlaceholders(t *testing.T) {
 				s.Path = &path
 				s.Backend = tc.backend
 			})
+			failures := make(chan proxyFailure, 4)
+			d.Lifecycle = lifecycle.New()
+			d.Lifecycle.RegisterHook(lifecycle.HookFunc{HookName: "failure", Fn: func(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+				failures <- proxyFailure{ev.ErrorKind, ev.Refusal, ev.ErrorMessage, lc.HostName, ev.Status}
+				return nil, nil
+			}})
 			body := proxyTestBody("test-model", 16, false)
-			w := serveProxyShape(d, proxyShapeCall{pin: "anthropic", body: bytes.NewReader(body), length: int64(len(body))})
+			r := proxyShapeCall{pin: "anthropic", body: bytes.NewReader(body), length: int64(len(body))}.request(d)
+			r = r.WithContext(lifecycle.ContextWith(r.Context(), lifecycle.NewContext("req", "proxy", time.Now())))
+			w := httptest.NewRecorder()
+			handleShape(d.Specs.Spec(adapters.Anthropic), d, w, r)
 			if w.Code != tc.status {
 				t.Fatalf("status %d, want %d: %s", w.Code, tc.status, w.Body)
 			}
-			if tc.code != "" {
+			if tc.failure != nil {
 				if got := errCode(t, w.Body.Bytes()); got != tc.code {
 					t.Errorf("code %q, want %q", got, tc.code)
+				}
+				select {
+				case got := <-failures:
+					if got != *tc.failure {
+						t.Errorf("failure record = %+v, want %+v", got, *tc.failure)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("no failure record")
 				}
 			}
 			mu.Lock()

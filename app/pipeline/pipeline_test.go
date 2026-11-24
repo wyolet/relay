@@ -509,6 +509,38 @@ func TestRun_UnfilledPathMovesToTheNextHop(t *testing.T) {
 	}
 }
 
+// An upstream's answer on one hop outranks an unfilled path on another, in either order: the caller gets the upstream's failure, not host_misconfigured.
+func TestRun_UnfilledPathDoesNotMaskAnUpstreamAnswer(t *testing.T) {
+	t.Parallel()
+	unfilled := &host.Host{Meta: meta.Metadata{ID: "unfilled", Name: "unfilled"}, Spec: host.Spec{BaseURL: "http://unfilled"}}
+	rejects := &host.Host{Meta: meta.Metadata{ID: "rejects", Name: "rejects"}, Spec: host.Spec{BaseURL: "http://rejects"}}
+	for name, hops := range map[string][]plan.RouteHop{
+		"unfilled after": {
+			hopAt(rejects, []*hostkey.HostKey{makeKey("r1", "sk-r1"), makeKey("r2", "sk-r2")}),
+			hopAt(unfilled, []*hostkey.HostKey{makeKey("u1", "sk-u1")}),
+		},
+		"unfilled before": {
+			hopAt(unfilled, []*hostkey.HostKey{makeKey("u1", "sk-u1")}),
+			hopAt(rejects, []*hostkey.HostKey{makeKey("r1", "sk-r1"), makeKey("r2", "sk-r2")}),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			adp := newKeyedAdapter()
+			adp.status["sk-r1"], adp.status["sk-r2"] = 401, 401
+			adp.errs["sk-u1"] = &pipeline.PathPlaceholderError{Path: "/v1/{project}", Key: "project"}
+			_, err := newPipeline().Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: hops})
+			upstream, ok := errors.AsType[*pipeline.UpstreamFailureError](err)
+			if !ok || upstream.Status != 401 {
+				t.Fatalf("err = %v, want the upstream's 401", err)
+			}
+			if _, refused := pipeline.AnswerOf(err); refused {
+				t.Errorf("AnswerOf(%v) answered for relay; want the upstream's failure", err)
+			}
+		})
+	}
+}
+
 // hostHealthLog records reachability writes as "reachable:<host>" or "unreachable:<host>".
 type hostHealthLog chan string
 
