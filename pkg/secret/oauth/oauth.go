@@ -2,7 +2,9 @@
 // stored secret is an OAuth token blob (access + refresh + expiry, the
 // sdk/oauth.Token wire shape) kept by the same stored backend as KindStored.
 // Resolve returns the access token, transparently refreshing via the refresh
-// token when it has expired and re-persisting the (often rotated) blob.
+// token when it has expired and re-persisting the (often rotated) blob. A
+// blob carrying a jwtBearer grant (a service account) mints its next token
+// from that grant instead and needs no provider config.
 //
 // It is deliberately off the hot path: resolution happens at snapshot load and
 // during KeyAgent heal after an upstream 401, never per request. Concurrent
@@ -19,6 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -64,12 +68,12 @@ func (r *Resolver) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) 
 	if ref.Kind != secret.KindOAuth {
 		return nil, fmt.Errorf("secret/oauth: wrong kind %q", ref.Kind)
 	}
-	tok, err := r.load(ctx, ref.ID)
+	cred, err := r.load(ctx, ref.ID)
 	if err != nil {
 		return nil, err
 	}
-	if r.valid(tok) {
-		return []byte(tok.AccessToken), nil
+	if r.valid(&cred.Token) {
+		return []byte(cred.AccessToken), nil
 	}
 	v, err, _ := r.sf.Do(ref.ID, func() (any, error) {
 		// Re-load inside the flight: a concurrent refresh may have already
@@ -78,7 +82,7 @@ func (r *Resolver) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) 
 		if err != nil {
 			return nil, err
 		}
-		if r.valid(cur) {
+		if r.valid(&cur.Token) {
 			return cur.AccessToken, nil
 		}
 		access, _, err := r.refresh(ctx, ref, cur)
@@ -90,44 +94,53 @@ func (r *Resolver) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) 
 	return []byte(v.(string)), nil
 }
 
-func (r *Resolver) load(ctx context.Context, id string) (*sdkoauth.Token, error) {
+func (r *Resolver) load(ctx context.Context, id string) (*sdkoauth.Credential, error) {
 	raw, err := r.vault.Resolve(ctx, secret.Ref{Kind: secret.KindStored, ID: id})
 	if err != nil {
 		return nil, fmt.Errorf("secret/oauth: load %q: %w", id, err)
 	}
-	var tok sdkoauth.Token
-	if err := json.Unmarshal(raw, &tok); err != nil {
+	var cred sdkoauth.Credential
+	if err := json.Unmarshal(raw, &cred); err != nil {
 		return nil, fmt.Errorf("secret/oauth: parse stored token %q: %w", id, err)
 	}
-	return &tok, nil
+	return &cred, nil
 }
 
-func (r *Resolver) refresh(ctx context.Context, ref secret.Ref, tok *sdkoauth.Token) (string, bool, error) {
-	nt, rotated, err := r.refreshTok(ctx, ref, tok)
+func (r *Resolver) refresh(ctx context.Context, ref secret.Ref, cur *sdkoauth.Credential) (string, bool, error) {
+	nt, rotated, err := r.refreshTok(ctx, ref, cur)
 	if err != nil {
 		return "", false, err
 	}
 	return nt.AccessToken, rotated, nil
 }
 
-func (r *Resolver) refreshTok(ctx context.Context, ref secret.Ref, tok *sdkoauth.Token) (*sdkoauth.Token, bool, error) {
-	cfg, ok := r.cfg(ref.Provider)
-	if !ok {
-		return nil, false, fmt.Errorf("secret/oauth: no config for provider %q", ref.Provider)
-	}
-	if tok.RefreshToken == "" {
-		return nil, false, fmt.Errorf("secret/oauth: token %q expired with no refresh token", ref.ID)
-	}
-	nt, err := sdkoauth.New(cfg.OAuth2()).Refresh(ctx, tok)
-	if err != nil {
-		return nil, false, fmt.Errorf("secret/oauth: refresh %q: %w", ref.ID, err)
+func (r *Resolver) refreshTok(ctx context.Context, ref secret.Ref, cur *sdkoauth.Credential) (*sdkoauth.Token, bool, error) {
+	tok := &cur.Token
+	var nt *sdkoauth.Token
+	if cur.JWTBearer != nil {
+		var err error
+		if nt, err = cur.JWTBearer.Token(ctx); err != nil {
+			return nil, false, fmt.Errorf("secret/oauth: token exchange %q: %w", ref.ID, err)
+		}
+	} else {
+		cfg, ok := r.cfg(ref.Provider)
+		if !ok {
+			return nil, false, fmt.Errorf("secret/oauth: no config for provider %q", ref.Provider)
+		}
+		if tok.RefreshToken == "" {
+			return nil, false, fmt.Errorf("secret/oauth: token %q expired with no refresh token", ref.ID)
+		}
+		var err error
+		if nt, err = sdkoauth.New(cfg.OAuth2()).Refresh(ctx, tok); err != nil {
+			return nil, false, fmt.Errorf("secret/oauth: refresh %q: %w", ref.ID, err)
+		}
 	}
 	if nt.AccessToken == "" {
 		return nil, false, fmt.Errorf("secret/oauth: refresh %q returned empty access token", ref.ID)
 	}
 	rotated := nt.AccessToken != tok.AccessToken || nt.RefreshToken != tok.RefreshToken || !nt.Expiry.Equal(tok.Expiry)
 	if rotated {
-		blob, err := json.Marshal(nt)
+		blob, err := json.Marshal(sdkoauth.Credential{Token: *nt, JWTBearer: cur.JWTBearer})
 		if err != nil {
 			return nil, false, fmt.Errorf("secret/oauth: marshal refreshed token: %w", err)
 		}
@@ -151,12 +164,12 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 	due := func(tok *sdkoauth.Token) bool {
 		return !tok.Expiry.IsZero() && tok.Expiry.Before(r.now().Add(lead))
 	}
-	tok, err := r.load(ctx, ref.ID)
+	cred, err := r.load(ctx, ref.ID)
 	if err != nil {
 		return false, time.Time{}, err
 	}
-	if !due(tok) {
-		return false, tok.Expiry, nil
+	if !due(&cred.Token) {
+		return false, cred.Expiry, nil
 	}
 	type renewed struct {
 		rotated bool
@@ -167,7 +180,7 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 		if err != nil {
 			return renewed{}, err
 		}
-		if !due(cur) {
+		if !due(&cur.Token) {
 			return renewed{false, cur.Expiry}, nil
 		}
 		// The oauth2 TokenSource only exchanges a token its own Valid()
@@ -201,10 +214,50 @@ func IsPermanent(err error) bool {
 			return true
 		}
 		// Some providers omit the RFC 6749 error code; a 4xx token-endpoint
-		// answer is a grant problem either way (5xx/network stay transient).
-		return re.Response != nil && re.Response.StatusCode >= 400 && re.Response.StatusCode < 500
+		// answer is a grant problem either way (5xx/network, a timeout or a
+		// rate limit stay transient).
+		if re.Response == nil {
+			return false
+		}
+		switch code := re.Response.StatusCode; code {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests:
+			return false
+		default:
+			return code >= 400 && code < 500
+		}
 	}
 	return false
+}
+
+// prepareWait bounds the token exchange a write runs to check a new credential.
+const prepareWait = 10 * time.Second
+
+// PrepareValue checks a new oauth host-key value before it is stored and
+// returns what to store. A token blob is returned byte-identical. A
+// service-account credential (a key file or the Credential shape) is
+// exchanged once: a rejected grant fails the write, while a transient failure
+// stores the credential without a token, minted on the next resolve.
+func PrepareValue(ctx context.Context, raw []byte) ([]byte, error) {
+	cred, err := sdkoauth.ParseCredential(raw)
+	if err != nil {
+		return nil, err
+	}
+	if cred.JWTBearer == nil {
+		return raw, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, prepareWait)
+	defer cancel()
+	next := sdkoauth.Credential{JWTBearer: cred.JWTBearer}
+	tok, err := cred.JWTBearer.Token(ctx)
+	switch {
+	case err == nil:
+		next.Token = *tok
+	case IsPermanent(err):
+		return nil, fmt.Errorf("secret/oauth: token endpoint rejected the credential: %w", err)
+	default:
+		slog.Warn("secret/oauth: token exchange failed; storing the credential without a token", "err", err)
+	}
+	return json.Marshal(next)
 }
 
 func (r *Resolver) valid(tok *sdkoauth.Token) bool {

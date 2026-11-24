@@ -2,7 +2,11 @@ package oauth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/oauth2"
 
 	"github.com/wyolet/relay/pkg/kv"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
@@ -128,6 +134,59 @@ func TestRefresher_RenewsDueCredential(t *testing.T) {
 
 	// Freshly renewed (expiry now beyond lead): second sweep is a no-op.
 	f.sweep(context.Background())
+	if hits != 1 {
+		t.Fatalf("second sweep hit the endpoint (%d hits) — not due, must no-op", hits)
+	}
+}
+
+func TestRefresher_RenewsDueJWTBearerCredential(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(tokenEndpoint(&hits, ""))
+	defer srv.Close()
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client())
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(rsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := &sdkoauth.JWTBearer{
+		Issuer:     "svc@example.test",
+		PrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
+		TokenURL:   srv.URL,
+		Scopes:     []string{"scope-a"},
+	}
+	// The provider config testRefresher wires points at an http URL; a grant never consults it.
+	f, vault, notified := testRefresher(t, "http://unused")
+	b, err := json.Marshal(sdkoauth.Credential{
+		Token:     sdkoauth.Token{AccessToken: "at-old", Expiry: time.Now().Add(5 * time.Minute)},
+		JWTBearer: grant,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault.blobs["k1"] = b
+
+	f.sweep(ctx)
+
+	if hits != 1 {
+		t.Fatalf("token endpoint hits = %d, want 1", hits)
+	}
+	if len(*notified) != 1 || (*notified)[0] != "renewed:k1" {
+		t.Fatalf("events = %v, want [renewed:k1]", *notified)
+	}
+	var cred sdkoauth.Credential
+	if err := json.Unmarshal(vault.blobs["k1"], &cred); err != nil {
+		t.Fatal(err)
+	}
+	if cred.AccessToken != "at-new-1" || cred.JWTBearer == nil || cred.JWTBearer.PrivateKey != grant.PrivateKey {
+		t.Fatalf("persisted credential: access %q, grant kept %v", cred.AccessToken, cred.JWTBearer != nil)
+	}
+
+	f.sweep(ctx)
 	if hits != 1 {
 		t.Fatalf("second sweep hit the endpoint (%d hits) — not due, must no-op", hits)
 	}
