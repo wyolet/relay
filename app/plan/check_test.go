@@ -257,7 +257,10 @@ func TestCheck_WithinTheBound(t *testing.T) {
 		t.Fatalf("work past the bound: %v after %v, want ErrCheckTimeout near %v", err, time.Since(start), bound)
 	}
 	select {
-	case <-stopped:
+	case err := <-stopped:
+		if err == nil {
+			t.Error("the work's ctx ended without an error")
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the work's ctx did not end with the bound")
 	}
