@@ -296,8 +296,19 @@ func TestPseudoAgents_UserOwnerRefusals(t *testing.T) {
 		t.Fatalf("turn carol's personal accounts off: %v %v", ok, err)
 	}
 	w.loadPlans(t)
-	rec = w.sendAs(t, "carol", "/pseudo-agents", body("Carol off"), nil)
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "personal_account_off") {
-		t.Errorf("carol's agent while her personal accounts are off = %d %s, want 403 personal_account_off", rec.Code, rec.Body)
+	before, err := w.stores.ServiceAccount.List(ctx)
+	must(t, "service accounts", err)
+	keyless := body("Carol off")
+	delete(keyless["spec"].(map[string]any), "key")
+	for name, b := range map[string]map[string]any{"with a key": body("Carol off"), "without a key": keyless} {
+		for _, path := range []string{"/pseudo-agents?dryRun=true", "/pseudo-agents"} {
+			rec := w.sendAs(t, "carol", path, b, nil)
+			if r := refusalOf(t, rec); rec.Code != http.StatusForbidden || r.Err.Code != "personal_account_off" || r.Pointer != "/metadata/owner" {
+				t.Errorf("%s at %s while carol's personal accounts are off = %d %s at %q, want 403 personal_account_off at /metadata/owner", name, path, rec.Code, r.Err.Code, r.Pointer)
+			}
+		}
+	}
+	if after, err := w.stores.ServiceAccount.List(ctx); err != nil || len(after) != len(before) {
+		t.Errorf("service accounts %d after the refusals, %d before (%v)", len(after), len(before), err)
 	}
 }

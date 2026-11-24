@@ -573,6 +573,17 @@ func (c Checker) personalAccountOff(ctx context.Context, userID string) (bool, s
 	return off, name
 }
 
+// ServiceAccountOwnerOn refuses owner as a service account's owner while it is a user whose personal account is turned off: the service account's lane is closed then, as KeyAccount and a share with it find.
+func (c Checker) ServiceAccountOwnerOn(ctx context.Context, owner meta.Owner) error {
+	if owner.Kind != meta.OwnerUser {
+		return nil
+	}
+	if off, name := c.personalAccountOff(ctx, owner.ID); off {
+		return personalAccountOffError("personal accounts are turned off for %s, so a service account they own cannot run; let a team or project own it", name)
+	}
+	return nil
+}
+
 // PersonalProviderAccount refuses a provider account owned by a user whose personal account is turned off: it would serve nothing.
 func (c Checker) PersonalProviderAccount(ctx context.Context, a *account.Account) error {
 	if !a.IsProvider() || a.Meta.Owner.Kind != meta.OwnerUser {

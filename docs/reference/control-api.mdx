@@ -239,7 +239,7 @@ The route is served only when `RELAY_PSEUDO_KINDS` lists `agents` or is `all`; o
 }
 ```
 
-`metadata` is the service account's. `metadata.owner` is required, with no default: the project, team or user that owns the service account, with its id, as `POST /api/service-accounts` takes it. A user owner is the caller; another user's id is refused unless the admin token sends it, and while that user's personal accounts are off the key answers `403 personal_account_off`. The shares, pools, policy and binding made are the owner's: for a user, their personal rows, under their personal account. `name` is derived from `displayName` when left out. `spec` takes exactly one of `policyId`, an existing policy to bind the service account's account to, and `access`:
+`metadata` is the service account's. `metadata.owner` is required, with no default: the project, team or user that owns the service account, with its id, as `POST /api/service-accounts` takes it. A user owner is the caller; another user's id is refused unless the admin token sends it, and while that user's personal accounts are off the request answers `403 personal_account_off` with pointer `/metadata/owner`, with or without `spec.key`, dry run included. The shares, pools, policy and binding made are the owner's: for a user, their personal rows, under their personal account. `name` is derived from `displayName` when left out. `spec` takes exactly one of `policyId`, an existing policy to bind the service account's account to, and `access`:
 
 | `access` | What is made after the service account and its account |
 | --- | --- |
