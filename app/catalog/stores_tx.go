@@ -57,16 +57,21 @@ func rowStores(db storage.DB) *Stores {
 }
 
 // InTx runs fn with the stores bound to one transaction (see storage.InTx):
-// every write fn makes commits together, or none does. HostKey is the
-// pool-bound store, for reads only — a stored key's secret is written through
-// the secret backends' own connections and cannot join the transaction.
+// every write fn makes commits together, or none does. HostKey's rows join the
+// transaction, but a new stored value cannot: the secret backend makes a
+// scope's first data key, and a rotation's next one, on its own connection,
+// which this transaction's snapshot does not see, so the value's write is
+// refused. Seal the value before the transaction and write the row here with
+// HostKey.UpsertKeepingValue.
 func (s *Stores) InTx(ctx context.Context, fn func(ctx context.Context, tx *Stores) error) error {
 	if s.pool == nil {
 		return errors.New("catalog: stores are not bound to a database")
 	}
 	return storage.InTx(ctx, s.pool, func(ctx context.Context, db storage.DB) error {
 		tx := rowStores(db)
-		tx.HostKey = s.HostKey
+		if s.HostKey != nil {
+			tx.HostKey = s.HostKey.WithDB(db)
+		}
 		return fn(ctx, tx)
 	})
 }

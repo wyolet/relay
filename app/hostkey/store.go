@@ -48,6 +48,11 @@ func NewStore(db storage.DB, resolver *secret.Registry, backend *stored.Backend)
 	return &Store{db: db, q: gen.New(db), resolver: resolver, stored: backend}
 }
 
+// WithDB returns a Store whose rows are read and written through db, typically the caller's transaction. Values resolve as s's do; a new value is sealed through db, though its scope's data key may be made on the secret backend's own connection (see app/catalog.Stores.InTx).
+func (s *Store) WithDB(db storage.DB) *Store {
+	return &Store{db: db, q: gen.New(db), resolver: s.resolver, stored: s.stored}
+}
+
 // SecretScope is the scope a key's stored value is sealed under: its owner.
 func SecretScope(o meta.Owner) string {
 	return stored.OwnerScope(string(o.Kind), o.ID)
@@ -105,6 +110,12 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error { return s.upsert(
 // ChangeOwner moves k, as read at its version, to owner: a stored or oauth value stays as stored, sealed again under the new owner's scope in the same transaction and decrypted before it commits; k's resolved value is not needed. A row changed since k was read, or a value that does not open, leaves the key as it was.
 func (s *Store) ChangeOwner(ctx context.Context, k *HostKey, owner meta.Owner) error {
 	k.Meta.Owner = owner
+	k.Spec.Value = ""
+	return s.upsert(ctx, k, true)
+}
+
+// UpsertKeepingValue writes k's stored or oauth row and no value: the value already sealed at k's id stays, moved to the scope of k's owner when sealed under another. A value sealed before the row's transaction (see app/catalog.Stores.InTx) is written with it.
+func (s *Store) UpsertKeepingValue(ctx context.Context, k *HostKey) error {
 	k.Spec.Value = ""
 	return s.upsert(ctx, k, true)
 }
@@ -294,10 +305,15 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 	}
 	k.Resolved = string(plain)
 	if k.Resolved != "" {
-		sum := sha256.Sum256([]byte(k.Resolved))
-		k.KeyHash = hex.EncodeToString(sum[:6])
+		k.KeyHash = KeyHashOf(k.Resolved)
 	}
 	return k, nil
+}
+
+// KeyHashOf is the KeyHash of a key whose value is value.
+func KeyHashOf(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:6])
 }
 
 // staleIfNoRow maps a conditional upsert that returned no row to

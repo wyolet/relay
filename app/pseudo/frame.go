@@ -130,11 +130,14 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 	return rows, nil
 }
 
-// Values is the rows' values, in order.
+// Values is the rows' values as the plans see them, in order: an AccountRebinding is the binding it made.
 func Values(rows []Row) []any {
 	out := make([]any, len(rows))
 	for i, r := range rows {
 		out[i] = r.Value
+		if rb, ok := r.Value.(*AccountRebinding); ok {
+			out[i] = &rb.Binding
+		}
 	}
 	return out
 }
