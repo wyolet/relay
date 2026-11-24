@@ -123,6 +123,7 @@ func TestCompose_LeavesOutRelayOnlyAdapters(t *testing.T) {
 		wantReject  bool
 	}{
 		{"vertex_anthropic", []string{"host-a"}, []string{"shared-snap"}, false},
+		{"vertex_gemini", []string{"host-a"}, []string{"shared-snap"}, false},
 		{"no-such-adapter", []string{"host-a", "host-b"}, []string{"shared-snap", "solo-snap"}, true},
 	} {
 		var docs []manifest.Document

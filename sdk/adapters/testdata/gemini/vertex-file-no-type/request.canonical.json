@@ -1,0 +1,19 @@
+{
+  "model": null,
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Describe this."
+        },
+        {
+          "type": "input_file",
+          "file_url": "https://example.com/image"
+        }
+      ]
+    }
+  ]
+}

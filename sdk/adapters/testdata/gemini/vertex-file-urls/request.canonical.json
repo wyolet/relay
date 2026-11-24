@@ -1,0 +1,28 @@
+{
+  "model": null,
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Describe these."
+        },
+        {
+          "type": "input_file",
+          "file_url": "https://example.com/photo",
+          "media_type": "image/webp"
+        },
+        {
+          "type": "input_file",
+          "file_url": "https://example.com/cat.PNG?X-Goog-Signature=abc"
+        },
+        {
+          "type": "input_file",
+          "file_url": "gs://bucket/report.pdf"
+        }
+      ]
+    }
+  ]
+}

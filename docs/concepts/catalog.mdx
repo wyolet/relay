@@ -46,7 +46,7 @@ When a model has bindings on several hosts and you don't pin one, Relay tries th
 
 ## Model aliases
 
-A model can declare **aliases** in `spec.aliases`: extra names that resolve to it. Aliases are checked last, after every catalog name and its provider- and host-qualified forms miss, so they never shadow a real model. An alias may contain one `*` after a literal prefix (`claude-fable-5[*]`). When a request matches an alias, Relay routes to the model and sends the name from the request upstream unchanged; this is how a client can send `claude-fable-5[1m]` to a provider that understands that suffix. An adapter that names the model in the URL (`gemini`, `vertex_anthropic`) would put that name, suffix included, in the upstream path; set the binding's `upstreamName` and that name is sent instead. `upstreamName` applies only while the binding serves exactly one snapshot of the model (its `snapshots` lists one, or the model has only one).
+A model can declare **aliases** in `spec.aliases`: extra names that resolve to it. Aliases are checked last, after every catalog name and its provider- and host-qualified forms miss, so they never shadow a real model. An alias may contain one `*` after a literal prefix (`claude-fable-5[*]`). When a request matches an alias, Relay routes to the model and sends the name from the request upstream unchanged; this is how a client can send `claude-fable-5[1m]` to a provider that understands that suffix. An adapter that names the model in the URL (`gemini`, `vertex_anthropic`, `vertex_gemini`) would put that name, suffix included, in the upstream path; set the binding's `upstreamName` and that name is sent instead. `upstreamName` applies only while the binding serves exactly one snapshot of the model (its `snapshots` lists one, or the model has only one).
 
 Aliases are lookup keys only: they are not valid in policy grants, and usage records the model's catalog name. To add an alias to a catalog model without losing it on the next catalog update, use an [overlay](/concepts/overlays).
 
@@ -125,6 +125,19 @@ spec:
   upstreamName: <vertex model id>
   snapshots: [<snapshot>]
 ```
+
+### Gemini on Vertex AI
+
+The `vertex_gemini` adapter calls `/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent` (`:streamGenerateContent?alt=sse` when streaming). It takes the same host as Claude: `backend.project`, `backend.location`, a `baseURL` from the table above, and a service-account host key; one host can carry bindings of both adapters.
+
+Bind each model with `adapter: vertex_gemini`. Without `upstreamName` the snapshot's name goes into the URL, so set it only when that name is not the id Vertex uses for the model.
+
+Vertex rejects a file URL sent without a media type, so Relay gives every image and file URL one:
+
+- An image takes the type its extension names (`.png`, `.jpg`, `.webp`, `.heic`, `.heif`), else `image/*`.
+- A file takes its own media type, else `video/mp4` for a YouTube URL, else the type its extension names (common image, audio and video extensions, and `.pdf`). For a `gs://` URI the extension is read from the object name as written. A file URL with none of these answers `400 unsupported_request` and nothing is sent.
+
+A route does not fail over between a `gemini` and a `vertex_gemini` binding of one model: the two send different requests.
 
 ## System rate limits
 

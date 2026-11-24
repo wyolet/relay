@@ -294,7 +294,7 @@ var requestCases = []struct {
 		name: "user media blocks",
 		wire: body(`"messages":[{"role":"user","content":[{"type":"text","text":"look"},` + pngBlock + `,{"type":"image","source":{"type":"url","url":"https://x/a;b,c.png"}},` + pdfBlock + `,{"type":"document","source":{"type":"url","url":"https://x/a.pdf"},` + ccBlock + `}]}]`),
 		req: request(input(anchored(&v1.Message{Role: v1.RoleUser, Content: []v1.Part{
-			&v1.TextPart{Text: "look"}, pngPart, &v1.ImagePart{ImageURL: "https://x/a;b,c.png"}, pdfPart, &v1.FilePart{FileURL: "https://x/a.pdf"},
+			&v1.TextPart{Text: "look"}, pngPart, &v1.ImagePart{ImageURL: "https://x/a;b,c.png"}, pdfPart, &v1.FilePart{FileURL: "https://x/a.pdf", MediaType: "application/pdf"},
 		}}))),
 	},
 	{

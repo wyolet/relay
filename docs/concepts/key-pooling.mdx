@@ -167,7 +167,7 @@ Relay also reads the same header on live responses and remembers, per pod, the o
 
 A host key can hold a service-account key file instead of an API key. Relay signs an assertion with the file's private key, exchanges it at the file's token URL for a short-lived access token (the OAuth 2.0 JWT-bearer grant, RFC 7523), and sends that token in place of an API key.
 
-Use such a key only on bindings whose adapter authenticates with `Authorization: Bearer`: `openai`, `openai_responses`, `openai_embeddings` and `vertex_anthropic`. The `anthropic` and `gemini` adapters send the key in an API-key header (`x-api-key`, `x-goog-api-key`), where an access token is not accepted.
+Use such a key only on bindings whose adapter authenticates with `Authorization: Bearer`: `openai`, `openai_responses`, `openai_embeddings`, `vertex_anthropic` and `vertex_gemini`. The `anthropic` and `gemini` adapters send the key in an API-key header (`x-api-key`, `x-goog-api-key`), where an access token is not accepted.
 
 Add a `scopes` array to the key file, then send the whole file as the value of an `oauth` key. `valueFrom.provider` is required but is only a label here:
 

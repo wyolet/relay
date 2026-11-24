@@ -28,16 +28,19 @@ var shapes = []shape{
 	{name: "openai-responses", dir: "openai", casePrefix: "responses-", tr: openai.ResponsesTranslator{}},
 	{name: "anthropic", dir: "anthropic", tr: anthropic.AnthropicTranslator{}},
 	{name: "gemini", dir: "gemini", tr: gemini.GeminiTranslator{}},
+	{name: "gemini-vertex", dir: "gemini", casePrefix: "vertex-", tr: gemini.GeminiTranslator{Vertex: true}},
 }
 
-// shapeForCase returns the shape owning testdata/<dir>/<caseName>.
+// shapeForCase returns the shape owning testdata/<dir>/<caseName>: of those whose casePrefix the case starts with, the one with the longest.
 func shapeForCase(dir, caseName string) (shape, bool) {
+	var owner shape
+	found := false
 	for _, s := range shapes {
-		if s.dir == dir && strings.HasPrefix(caseName, s.casePrefix) {
-			return s, true
+		if s.dir == dir && strings.HasPrefix(caseName, s.casePrefix) && (!found || len(s.casePrefix) > len(owner.casePrefix)) {
+			owner, found = s, true
 		}
 	}
-	return shape{}, false
+	return owner, found
 }
 
 func shapeByName(name string) shape {
