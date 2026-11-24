@@ -3,6 +3,7 @@ package plan
 import (
 	"errors"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -134,6 +135,48 @@ func TestCheck_TimeoutAndOneAtATime(t *testing.T) {
 	c.timeout = time.Minute
 	if _, err := c.NewIssues(t.Context(), h.e.View(), nil, nil); err != nil {
 		t.Fatalf("once the slot is free: %v", err)
+	}
+}
+
+// A build that outlives the bound answers ErrCheckTimeout and keeps the slot until it ends; checks asked for meanwhile answer at once and start no build; once it ends, the next check builds.
+func TestCheck_BuildOutlivesTheBound(t *testing.T) {
+	b := newBasic()
+	h := b.w.start(t)
+	const bound = 200 * time.Millisecond
+	c := NewCheck(false, bound)
+	gate := make(chan struct{})
+	var builds atomic.Int32
+	c.build = func(src Sources) (*engine.View, error) {
+		builds.Add(1)
+		<-gate
+		return scratchView(src)
+	}
+	if _, err := c.NewIssues(t.Context(), h.e.View(), nil, nil); !errors.Is(err, ErrCheckTimeout) {
+		t.Fatalf("a build past the bound: %v, want ErrCheckTimeout", err)
+	}
+	start := time.Now()
+	if _, err := c.NewIssues(t.Context(), h.e.View(), nil, nil); !errors.Is(err, ErrCheckTimeout) {
+		t.Fatalf("while it runs: %v, want ErrCheckTimeout", err)
+	}
+	if _, _, err := c.Hold(t.Context()); !errors.Is(err, ErrCheckTimeout) {
+		t.Fatalf("Hold while it runs: %v, want ErrCheckTimeout", err)
+	}
+	if waited := time.Since(start); waited >= bound/2 {
+		t.Errorf("checks asked for while it runs waited %v, want an answer at once", waited)
+	}
+	if n := builds.Load(); n != 1 {
+		t.Fatalf("%d builds started, want 1", n)
+	}
+	close(gate)
+	deadline := time.Now().Add(5 * time.Second)
+	for c.overrun.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := c.NewIssues(t.Context(), h.e.View(), nil, nil); err != nil {
+		t.Fatalf("once it ended: %v", err)
+	}
+	if n := builds.Load(); n != 2 {
+		t.Errorf("%d builds started, want 2", n)
 	}
 }
 
