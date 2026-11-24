@@ -537,6 +537,19 @@ func TestPseudoAgent_PlanIssue(t *testing.T) {
 	}
 }
 
+// A body without an owner is refused for that, with its pointer; there is no default owner.
+func TestPseudoAgent_OwnerRequired(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	w.loadPlans(t)
+	body := w.agentBody(map[string]any{"policyId": w.projPolicy.Meta.ID})
+	delete(body["metadata"].(map[string]any), "owner")
+	rec, _ := w.post(t, "bob", body, false)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if r := refusalOf(t, rec); r.Pointer != "/metadata/owner" || r.Err.Message != "metadata.owner is required: the kind and id of the scope that owns the service account" {
+		t.Errorf("refusal = %+v", r)
+	}
+}
+
 // A disabled policy files no error, but every request of a lane bound to it is refused: the request is refused, on the binding.
 func TestPseudoAgent_DisabledPolicy(t *testing.T) {
 	w := newPseudoAgentWorld(t)

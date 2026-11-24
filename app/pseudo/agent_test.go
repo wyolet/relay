@@ -68,7 +68,18 @@ func (w *agentWorld) reads() AgentReads {
 }
 
 func agentBody(spec AgentSpec) Agent {
-	return Agent{Metadata: AgentMetadata{DisplayName: "CI bot", Labels: map[string]string{"sa-type": "agent"}, Owner: proj}, Spec: spec}
+	return Agent{Metadata: AgentMetadata{DisplayName: "CI bot", Labels: map[string]string{"sa-type": "agent"}, Owner: AgentOwner{Kind: proj.Kind, ID: proj.ID}}, Spec: spec}
+}
+
+// An owner is required; there is no default.
+func TestExpandAgent_RefusesNoOwner(t *testing.T) {
+	body := agentBody(AgentSpec{PolicyID: policyID})
+	body.Metadata.Owner = AgentOwner{}
+	rows, err := ExpandAgent(body, newAgentWorld().reads())
+	want := &BodyError{Pointer: "/metadata/owner", Message: "metadata.owner is required: the kind and id of the scope that owns the service account"}
+	if diff := cmp.Diff(want, err); diff != "" || rows != nil {
+		t.Errorf("rows %v, error (-want +got):\n%s", rows, diff)
+	}
 }
 
 // The rows every agent starts with: the service account (id-1, its name taken once) and its lane (id-2).

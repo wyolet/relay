@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/policybinding"
@@ -32,7 +34,27 @@ type AgentMetadata struct {
 	DisplayName string            `json:"displayName,omitempty" doc:"Free-text name shown in the UI."`
 	Description string            `json:"description,omitempty" doc:"Free-text description of the service account."`
 	Labels      map[string]string `json:"labels,omitempty"      doc:"Labels of the service account."`
-	Owner       meta.Owner        `json:"owner"                 doc:"The scope that owns the service account, as POST /service-accounts takes it. The pools, policy and policy binding made for it are owned by the same scope."`
+	Owner       AgentOwner        `json:"owner,omitempty"       doc:"The scope that owns the service account; required, with no default. The pools, policy and policy binding made for it are owned by the same scope."`
+}
+
+// AgentOwner is the scope a service account is owned by; its kinds are serviceaccount.OwnerKinds.
+type AgentOwner struct {
+	Kind meta.OwnerKind `json:"kind,omitempty" doc:"Kind of the owning scope: one a service account may be owned by."`
+	ID   string         `json:"id,omitempty"   doc:"Id of the owning scope."`
+}
+
+// Owner is o as an owner.
+func (o AgentOwner) Owner() meta.Owner { return meta.Owner{Kind: o.Kind, ID: o.ID} }
+
+// TransformSchema lists the owner kinds a service account takes, so the documented choices follow serviceaccount.OwnerKinds.
+func (AgentOwner) TransformSchema(_ huma.Registry, s *huma.Schema) *huma.Schema {
+	if kind := s.Properties["kind"]; kind != nil {
+		kind.Enum = nil
+		for _, k := range serviceaccount.OwnerKinds {
+			kind.Enum = append(kind.Enum, string(k))
+		}
+	}
+	return s
 }
 
 // AgentSpec is what the service account may use, through an existing policy or one made for it, and its first key.
@@ -80,10 +102,10 @@ type AgentReads struct {
 
 // ExpandAgent returns the rows an agent body stands for, in write order: the service account, its lane account, then for policyId a binding of the lane to it; for access the shares and pools it needs, its policy (linking poolIds, then the pools made) and the binding; then the key.
 func ExpandAgent(body Agent, in AgentReads) ([]Row, error) {
-	if err := checkAgent(body.Spec); err != nil {
+	if err := CheckAgent(body); err != nil {
 		return nil, err
 	}
-	x := agentExpansion{in: in, owner: body.Metadata.Owner}
+	x := agentExpansion{in: in, owner: body.Metadata.Owner.Owner()}
 	sa := x.serviceAccount(body.Metadata)
 	lane := x.lane(sa)
 	switch a := body.Spec.Access; {
@@ -104,8 +126,12 @@ func ExpandAgent(body Agent, in AgentReads) ([]Row, error) {
 	return x.rows, nil
 }
 
-// checkAgent refuses a spec that names its access twice, not at all, or half, or names a row by anything but its id.
-func checkAgent(s AgentSpec) error {
+// CheckAgent refuses a body that names no owner, its access twice, not at all, or half, or a row by anything but its id; it needs no read, so a caller runs it before reading what the body names. ExpandAgent runs it too.
+func CheckAgent(body Agent) error {
+	if o := body.Metadata.Owner; o.Kind == "" || o.ID == "" {
+		return &BodyError{Pointer: "/metadata/owner", Message: "metadata.owner is required: the kind and id of the scope that owns the service account"}
+	}
+	s := body.Spec
 	if (s.PolicyID == "") == (s.Access == nil) {
 		return &BodyError{Pointer: "/spec", Message: "exactly one of spec.policyId and spec.access is required"}
 	}

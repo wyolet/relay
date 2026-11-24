@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/meta"
@@ -152,6 +154,13 @@ func TestPseudoKinds_FlagGatesTheRoutes(t *testing.T) {
 					if ref := responseRef(op, code); ref != "#/components/schemas/pseudoRefusal" {
 						t.Errorf("%s answers %q, want pseudoRefusal", code, ref)
 					}
+				}
+				var kinds []string
+				for _, k := range serviceaccount.OwnerKinds {
+					kinds = append(kinds, string(k))
+				}
+				if got := enumOf(t, doc, "AgentOwner", "kind"); !slices.Equal(got, kinds) {
+					t.Errorf("owner kinds = %v, want those a service account takes, %v", got, kinds)
 				}
 				for _, code := range []string{"200", "201"} {
 					if ref := responseRef(op, code); ref != "#/components/schemas/PseudoAgentCreated" {
