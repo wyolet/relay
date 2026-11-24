@@ -170,6 +170,40 @@ func TestReach_SnapshotsAgreeWithRoutes(t *testing.T) {
 	}
 }
 
+// Under a budget the preview answers each snapshot name as a request would: a host whose pricing is disabled is unpriced for every name, so it drops out where another host is priced and refuses every name where it is the only host.
+func TestReach_SnapshotsTreatADisabledPricingAsNone(t *testing.T) {
+	s := newSnapshotWorld()
+	m2 := s.w.Models[1]
+	s.w.Price(m2, s.w.Hosts[0], 1)
+	s.w.Price(m2, s.w.Hosts[1], 1).Spec.Enabled = new(bool)
+	bud := s.w.Budget("50")
+	both, bOnly := s.lane(nil, s.pa, s.pb), s.lane(nil, s.pb)
+	for _, l := range []snapshotLane{both, bOnly} {
+		l.policy.Spec.Budgets = []policy.BudgetLink{{BudgetID: bud.Meta.ID}}
+	}
+	plans := s.w.Load(t)
+
+	for _, tc := range []struct {
+		name string
+		lane snapshotLane
+		want map[string]answer
+	}{
+		{"a priced host beside it", both, map[string]answer{"m2": {Hosts: []string{"host-a"}}, "m2-remote": {Hosts: []string{"host-a"}}}},
+		{"its only host", bOnly, map[string]answer{"m2": {Refused: plan.CodeUnpricedUnderBudget}, "m2-remote": {Refused: plan.CodeUnpricedUnderBudget}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshots, _ := previewAnswers(plan.ReachOf(plans.Engine.View(), tc.lane.acct.Meta.ID, nil))
+			got := map[string]answer{"m2": snapshots["m2"], "m2-remote": snapshots["m2-remote"]}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("preview per snapshot (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.want, routeAnswers(keyCaller(t, plans, tc.lane.key), "m2", "m2-remote")); diff != "" {
+				t.Errorf("Routes.Get per snapshot (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 type issueAt struct {
 	Code, Field string
 	Severity    engine.Severity
