@@ -322,7 +322,7 @@ Relay writes errors in one envelope:
 | `403` | `policy_disabled`, `subject_disabled`, `duplicate_binding`, `account_closed`, `personal_account_off` | A rung of the caller's ladder refuses. See [Policy refusals](#policy-refusals). |
 | `403` | `account_not_held` | The request names an account its credential may not run in, or the inference token's project has no account for its user. See [Lanes](/concepts/accounts#lanes). |
 | `403` | `model_not_allowed`, `model_disabled` | A policy on the ladder does not allow the model, or the model is disabled. |
-| `403` | `unpriced_under_budget` | The model's binding has no pricing and a budget applies. |
+| `403` | `unpriced_under_budget` | The model's binding has no enabled pricing and a budget applies. |
 | `403` | `passthrough_forbidden`, `proxy_disabled` | Proxy mode: the relay key lacks `passthroughAllowed`, or proxy mode is off. |
 | `404` | `model_not_found` | No model matches the reference. |
 | `408` | `request_timeout` | Proxy mode: the request body sent no bytes for `RELAY_PROXY_BODY_IDLE_S` seconds (default 30). |
@@ -376,7 +376,7 @@ The rung is `team`, `project` or `lane` on the caller side, and `account` for a 
 | `403` | `personal_account_off` | The request runs in a user's personal account, or a provider account they own personally, while that user's personal accounts are turned off. | Use a key in a team or project account; see [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off). |
 | `403` | `account_not_held` | The request names an account its credential may not run in, or one that does not exist. A key's default account that stopped taking its keys answers the same. | Name an account the credential may use; see [Lanes](/concepts/accounts#lanes). |
 | `403` | `model_not_allowed` | A policy on the ladder does not allow the model. The message names the rung and the policy: `model "<model>" is not allowed by the <rung> policy <policy-id>`. | Add the model to that policy's `models`, or empty the list. |
-| `403` | `unpriced_under_budget` | A budget applies on that rung and the binding has no pricing. | Add pricing for the binding. |
+| `403` | `unpriced_under_budget` | A budget applies on that rung and the binding has no enabled pricing. | Add or enable pricing for the binding. |
 | `429` | `budget_exceeded` | A hard budget on a caller rung is spent for this period. `Retry-After` is the time to the next period. | Raise the cap, or wait. |
 | `429` | `rate_limit_exceeded` | A rate limit on a caller rung is spent, or every host key is over an upstream limit or its account is cooling. | Wait for `Retry-After`. |
 | `503` | `no_keys` | No pool the caller reaches is at a host serving the model. When a caller policy links pools, its rung is the one named in the logs. | Link a pool at a serving host in the caller's policy, or give the caller's scope a host key there. |

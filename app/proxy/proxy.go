@@ -426,6 +426,8 @@ func classifyFailure(err error) (kind string, status int) {
 		return body.Kind, 0
 	case errors.Is(err, ErrNoUpstreamAuth):
 		return "no_upstream_auth", 0
+	case errors.As(err, &refused) && plan.LimitCode(refused) == plan.CodeBudgetExceeded:
+		return plan.CodeBudgetExceeded, 0
 	case errors.As(err, &refused):
 		// Refused before the upstream call → status 0.
 		return "rate_limited", 0

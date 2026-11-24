@@ -8,13 +8,15 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// Only a listed origin is echoed, with credentials; its preflight is answered here with the allowed methods and headers, any other preflight is refused, and every response varies on Origin so a cache never replays an answer without the allow header to a cross-origin caller.
+// Only a listed origin is echoed, with credentials and the request-id headers readable; its preflight is answered here with the allowed methods and headers, the client request id among them, any other preflight is refused, and every response varies on Origin so a cache never replays an answer without the allow header to a cross-origin caller.
 func TestCORS(t *testing.T) {
 	const ui = "https://relay.wyolet.dev"
-	allowed := map[string]string{"Vary": "Origin", "Access-Control-Allow-Origin": ui, "Access-Control-Allow-Credentials": "true"}
+	allowed := map[string]string{"Vary": "Origin", "Access-Control-Allow-Origin": ui, "Access-Control-Allow-Credentials": "true",
+		"Access-Control-Expose-Headers": "X-Relay-Request-Id, X-Request-Id"}
 	preflight := map[string]string{"Vary": "Origin", "Access-Control-Allow-Origin": ui, "Access-Control-Allow-Credentials": "true",
-		"Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-		"Access-Control-Allow-Headers": "content-type, x-relay-admin-token, authorization", "Access-Control-Max-Age": "600"}
+		"Access-Control-Expose-Headers": "X-Relay-Request-Id, X-Request-Id",
+		"Access-Control-Allow-Methods":  "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+		"Access-Control-Allow-Headers":  "content-type, x-relay-admin-token, authorization, x-request-id", "Access-Control-Max-Age": "600"}
 	bare := map[string]string{"Vary": "Origin"}
 
 	for _, tc := range []struct {

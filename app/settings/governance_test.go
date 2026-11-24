@@ -18,6 +18,7 @@ func TestGoverns(t *testing.T) {
 		systemOwned = "system"
 		orgOwned    = "organization"
 		sectionOff  = "section"
+		noSection   = "no section"
 	)
 	locked := map[string]any{SectionGovernancePolicy: &Governance{}}
 	open := map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: true, AllowDelete: true}}
@@ -66,6 +67,8 @@ func TestGoverns(t *testing.T) {
 		{"host policy: a section of another type is the default", OpDelete, "policy", "host", false, wrongType, sectionOff},
 		{"host policy: another kind's section does not apply", OpDelete, "host", "host", false, open, sectionOff},
 		{"unknown owner kind: the catalog default", OpDelete, "policy", "", false, nil, sectionOff},
+		{"host pricing: edit by default", OpEdit, "pricing", "host", false, nil, allowed},
+		{"host pricing: delete names no section, as the kind has none", OpDelete, "pricing", "host", true, nil, noSection},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var want error
@@ -79,6 +82,9 @@ func TestGoverns(t *testing.T) {
 			case sectionOff:
 				want = &MutationError{Op: tc.op, Kind: tc.kind, OwnerKind: tc.ownerKind,
 					Reason: string(tc.op) + " of " + tc.kind + " is disabled on this relay; enable it via the governance:" + tc.kind + " settings section"}
+			case noSection:
+				want = &MutationError{Op: tc.op, Kind: tc.kind, OwnerKind: tc.ownerKind,
+					Reason: string(tc.op) + " of " + tc.kind + " is disabled on this relay; the kind has no governance settings section to enable it"}
 			}
 			got := Governs(settingstest.Sections(tc.sections), tc.op, tc.kind, tc.ownerKind, tc.admin)
 			if diff := cmp.Diff(want, got); diff != "" {
