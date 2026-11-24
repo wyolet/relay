@@ -176,8 +176,13 @@ func MigrateTo(dsn string, version uint) error {
 	if err != nil {
 		return err
 	}
-	// Below groupsVersion relay's down-migrations drop groups, and further down users, which the auth module's later migrations extend. The module returns to its first migration, whose schema relay's up-migrations recreate, so the next boot applies the rest again.
+	// Below groupsVersion relay's down-migrations drop groups, and further down users, which the auth module's later migrations extend. The module returns to its first migration, whose schema relay's up-migrations recreate, so the next boot applies the rest again. Relay's downs above groupsVersion run first: one of them refusing then leaves the module where it was.
 	if version < groupsVersion {
+		if current > groupsVersion {
+			if err := m.Migrate(groupsVersion); err != nil && err != migrate.ErrNoChange {
+				return fmt.Errorf("storage: migrate to %d: %w", groupsVersion, retryable(m, src, false, err))
+			}
+		}
 		if err := authpg.MigrateDown(dsn, authFirstVersion); err != nil {
 			return fmt.Errorf("storage: %w", err)
 		}

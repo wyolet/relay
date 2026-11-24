@@ -8,7 +8,7 @@ DECLARE
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_constraint
                 WHERE contype = 'f' AND confrelid = 'service_accounts'::regclass
-                  AND conrelid <> 'role_binding_subjects'::regclass) THEN
+                  AND conrelid::regclass::text <> 'role_binding_subjects') THEN
         RETURN;
     END IF;
     SELECT count(*) INTO team_owned FROM service_accounts WHERE project_id IS NULL;
