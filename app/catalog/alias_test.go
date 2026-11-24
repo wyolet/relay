@@ -176,7 +176,7 @@ func TestResolveModelRef_PinsHostsWhoseBindingsNameTheUpstream(t *testing.T) {
 		hosts = append(hosts, h)
 		bindings = append(bindings, &binding.Binding{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: "m1-on-" + name, Owner: system},
-			Spec: binding.Spec{ModelID: m.Meta.ID, HostID: h.Meta.ID, Adapter: adapters.Anthropic, UpstreamName: upstream},
+			Spec: binding.Spec{ModelID: m.Meta.ID, HostID: h.Meta.ID, Adapter: adapters.Anthropic, UpstreamName: upstream, Snapshots: []string{"m1"}},
 		})
 	}
 	s := BuildCatalog([]*provider.Provider{prov}, hosts, []*model.Model{m}, nil, bindings, nil)

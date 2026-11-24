@@ -60,12 +60,22 @@ func (b *Binding) Serves(snapshotName string) bool {
 	return false
 }
 
+// UpstreamNameOr returns the model name sent upstream through b: its UpstreamName when set, else fallback (the snapshot's upstream name, or an alias's).
+func (b *Binding) UpstreamNameOr(fallback string) string {
+	if b.Spec.UpstreamName != "" {
+		return b.Spec.UpstreamName
+	}
+	return fallback
+}
+
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the binding-specific invariants:
 //   - Adapter defaults to OpenAI when omitted, then must be a valid upstream
 //     binding (the dispatch key — see adapters.UpstreamBindingNames).
 //   - The owner is never a user, team or project: a binding decides which
 //     host a model's traffic goes to, so it is shared catalog data.
+//   - An UpstreamName names one upstream model, so the binding serves
+//     exactly one snapshot: otherwise every snapshot would be sent that id.
 //
 // Cross-entity checks (ModelID/HostID/PricingID resolve; the (model, host)
 // pair is unique; Snapshots name real model snapshots) live in the catalog
@@ -83,6 +93,10 @@ func (b *Binding) Validate() error {
 	if !b.Spec.Adapter.UpstreamBinding() {
 		return fmt.Errorf("binding %q: adapter %q is not a valid upstream binding (want one of %v)",
 			b.Meta.Name, b.Spec.Adapter, adapters.UpstreamBindingNames())
+	}
+	if b.Spec.UpstreamName != "" && len(b.Spec.Snapshots) != 1 {
+		return fmt.Errorf("binding %q: upstreamName %q names one upstream model, so snapshots must list exactly one snapshot (got %d)",
+			b.Meta.Name, b.Spec.UpstreamName, len(b.Spec.Snapshots))
 	}
 	return nil
 }

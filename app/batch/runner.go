@@ -83,10 +83,10 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 	if !sameShape {
 		return 0, nil, fmt.Errorf("%w (%s→%s)", ErrCrossShape, inbound, shape)
 	}
-	// One body serves every hop, so failover keeps to the hops that speak the first hop's shape and model name.
+	// One body serves every hop, so failover keeps to the hops that speak the first hop's shape.
 	hops := make([]plan.RouteHop, 0, len(route.Hops))
 	for _, h := range route.Hops {
-		if h.Binding.Spec.Adapter == shape && route.UpstreamModelAt(&h) == route.UpstreamModel {
+		if h.Binding.Spec.Adapter == shape {
 			hops = append(hops, h)
 		}
 	}
@@ -130,7 +130,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 
 	result, err := rn.Pipeline.Run(ctx, &pipeline.Request{
 		Body:          wireBody,
-		HopBody:       inference.HopBody,
+		HopBody:       inference.HopBodyFor(hops, route.UpstreamModel),
 		BodyShape:     inbound,
 		Headers:       http.Header{},
 		Adapter:       upstreamAdapter,

@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"maps"
 	"testing"
 	"time"
 
@@ -85,4 +86,26 @@ func TestFlatten_PricingFollowsTheBindingsSheet(t *testing.T) {
 		return
 	}
 	t.Fatal("host-a missing")
+}
+
+// The document's wire name is the one routing sends: the binding's upstreamName where it states one, else the snapshot's upstream name.
+func TestFlatten_WireNameFollowsTheBindingsUpstreamName(t *testing.T) {
+	idx, kept := flattenFixture()
+	const wire = "global.prov.m-v1:0"
+	for _, list := range idx.bindingsByModel {
+		for _, b := range list {
+			if b.Meta.ID == kept {
+				b.Spec.UpstreamName, b.Spec.Snapshots = wire, []string{"m-snap"}
+			}
+		}
+	}
+	got := map[string]string{}
+	for _, h := range Flatten(idx, time.Time{}, nil).Hosts {
+		for _, b := range h.Models {
+			got[h.Name] = b.Name
+		}
+	}
+	if want := map[string]string{"host-a": wire, "host-b": "m-snap"}; !maps.Equal(got, want) {
+		t.Errorf("wire names by host = %v, want %v", got, want)
+	}
 }

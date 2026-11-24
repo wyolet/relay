@@ -13,10 +13,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
@@ -150,70 +147,6 @@ func TestDispatch_CrossShapeKeepsOptionsUnderUpstreamName(t *testing.T) {
 	}
 	_, body := last()
 	wantJSON(t, "upstream body", body, `{"model":"test-model","max_tokens":256,"messages":[{"role":"user","content":"hi"}],"output_config":{"format":{"type":"json_schema","schema":`+schema+`}}}`)
-}
-
-// The body is built once with the first hop's wire model name, so failover reaches only the hops whose binding sends that same name.
-func TestDispatch_FailoverKeepsToTheFirstHopsUpstreamName(t *testing.T) {
-	const wire = "global.acme/test-model-v1:0"
-	for name, tc := range map[string]struct {
-		secondUpstreamName string
-		wantSecondTried    bool
-	}{
-		"second hop sends the model's own name": {"", false},
-		"second hop sends the same name":        {wire, true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			upstream := func(status int, reply string) (*httptest.Server, chan string) {
-				got := make(chan string, 1)
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					b, _ := io.ReadAll(r.Body)
-					got <- string(b)
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(status)
-					_, _ = w.Write([]byte(reply))
-				}))
-				t.Cleanup(srv.Close)
-				return srv, got
-			}
-			first, firstGot := upstream(http.StatusInternalServerError, `{"error":{"message":"down"}}`)
-			second, secondGot := upstream(http.StatusOK, `{"answer":true}`)
-
-			var pw plantest.World
-			prov := pw.Provider("acme")
-			m := pw.Model(prov, "test-model")
-			hostA, hostB := pw.Host("cloud-a", first.URL), pw.Host("direct-b", second.URL)
-			pw.Bind(m, hostA, adapters.OpenAI).Spec.UpstreamName = wire
-			pw.Bind(m, hostB, adapters.OpenAI).Spec.UpstreamName = tc.secondUpstreamName
-			pw.Credential(hostA, nil, plantest.System, "sk-a")
-			pw.Credential(hostB, nil, plantest.System, "sk-b")
-			k := pw.UserKey(pw.User(), "rk-secret")
-			plans := pw.Load(t)
-			kp := plans.Root().Keys.Lookup(k.Spec.KeyHash, time.Now())
-			if kp == nil {
-				t.Fatal("fixture key has no plan")
-			}
-			cat := catalogtest.Catalog{Providers: pw.Providers, Hosts: pw.Hosts, Models: pw.Models, HostKeys: pw.Credentials, Keys: []*key.Key{k}, Bindings: pw.Bindings}.Load(t)
-			d := buildRunnableDeps(t, cat)
-			d.Plans = plans.Holder
-
-			w := dispatch(d, principalOf(kp, k.Spec.KeyHash), DispatchInput{Inbound: adapters.OpenAI, Body: []byte(`{"model":"test-model","stream":false}`), ModelName: "test-model"})
-
-			if len(firstGot) != 1 {
-				t.Fatalf("response %d %s; the first hop was never tried", w.Code, w.Body)
-			}
-			wantJSON(t, "first hop's body", <-firstGot, `{"model":"`+wire+`","stream":false}`)
-			if !tc.wantSecondTried {
-				if w.Code != http.StatusInternalServerError || len(secondGot) != 0 {
-					t.Errorf("response %d, second hop tried %v; want the first hop's 500 and the second never tried", w.Code, len(secondGot) != 0)
-				}
-				return
-			}
-			if w.Code != http.StatusOK || len(secondGot) != 1 {
-				t.Fatalf("response %d %s, second hop tried %v; want its answer", w.Code, w.Body, len(secondGot) != 0)
-			}
-			wantJSON(t, "second hop's body", <-secondGot, `{"model":"`+wire+`","stream":false}`)
-		})
-	}
 }
 
 // A request refused at routing, before any runner exists, still records what the caller was answered.

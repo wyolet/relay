@@ -111,7 +111,7 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 	writeTokenCount(w, len(body)/bytesPerEstimatedToken, tierEstimated)
 }
 
-// exactCounter returns the upstream's own token counter when this route can use it, with the hops that speak the first hop's shape and model name. It requires the profile's inbound shape to be the upstream's shape too: the counting endpoint is handed the caller's body verbatim, so a body in another vendor's shape would be rejected rather than counted.
+// exactCounter returns the upstream's own token counter when this route can use it, with the hops that speak the first hop's shape. It requires the profile's inbound shape to be the upstream's shape too: the counting endpoint is handed the caller's body verbatim, so a body in another vendor's shape would be rejected rather than counted.
 func exactCounter(d Deps, profile clientprofile.Profile, route *plan.Route) (adapter.TokenCounter, []plan.RouteHop, bool) {
 	if d.Pipeline == nil || d.Pipeline.Limiter == nil {
 		return nil, nil, false
@@ -124,7 +124,7 @@ func exactCounter(d Deps, profile clientprofile.Profile, route *plan.Route) (ada
 	if !ok {
 		return nil, nil, false
 	}
-	return counter, routeHops(route, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == shape }), true
+	return counter, keepHops(route.Hops, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == shape }), true
 }
 
 // countUpstream asks the upstream to count through the admission step and pipeline a generation takes. The model field is rewritten to the binding's upstream name, exactly as the byte-pass generation path does. Reports false after writing the error.
@@ -142,14 +142,15 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, route *plan.R
 	}
 
 	result, err := d.Pipeline.Run(ctx, &pipeline.Request{
-		Body:          req.upstreamBody(route.UpstreamModel, nil),
+		Body:          req.upstreamBody(hops[0].UpstreamModel, nil),
+		HopBody:       HopBodyFor(hops, hops[0].UpstreamModel),
 		Headers:       forwardHeaders(r.Header),
 		Adapter:       counter.CountAdapter(),
 		Model:         route.Model,
 		Provider:      route.Provider,
 		Hops:          hops,
 		ModelName:     route.Model.Meta.Name,
-		UpstreamModel: route.UpstreamModel,
+		UpstreamModel: hops[0].UpstreamModel,
 		Lifecycle:     lc,
 	})
 	if err != nil {

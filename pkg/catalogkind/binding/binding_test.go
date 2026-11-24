@@ -53,6 +53,14 @@ func TestValidate(t *testing.T) {
 		{"user owner without an id", func(b *Binding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser} }, []string{sharedData + `"user"`}, adapters.OpenAI},
 		{"team owner", func(b *Binding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"} }, []string{sharedData + `"team"`}, adapters.OpenAI},
 		{"project owner", func(b *Binding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: "p-1"} }, []string{sharedData + `"project"`}, adapters.OpenAI},
+		{"upstream name for its one snapshot", func(b *Binding) {
+			b.Spec.UpstreamName, b.Spec.Snapshots = "global.acme.m-v1:0", []string{"m-2026-01-01"}
+		}, nil, adapters.OpenAI},
+		{"upstream name for every snapshot", func(b *Binding) { b.Spec.UpstreamName = "global.acme.m-v1:0" },
+			[]string{`binding "m-on-h": upstreamName "global.acme.m-v1:0" names one upstream model, so snapshots must list exactly one snapshot (got 0)`}, adapters.OpenAI},
+		{"upstream name for two snapshots", func(b *Binding) {
+			b.Spec.UpstreamName, b.Spec.Snapshots = "acme/m", []string{"m-2026-01-01", "m-2026-02-01"}
+		}, []string{`binding "m-on-h": upstreamName "acme/m" names one upstream model, so snapshots must list exactly one snapshot (got 2)`}, adapters.OpenAI},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &Binding{Meta: meta.Metadata{Name: "m-on-h"}, Spec: Spec{ModelID: meta.NewID(), HostID: meta.NewID()}}

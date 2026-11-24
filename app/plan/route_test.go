@@ -423,7 +423,7 @@ func TestRoute_BindingUpstreamNameIsTheWireName(t *testing.T) {
 		if named {
 			for _, bd := range b.w.bindings {
 				if bd.Spec.HostID == b.hostA.Meta.ID {
-					bd.Spec.UpstreamName = wire
+					bd.Spec.UpstreamName, bd.Spec.Snapshots = wire, []string{"m1"}
 				}
 			}
 		}
@@ -458,7 +458,7 @@ func TestRoute_BindingUpstreamNameIsTheWireName(t *testing.T) {
 				if hop.Host.Meta.ID == b.hostA.Meta.ID {
 					hopWant = sentAtA
 				}
-				if got := r.UpstreamModelAt(hop); got != hopWant {
+				if got := hop.UpstreamModel; got != hopWant {
 					t.Errorf("named=%v %s: hop %d at %s sends %q, want %q", named, tc.ref, i, hop.Host.Meta.Name, got, hopWant)
 				}
 			}

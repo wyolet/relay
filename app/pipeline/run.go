@@ -241,13 +241,17 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 	keyValue := slot.Credential.Resolved
 	// An OAuth-kind credential authenticates differently upstream; the adapter picks the auth variant per credential, so a failover between kinds authenticates each correctly.
 	oauth := slot.Credential.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth
+	upstreamModel := hop.UpstreamModel
+	if upstreamModel == "" {
+		upstreamModel = req.UpstreamModel
+	}
 	connAttempts := 0
 	up := Upstream{BaseURL: hop.Host.Spec.BaseURL, Path: hop.Host.Spec.PathFor(req.BodyShape), Backend: hop.Host.Spec.Backend}
 	var out callOutcome
 	for {
 		req.Lifecycle.MarkUpstreamStart()
 		call := newUpstreamCall(ctx, callTimeout(req.Adapter, req.Stream))
-		resp, err := req.Adapter.Call(call.ctx, up, keyValue, st.body, req.Headers, req.UpstreamModel, req.Stream, oauth)
+		resp, err := req.Adapter.Call(call.ctx, up, keyValue, st.body, req.Headers, upstreamModel, req.Stream, oauth)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			call.accepted.Store(true)
 			st.cur.reached, st.callerReached = true, true

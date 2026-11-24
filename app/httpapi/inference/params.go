@@ -79,7 +79,22 @@ func HopBody(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []st
 	if len(renames) == 0 {
 		return body, nil
 	}
-	return renameBodyParams(body, renames)
+	return editHopBody(body, renames, "")
+}
+
+// HopBodyFor returns the pipeline.Request.HopBody for a body naming model, sent over hops: HopBody itself when every hop sends model, else one that also sets the body's model member to the hop's own UpstreamModel on each hop sending another name. A body without a model member (a shape naming the model in its URL) keeps only the renames.
+func HopBodyFor(hops []plan.RouteHop, model string) func(*plan.RouteHop, adapters.Name, []byte) ([]byte, []string) {
+	for i := range hops {
+		if hops[i].UpstreamModel != model {
+			return func(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []string) {
+				if hop.UpstreamModel == model {
+					return HopBody(hop, shape, body)
+				}
+				return editHopBody(body, hopRenames(hop, shape), hop.UpstreamModel)
+			}
+		}
+	}
+	return HopBody
 }
 
 // renameMembers returns the edits moving each renamed member present in the object to its new key. When the new key is already set the old one is only removed; those keys are returned too.
@@ -118,14 +133,17 @@ func (o *jsonObject) renameMembers(renames []host.ParamRename) ([]memberEdit, []
 	return edits, superseded
 }
 
-// renameBodyParams applies renames to the top-level members of body, returning body itself when nothing changes.
-func renameBodyParams(body []byte, renames []host.ParamRename) ([]byte, []string) {
+// editHopBody applies renames to the top-level members of body and, when model is set, sets the body's top-level model member to it if the body has one; body itself when nothing changes.
+func editHopBody(body []byte, renames []host.ParamRename, model string) ([]byte, []string) {
 	var inline [16]jsonMember
 	obj, err := scanJSONObject(body, inline[:])
 	if err != nil {
 		return body, nil
 	}
 	edits, superseded := obj.renameMembers(renames)
+	if model != "" && obj.lastIndex("model") >= 0 {
+		edits = append(edits, memberEdit{key: "model", value: appendJSONString(nil, model)})
+	}
 	if len(edits) == 0 {
 		return body, nil
 	}
