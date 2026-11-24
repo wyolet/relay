@@ -40,7 +40,7 @@ func TestCountAdapter_Call(t *testing.T) {
 	baseURL, last := captureServer(t)
 	count := countingSpec().PipelineAdapter().(adapter.TokenCounter).CountAdapter()
 
-	resp, err := count.Call(t.Context(), baseURL, ptr("/host-override"), "sk-test", []byte(`{"model":"m"}`), http.Header{"X-Beta": {"b1"}}, "m", true, false)
+	resp, err := count.Call(t.Context(), pipeline.Upstream{BaseURL: baseURL, Path: ptr("/host-override")}, "sk-test", []byte(`{"model":"m"}`), http.Header{"X-Beta": {"b1"}}, "m", true, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -64,10 +64,10 @@ func TestCountAdapter_Call(t *testing.T) {
 		t.Errorf("count request (-want +got):\n%s", diff)
 	}
 
-	if resp, err := count.Call(t.Context(), "http://bad host", nil, "k", nil, nil, "", false, false); err == nil || resp != nil {
+	if resp, err := count.Call(t.Context(), pipeline.Upstream{BaseURL: "http://bad host"}, "k", nil, nil, "", false, false); err == nil || resp != nil {
 		t.Errorf("unparseable base URL: resp = %v, err = %v", resp, err)
 	}
-	if resp, err := count.Call(t.Context(), "http://127.0.0.1:1", nil, "k", nil, nil, "", false, false); err == nil || resp != nil {
+	if resp, err := count.Call(t.Context(), pipeline.Upstream{BaseURL: "http://127.0.0.1:1"}, "k", nil, nil, "", false, false); err == nil || resp != nil {
 		t.Errorf("nothing listening: resp = %v, err = %v", resp, err)
 	}
 }

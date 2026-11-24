@@ -38,22 +38,27 @@ var (
 	_ pipeline.CallTimeouter      = (*specAdapter)(nil)
 )
 
-// Call issues POST {baseURL}{path}: the host's own path when set (hostPath
-// non-nil, verbatim — an explicit "" appends nothing), else the shape default
-// (spec.UpstreamPathFn / spec.DefaultPath). Auth headers are set per spec.Auth
+// Call issues POST {up.BaseURL}{path}: the host's own path when set (up.Path
+// non-nil — an explicit "" appends nothing), else the shape default
+// (spec.UpstreamPathFn / spec.DefaultPath), with its {key} placeholders filled
+// from up.Backend. Auth headers are set per spec.Auth
 // (or spec.OAuthAuth when oauth is true and the spec defines an OAuth
 // variant); forwarded headers are applied first so Relay's own headers win on
 // conflict.
-func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
+func (a *specAdapter) Call(ctx context.Context, up pipeline.Upstream, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
 	path := a.spec.DefaultPath
 	if a.spec.UpstreamPathFn != nil {
 		path = a.spec.UpstreamPathFn(pathSegment(upstreamModel), stream)
 	}
-	if hostPath != nil {
-		path = *hostPath
+	if up.Path != nil {
+		path = *up.Path
+	}
+	path, err := fillPath(path, up.Backend)
+	if err != nil {
+		return nil, err
 	}
 	callCtx, cancel := a.callContext(ctx, stream)
-	req, releaseBody, err := a.newRequest(callCtx, baseURL+path, apiKey, body, hdr, oauth)
+	req, releaseBody, err := a.newRequest(callCtx, up.BaseURL+path, apiKey, body, hdr, oauth)
 	if err != nil {
 		cancelIfSet(cancel)
 		return nil, err
@@ -75,6 +80,45 @@ func pathSegment(model string) string {
 		return strings.ReplaceAll(model, ".", "%2E")
 	}
 	return url.PathEscape(model)
+}
+
+// fillPath replaces each {key} in path with backend[key] as one path segment. A placeholder the backend leaves unset or empty, or a { that opens no well-formed placeholder, is a *pipeline.PathPlaceholderError: the request must not go out to a malformed URL.
+func fillPath(path string, backend map[string]string) (string, error) {
+	open := strings.IndexByte(path, '{')
+	if open < 0 {
+		return path, nil
+	}
+	var b strings.Builder
+	b.Grow(len(path))
+	rest := path
+	for open >= 0 {
+		b.WriteString(rest[:open])
+		n := placeholderKeyLen(rest[open+1:])
+		if n == 0 || open+1+n >= len(rest) || rest[open+1+n] != '}' {
+			return "", &pipeline.PathPlaceholderError{Path: path}
+		}
+		key := rest[open+1 : open+1+n]
+		v := backend[key]
+		if v == "" {
+			return "", &pipeline.PathPlaceholderError{Path: path, Key: key}
+		}
+		b.WriteString(pathSegment(v))
+		rest = rest[open+n+2:]
+		open = strings.IndexByte(rest, '{')
+	}
+	b.WriteString(rest)
+	return b.String(), nil
+}
+
+// placeholderKeyLen is the length of the [A-Za-z0-9_] run s starts with.
+func placeholderKeyLen(s string) int {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_') {
+			return i
+		}
+	}
+	return len(s)
 }
 
 // newRequest builds one POST to url carrying body: the caller's forwarded headers first, then relay's own, so a caller can never override the upstream credential or the content type. releaseBody must be called once Do returns, so the transport stops pinning body while the response streams.

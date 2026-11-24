@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/pkg/adapters"
 )
 
@@ -24,7 +25,7 @@ func buildTimeoutSpec(t *testing.T, sync, idle time.Duration) *Spec {
 
 func callSpec(t *testing.T, s *Spec, baseURL string, stream bool) (*http.Response, error) {
 	t.Helper()
-	return s.PipelineAdapter().Call(t.Context(), baseURL, nil, "", []byte(`{}`), nil, "test-model", stream, false)
+	return s.PipelineAdapter().Call(t.Context(), pipeline.Upstream{BaseURL: baseURL}, "", []byte(`{}`), nil, "test-model", stream, false)
 }
 
 // A stream that keeps trickling bytes must outlive the buffered-call deadline: the 5-minute cap is a header/total-body bound, never a cap on generation length.
@@ -149,7 +150,7 @@ func TestCall_CallerDeadlineIsReused(t *testing.T) {
 	s := buildTimeoutSpec(t, time.Minute, 0)
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	resp, err := s.PipelineAdapter().Call(ctx, stalledBodyUpstream(t), nil, "", []byte(`{}`), nil, "test-model", false, false)
+	resp, err := s.PipelineAdapter().Call(ctx, pipeline.Upstream{BaseURL: stalledBodyUpstream(t)}, "", []byte(`{}`), nil, "test-model", false, false)
 	if err != nil {
 		t.Fatalf("sync call: %v", err)
 	}
@@ -167,7 +168,7 @@ func TestCall_LaterCallerDeadlineKeepsCap(t *testing.T) {
 	s := buildTimeoutSpec(t, 100*time.Millisecond, 0)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
 	defer cancel()
-	resp, err := s.PipelineAdapter().Call(ctx, stalledBodyUpstream(t), nil, "", []byte(`{}`), nil, "test-model", false, false)
+	resp, err := s.PipelineAdapter().Call(ctx, pipeline.Upstream{BaseURL: stalledBodyUpstream(t)}, "", []byte(`{}`), nil, "test-model", false, false)
 	if err != nil {
 		t.Fatalf("sync call: %v", err)
 	}

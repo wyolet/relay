@@ -132,6 +132,41 @@ func TestSpecDefaults(t *testing.T) {
 	}
 }
 
+// A path override is routable only when its backend fills every placeholder; Validate accepts it either way, as the operator may fill backend after install.
+func TestRoutable_PathPlaceholders(t *testing.T) {
+	filled := map[string]string{"project": "p1", "location": "global"}
+	for _, tc := range []struct {
+		name     string
+		path     string
+		paths    map[adapters.Name]string
+		backend  map[string]string
+		routable bool
+	}{
+		{name: "no placeholder", path: "/v1/chat", routable: true},
+		{name: "path filled", path: "/v1/projects/{project}/locations/{location}/chat", backend: filled, routable: true},
+		{name: "paths filled", paths: map[adapters.Name]string{adapters.OpenAI: "/v1/{project}/chat"}, backend: filled, routable: true},
+		{name: "path missing a key", path: "/v1/{project}/{zone}", backend: filled},
+		{name: "path with an empty value", path: "/v1/{project}", backend: map[string]string{"project": ""}},
+		{name: "no backend", path: "/v1/{project}"},
+		{name: "one paths entry unfilled", paths: map[adapters.Name]string{adapters.OpenAI: "/v1/{project}", adapters.Anthropic: "/v1/{zone}"}, backend: filled},
+		{name: "malformed: unclosed", path: "/v1/{project", backend: filled},
+		{name: "malformed: empty key", path: "/v1/{}/chat", backend: filled},
+		{name: "malformed: key with a dash", path: "/v1/{pro-ject}", backend: map[string]string{"pro-ject": "x"}},
+		{name: "malformed: nested", path: "/v1/{{project}}", backend: filled},
+	} {
+		h := &Host{Meta: meta.Metadata{Name: "h"}, Spec: Spec{BaseURL: "https://x", Paths: tc.paths, Backend: tc.backend}}
+		if tc.path != "" {
+			h.Spec.Path = &tc.path
+		}
+		if got := h.Routable(); got != tc.routable {
+			t.Errorf("%s: Routable() = %v, want %v", tc.name, got, tc.routable)
+		}
+		if err := h.Validate(); err != nil {
+			t.Errorf("%s: Validate() = %v, want nil", tc.name, err)
+		}
+	}
+}
+
 func TestPathFor(t *testing.T) {
 	own, compat := "/own", "/v1beta/openai/chat/completions"
 	both := Spec{Path: &own, Paths: map[adapters.Name]string{adapters.OpenAI: compat, adapters.Anthropic: ""}}

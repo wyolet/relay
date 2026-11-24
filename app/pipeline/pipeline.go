@@ -43,12 +43,32 @@ import (
 // that encode them in the URL path — Gemini's generateContent vs
 // streamGenerateContent — need them to build the upstream URL.
 type Adapter interface {
-	// hostPath is the host's upstream-path override (Host.Spec.PathFor): used
-	// verbatim when non-nil (explicit "" appends nothing to baseURL); nil
-	// keeps the adapter's shape default.
-	Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
+	Call(ctx context.Context, up Upstream, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
 	ExtractTokens(body []byte) sdkusage.Tokens
 	Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration)
+}
+
+// Upstream is the host's settings an Adapter.Call is addressed with.
+type Upstream struct {
+	BaseURL string
+	// Path is the host's upstream-path override (Host.Spec.PathFor): used when non-nil (explicit "" appends nothing to BaseURL); nil keeps the adapter's shape default.
+	Path *string
+	// Backend fills the {key} placeholders of the upstream path (Host.Spec.Backend).
+	Backend map[string]string
+}
+
+// PathPlaceholderError is an upstream path with a placeholder the host's backend does not fill, or a malformed one. No request was sent: the fault is the hop's configuration, not its credential or its reachability.
+type PathPlaceholderError struct {
+	Path string
+	// Key is the placeholder's key; empty when the placeholder is malformed.
+	Key string
+}
+
+func (e *PathPlaceholderError) Error() string {
+	if e.Key == "" {
+		return fmt.Sprintf("upstream path %q has a malformed placeholder", e.Path)
+	}
+	return fmt.Sprintf("upstream path %q: host backend sets no value for {%s}", e.Path, e.Key)
 }
 
 // CallTimeouter is the optional capability of an Adapter that caps one call end to end, body read included; 0 means no cap. The runner sets that cap on the call context it derives anyway, so the adapter need not derive a second one.

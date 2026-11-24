@@ -218,7 +218,7 @@ type attemptAction int
 
 const (
 	actNextKey attemptAction = iota // fail over to another credential of the hop
-	actNextHop                      // the hop's host is unreachable: go on to the next hop
+	actNextHop                      // the hop's host is unreachable or its path unfilled: go on to the next hop
 	actStop                         // stop; surface the upstream error
 )
 
@@ -238,17 +238,24 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 	// An OAuth-kind credential authenticates differently upstream; the adapter picks the auth variant per credential, so a failover between kinds authenticates each correctly.
 	oauth := slot.Credential.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth
 	connAttempts := 0
+	up := Upstream{BaseURL: hop.Host.Spec.BaseURL, Path: hop.Host.Spec.PathFor(req.BodyShape), Backend: hop.Host.Spec.Backend}
 	var out callOutcome
 	for {
 		req.Lifecycle.MarkUpstreamStart()
 		call := newUpstreamCall(ctx, callTimeout(req.Adapter, req.Stream))
-		resp, err := req.Adapter.Call(call.ctx, hop.Host.Spec.BaseURL, hop.Host.Spec.PathFor(req.BodyShape), keyValue, st.body, req.Headers, req.UpstreamModel, req.Stream, oauth)
+		resp, err := req.Adapter.Call(call.ctx, up, keyValue, st.body, req.Headers, req.UpstreamModel, req.Stream, oauth)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			call.accepted.Store(true)
 			st.cur.reached, st.callerReached = true, true
 			p.observeOrg(req.Adapter, slot, resp.Header)
 			out.result = p.makeResult(req, st, resp, call)
 			return actStop, out
+		}
+		// Every credential of the hop would build the same path, and the host was never dialled.
+		if _, ok := errors.AsType[*PathPlaceholderError](err); ok {
+			call.release()
+			out.err = err
+			return actNextHop, out
 		}
 		// A caller leaving mid-call can surface as a broken pipe or a reset instead of the context error; either way the key did nothing wrong.
 		if cerr := ctx.Err(); err != nil && cerr != nil && !errors.Is(err, cerr) {

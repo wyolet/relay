@@ -3,6 +3,7 @@ package adapter_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/pkg/adapters"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
@@ -57,6 +59,14 @@ func pathFnSpec() *adapter.Spec {
 	})
 }
 
+func placeholderPathFnSpec() *adapter.Spec {
+	return newBearerSpec("/ignored", func(s *adapter.Spec) {
+		s.UpstreamPathFn = func(model string, _ bool) string {
+			return "/projects/{project}/models/" + model + ":generate"
+		}
+	})
+}
+
 func ptr(s string) *string { return &s }
 
 // Every case pins the full request the upstream receives: URI and the complete header set.
@@ -65,6 +75,7 @@ func TestSpecAdapter_Call(t *testing.T) {
 		name     string
 		spec     *adapter.Spec
 		hostPath *string
+		backend  map[string]string
 		key      string
 		hdr      http.Header
 		model    string
@@ -161,12 +172,28 @@ func TestSpecAdapter_Call(t *testing.T) {
 			spec: pathFnSpec(), model: "m", hostPath: ptr("/fixed"),
 			wantURI: "/fixed",
 		},
+		{
+			name: "host path placeholders filled from the backend",
+			spec: newBearerSpec("/v1/chat/completions"), hostPath: ptr("/v1/projects/{project}/locations/{location}/chat"),
+			backend: map[string]string{"project": "p1", "location": "global"},
+			wantURI: "/v1/projects/p1/locations/global/chat",
+		},
+		{
+			name: "path builder placeholders filled from the backend",
+			spec: placeholderPathFnSpec(), model: "m-1", backend: map[string]string{"project": "p1"},
+			wantURI: "/projects/p1/models/m-1:generate",
+		},
+		{
+			name: "a model never adds a placeholder",
+			spec: placeholderPathFnSpec(), model: "{project}", backend: map[string]string{"project": "p1"},
+			wantURI: "/projects/p1/models/%7Bproject%7D:generate",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			baseURL, last := captureServer(t)
 			before := tt.hdr.Clone()
-			resp, err := tt.spec.PipelineAdapter().Call(context.Background(), baseURL, tt.hostPath, tt.key, []byte(`{}`), tt.hdr, tt.model, tt.stream, tt.oauth)
+			resp, err := tt.spec.PipelineAdapter().Call(context.Background(), pipeline.Upstream{BaseURL: baseURL, Path: tt.hostPath, Backend: tt.backend}, tt.key, []byte(`{}`), tt.hdr, tt.model, tt.stream, tt.oauth)
 			if err != nil {
 				t.Fatalf("Call: %v", err)
 			}
@@ -197,7 +224,7 @@ func TestSpecAdapter_Call_BodySizes(t *testing.T) {
 	a := newBearerSpec("/v1/chat/completions").PipelineAdapter()
 	for _, size := range []int{0, 3 << 10, 64 << 10, 64<<10 + 1, 1 << 20} {
 		body := bytes.Repeat([]byte("x"), size)
-		resp, err := a.Call(context.Background(), baseURL, nil, "key", body, nil, "", false, false)
+		resp, err := a.Call(context.Background(), pipeline.Upstream{BaseURL: baseURL}, "key", body, nil, "", false, false)
 		if err != nil {
 			t.Fatalf("size %d: Call: %v", size, err)
 		}
@@ -219,9 +246,33 @@ func TestSpecAdapter_Call_Errors(t *testing.T) {
 		"nothing listening":    "http://127.0.0.1:1",
 	} {
 		t.Run(name, func(t *testing.T) {
-			resp, err := a.Call(context.Background(), baseURL, nil, "k", []byte(`{}`), nil, "", false, false)
+			resp, err := a.Call(context.Background(), pipeline.Upstream{BaseURL: baseURL}, "k", []byte(`{}`), nil, "", false, false)
 			if err == nil || resp != nil {
 				t.Fatalf("resp = %v, err = %v; want a nil response and an error", resp, err)
+			}
+		})
+	}
+}
+
+// An unfilled placeholder, in the host's path or the spec's, never reaches the upstream.
+func TestSpecAdapter_Call_UnfilledPlaceholder(t *testing.T) {
+	for name, tc := range map[string]struct {
+		spec *adapter.Spec
+		up   pipeline.Upstream
+	}{
+		"host path":      {newBearerSpec("/v1/chat"), pipeline.Upstream{Path: ptr("/v1/{project}/chat"), Backend: map[string]string{"location": "x"}}},
+		"path builder":   {placeholderPathFnSpec(), pipeline.Upstream{}},
+		"malformed host": {newBearerSpec("/v1/chat"), pipeline.Upstream{Path: ptr("/v1/{project/chat"), Backend: map[string]string{"project": "p"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			baseURL, last := captureServer(t)
+			tc.up.BaseURL = baseURL
+			resp, err := tc.spec.PipelineAdapter().Call(context.Background(), tc.up, "k", []byte(`{}`), nil, "m", false, false)
+			if _, ok := errors.AsType[*pipeline.PathPlaceholderError](err); !ok || resp != nil {
+				t.Fatalf("resp = %v, err = %v; want a nil response and a *pipeline.PathPlaceholderError", resp, err)
+			}
+			if got := last(); got.Method != "" {
+				t.Errorf("upstream received %s %s", got.Method, got.URI)
 			}
 		})
 	}

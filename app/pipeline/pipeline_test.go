@@ -440,6 +440,55 @@ func TestRun_UnreachableIsARefusalOnlyWhenNoCandidateConnected(t *testing.T) {
 	}
 }
 
+// An upstream path the host's backend does not fill is the hop's configuration fault: the walk moves to the next hop at once, with no re-dial, no other credential of the hop, no key failure and no reachability write.
+func TestRun_UnfilledPathMovesToTheNextHop(t *testing.T) {
+	t.Parallel()
+	unfilled := &host.Host{Meta: meta.Metadata{ID: "unfilled", Name: "unfilled"}, Spec: host.Spec{BaseURL: "http://unfilled"}}
+	served := &host.Host{Meta: meta.Metadata{ID: "served", Name: "served"}, Spec: host.Spec{BaseURL: "http://served"}}
+	for name, tc := range map[string]struct {
+		hops      []plan.RouteHop
+		wantCalls []string
+	}{
+		"a later hop serves": {[]plan.RouteHop{
+			hopAt(unfilled, []*hostkey.HostKey{makeKey("p1", "sk-p1"), makeKey("p2", "sk-p2")}),
+			hopAt(served, []*hostkey.HostKey{makeKey("s1", "sk-s1")}),
+		}, []string{"sk-p1", "sk-s1"}},
+		"no hop left": {[]plan.RouteHop{
+			hopAt(unfilled, []*hostkey.HostKey{makeKey("p3", "sk-p3"), makeKey("p4", "sk-p4")}),
+		}, []string{"sk-p3"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			adp := newKeyedAdapter()
+			for _, k := range []string{"sk-p1", "sk-p2", "sk-p3", "sk-p4"} {
+				adp.errs[k] = &pipeline.PathPlaceholderError{Path: "/v1/{project}", Key: "project"}
+			}
+			agent := &scriptedAgent{}
+			health := make(hostHealthLog, 4)
+			p := newPipeline()
+			p.KeyAgent, p.HostHealth = agent, health
+			res, err := p.Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: tc.hops})
+			if len(tc.hops) > 1 {
+				if err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				drainResult(t, res)
+				if got := <-health; got != "reachable:served" {
+					t.Errorf("reachability write = %q, want reachable:served", got)
+				}
+			} else if _, ok := errors.AsType[*pipeline.PathPlaceholderError](err); !ok {
+				t.Fatalf("err = %v, want *pipeline.PathPlaceholderError", err)
+			}
+			if d := cmp.Diff(tc.wantCalls, adp.calls); d != "" {
+				t.Errorf("credentials called (-want +got):\n%s", d)
+			}
+			if len(agent.asked) != 0 {
+				t.Errorf("key agent consulted on %v; an unfilled path is no credential's failure", agent.asked)
+			}
+		})
+	}
+}
+
 // hostHealthLog records reachability writes as "reachable:<host>" or "unreachable:<host>".
 type hostHealthLog chan string
 
