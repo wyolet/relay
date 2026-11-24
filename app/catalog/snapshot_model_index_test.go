@@ -89,6 +89,44 @@ func TestResolveModelRef_PinsOnlyServedSnapshots(t *testing.T) {
 	}
 }
 
+// A snapshot name wins over another model's declared alias in its pinned forms too: where the snapshot's model is not served at the host, the pinned name answers nothing rather than another model that declares the name as an alias. A form the snapshot name does not claim still resolves through the alias.
+func TestResolveModelRef_UnservedPinNeverFallsToAnotherModelsAlias(t *testing.T) {
+	system := meta.Owner{Kind: meta.OwnerSystem}
+	acme := &provider.Provider{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", Owner: system}}
+	other := &provider.Provider{Meta: meta.Metadata{ID: meta.NewID(), Name: "other", Owner: system}}
+	h := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "host-a", Owner: system}, Spec: host.Spec{BaseURL: "https://host-a.example"}}
+	m1 := &model.Model{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "m1", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: acme.Meta.ID}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m1"}, {Name: "m1-remote"}}, Pointer: "m1"},
+	}
+	m2 := &model.Model{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "m2", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: other.Meta.ID}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m2"}}, Pointer: "m2", Aliases: []string{"m1"}},
+	}
+	bindings := []*binding.Binding{
+		{Meta: meta.Metadata{ID: meta.NewID(), Name: "m1-on-host-a", Owner: system}, Spec: binding.Spec{ModelID: m1.Meta.ID, HostID: h.Meta.ID, Adapter: adapters.OpenAI, Snapshots: []string{"m1-remote"}}},
+		{Meta: meta.Metadata{ID: meta.NewID(), Name: "m2-on-host-a", Owner: system}, Spec: binding.Spec{ModelID: m2.Meta.ID, HostID: h.Meta.ID, Adapter: adapters.OpenAI}},
+	}
+	s := BuildCatalog([]*provider.Provider{acme, other}, []*host.Host{h}, []*model.Model{m1, m2}, nil, bindings, nil)
+
+	got := map[string]string{}
+	for _, ref := range []string{"m1", "m1@host-a", "acme/m1@host-a", "m1-remote@host-a", "other/m1", "other/m1@host-a", "m2@host-a"} {
+		got[ref] = resolvedTo(s, ref)
+	}
+	want := map[string]string{
+		"m1":               "m1/m1",
+		"m1@host-a":        "",
+		"acme/m1@host-a":   "",
+		"m1-remote@host-a": "m1/m1-remote@host-a",
+		"other/m1":         "m2/m2",
+		"other/m1@host-a":  "m2/m2@host-a",
+		"m2@host-a":        "m2/m2@host-a",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("resolution (-want +got):\n%s", diff)
+	}
+}
+
 // model.Spec.Pointer is documented as the snapshot the bare model name resolves to.
 func TestResolveModelRef_BareModelNameResolvesToPointer(t *testing.T) {
 	t.Skip("bug: request resolution indexes snapshot names and declared aliases only and never reads Spec.Pointer, so a model whose name is no snapshot name answers model_not_found for its bare name")

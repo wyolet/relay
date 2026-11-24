@@ -67,6 +67,9 @@ func lookup(snap *appcatalog.Snapshot, ref string) (*model.Model, string, bool) 
 	if m, _, hostID, ok := snap.ResolveSnapshot(key); ok {
 		return m, hostID, true
 	}
+	if snap.PinsSnapshotName(ref) {
+		return nil, "", false
+	}
 	if a, ok := snap.ResolveAlias(key, !strings.ContainsRune(ref, '@')); ok {
 		return a.Model, a.HostID, true
 	}

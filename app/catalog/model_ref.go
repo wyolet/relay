@@ -37,10 +37,24 @@ func (s *Snapshot) ResolveModelRef(name string) ResolvedRef {
 	if m, sn, hostID, ok := s.ResolveSnapshot(key); ok {
 		return ResolvedRef{Models: []*model.Model{m}, Snapshot: sn, PinHostID: hostID}
 	}
-	if ref, ok := s.ResolveAlias(key, !strings.ContainsRune(name, '@')); ok {
+	pinned := strings.ContainsRune(name, '@')
+	if pinned && s.PinsSnapshotName(name) {
+		return ResolvedRef{}
+	}
+	if ref, ok := s.ResolveAlias(key, !pinned); ok {
 		return ResolvedRef{Models: []*model.Model{ref.Model}, Snapshot: ref.Snapshot, PinHostID: ref.HostID, Alias: &ref}
 	}
 	return ResolvedRef{}
+}
+
+// PinsSnapshotName reports whether ref is "<name>@<host>" with <name> a catalog snapshot name. Such a pin is answered by the snapshot index alone: where the snapshot's model is not served at the host, it resolves to nothing rather than to another model declaring <name> as an alias, so a snapshot name keeps its precedence over aliases.
+func (s *Snapshot) PinsSnapshotName(ref string) bool {
+	name, _, pinned := strings.Cut(ref, "@")
+	if !pinned {
+		return false
+	}
+	_, _, _, ok := s.ResolveSnapshot(slug.From(name))
+	return ok
 }
 
 // AliasUpstream returns the usage tag and the wire model name an alias match imposes: an exact alias sends its declared string, a pattern sends the caller's raw string. Both are empty when ref is nil.
