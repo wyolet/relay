@@ -204,7 +204,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 					" (adapter="+string(first.Binding.Spec.Adapter)+") which does not support OpenAI-compatible embeddings")
 			return
 		}
-		runBytePass(d, w, r, in, route, hops, upstreamAdapter, inboundSpec.Translator, inboundSpec)
+		runBytePass(d, w, r, in, route, hops, upstreamAdapter, inboundSpec.Translator, inboundSpec, false)
 		return
 	}
 
@@ -221,14 +221,15 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 			return
 		}
 		hops := keepHops(route.Hops, func(h *plan.RouteHop) bool { return native(h.Binding, h.Host) })
-		runBytePass(d, w, r, in, route, hops, upstreamAdapter, inboundSpec.Translator, inboundSpec)
+		runBytePass(d, w, r, in, route, hops, upstreamAdapter, inboundSpec.Translator, inboundSpec, false)
 		return
 	}
 
 	// Standard dispatch: look up the upstream spec and determine whether
-	// this is a same-shape pass (inbound == upstream adapter) or a cross-
-	// shape canonical translation. The body is built once, so failover
-	// keeps to the hops whose binding speaks the first hop's shape.
+	// this is a same-shape pass (inbound is the upstream's shape family) or
+	// a cross-shape canonical translation. The body is built once, so
+	// failover keeps to the hops that body serves, each called with its own
+	// binding's adapter.
 	upstreamName := first.Binding.Spec.Adapter
 	upstreamSpec := d.Specs.Spec(upstreamName)
 	if upstreamSpec == nil {
@@ -244,10 +245,12 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 			"no adapter registered for "+string(upstreamName))
 		return
 	}
-	hops := keepHops(route.Hops, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == upstreamName })
-
-	if in.Inbound == upstreamName {
-		runBytePass(d, w, r, in, route, hops, upstreamAdapter, upstreamSpec.Translator, inboundSpec)
+	specs := d.Specs
+	if family := upstreamSpec.FamilyName(); in.Inbound == family {
+		hops := keepHops(route.Hops, func(h *plan.RouteHop) bool {
+			return h.Binding.Spec.Adapter == upstreamName || specs.Spec(h.Binding.Spec.Adapter).FamilyName() == family
+		})
+		runBytePass(d, w, r, in, route, hops, upstreamAdapter, upstreamSpec.Translator, inboundSpec, true)
 		return
 	}
 
@@ -260,6 +263,13 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 			"missing canonical translator for "+string(in.Inbound)+" or "+string(upstreamName))
 		return
 	}
+	hops := keepHops(route.Hops, func(h *plan.RouteHop) bool {
+		if h.Binding.Spec.Adapter == upstreamName {
+			return true
+		}
+		s := specs.Spec(h.Binding.Spec.Adapter)
+		return s != nil && s.Translator == upstreamV1
+	})
 
 	dispatchCanonical(d, w, r, in, route, hops, upstreamAdapter, inboundV1, upstreamV1)
 }
@@ -293,7 +303,8 @@ func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifec
 // and stream or buffer the response back. paramPaths is the inbound spec's
 // param→JSON-path map (the body stays inbound-shaped on every byte-pass
 // variant), used to strip params the routed model declares unsupported.
-func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec) {
+// With perHop set each hop is called with its own binding's adapter.
+func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec, perHop bool) {
 	ctx := r.Context()
 
 	wireBody, usageRequested := in.Body, false
@@ -323,7 +334,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	if lc != nil {
 		lc.Translator = upstreamV1
 	}
-	result, err := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, in.Inbound, lc))
+	result, err := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, in.Inbound, lc, d.Specs, perHop))
 	if err != nil {
 		mapRunErr(w, inboundSpec, err)
 		return
@@ -444,7 +455,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	if lc != nil {
 		lc.Translator = upstreamV1
 	}
-	result, pErr := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, hops[0].Binding.Spec.Adapter, lc))
+	result, pErr := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, hops[0].Binding.Spec.Adapter, lc, d.Specs, true))
 	if pErr != nil {
 		mapRunErr(w, d.Specs.Spec(in.Inbound), pErr)
 		return

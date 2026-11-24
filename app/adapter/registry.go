@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/pkg/adapters"
@@ -91,6 +92,9 @@ func (r *Registry) Specs() []*Spec {
 //     adapter to dispatch to.
 //   - Every inbound, non-byte-pass spec has a canonical Translator, so a
 //     cross-shape route can always translate.
+//   - Every Family names a registered spec, and every Translator is of a
+//     comparable type: dispatch compares translators to tell which hops one
+//     serialized body serves, and == on an uncomparable one panics.
 func (r *Registry) AssertWired() error {
 	for _, n := range adapters.UpstreamBindingNames() {
 		s := r.byName[n]
@@ -104,6 +108,12 @@ func (r *Registry) AssertWired() error {
 	for _, s := range r.specs {
 		if len(s.InboundPaths) > 0 && !s.BytePass && s.Translator == nil {
 			return fmt.Errorf("adapter.Registry: inbound spec %q has no canonical translator", s.Name)
+		}
+		if s.Family != "" && r.byName[s.Family] == nil {
+			return fmt.Errorf("adapter.Registry: spec %q names unregistered family %q", s.Name, s.Family)
+		}
+		if s.Translator != nil && !reflect.TypeOf(s.Translator).Comparable() {
+			return fmt.Errorf("adapter.Registry: spec %q has a translator of uncomparable type %T", s.Name, s.Translator)
 		}
 	}
 	return nil

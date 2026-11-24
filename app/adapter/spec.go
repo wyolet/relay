@@ -63,6 +63,12 @@ type Spec struct {
 	// Used as the key in the Registry and as the DispatchInput.Inbound value.
 	Name adapters.Name
 
+	// Family names the registered shape whose body this one sends, for a shape that differs from it only in its envelope (Envelope, the path, the auth). A caller speaking Family byte-passes to this spec, and a route fails over between the specs of one family. Empty when the shape is its own family.
+	Family adapters.Name
+
+	// Envelope is the request edits this shape makes to its family's body before it goes upstream; nil when it sends the body as is.
+	Envelope *RequestEnvelope
+
 	// InboundPaths is the set of inbound HTTP paths this spec owns.
 	// Each entry is registered as a POST route via the generic mounter.
 	// Example: ["/v1/chat/completions", "/openai/v1/chat/completions"].
@@ -182,6 +188,33 @@ type InboundPath struct {
 
 	// Summary is the huma operation summary.
 	Summary string
+}
+
+// RequestEnvelope is how a shape's upstream request differs from its family's: applied per hop, on byte-pass and after SerializeRequest alike.
+type RequestEnvelope struct {
+	// DropMembers are top-level body members removed, e.g. a model the shape names in its URL instead.
+	DropMembers []string
+	// DefaultMembers are top-level body members set only when the body lacks the key.
+	DefaultMembers []BodyMember
+	// JoinHeaders are header names whose repeated lines are sent as one comma-joined line.
+	JoinHeaders []string
+}
+
+// BodyMember is one top-level body member: Key set to the raw JSON Value.
+type BodyMember struct {
+	Key   string
+	Value []byte
+}
+
+// FamilyName returns the shape whose body this spec sends: Family, else Name. "" for a nil spec.
+func (s *Spec) FamilyName() adapters.Name {
+	if s == nil {
+		return ""
+	}
+	if s.Family != "" {
+		return s.Family
+	}
+	return s.Name
 }
 
 // RequestKeys returns the top-level request members the shape's translator names, zero for a shape without one.

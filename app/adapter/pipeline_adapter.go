@@ -136,10 +136,23 @@ func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body [
 	if hdr != nil {
 		req.Header = hdr.Clone()
 	}
+	if env := a.spec.Envelope; env != nil {
+		joinHeaderLines(req.Header, env.JoinHeaders)
+	}
 
 	req.Header.Set("Content-Type", "application/json")
 	a.spec.setAuth(req.Header, apiKey, oauth)
 	return req, releaseBody, nil
+}
+
+// joinHeaderLines replaces each named header sent on more than one line with one comma-joined line.
+func joinHeaderLines(h http.Header, names []string) {
+	for _, name := range names {
+		key := http.CanonicalHeaderKey(name)
+		if vs := h[key]; len(vs) > 1 {
+			h[key] = []string{strings.Join(vs, ",")}
+		}
+	}
 }
 
 // setAuth sets the credential header and the shape's static auth headers on h, the OAuth variant when oauth is set and the spec has one. A static header already in h is kept.

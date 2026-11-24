@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
@@ -38,7 +39,7 @@ func TestRenameBodyParams(t *testing.T) {
 		{"not an object", "openai", `[{"max_tokens":5}]`, `[{"max_tokens":5}]`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, superseded := editHopBody([]byte(tc.body), spec.ParamRenames(adapters.Name(tc.shape)), "")
+			got, superseded := editHopBody([]byte(tc.body), spec.ParamRenames(adapters.Name(tc.shape)), "", nil)
 			if string(got) != tc.want {
 				t.Errorf("body = %s, want %s", got, tc.want)
 			}
@@ -98,7 +99,7 @@ func TestHopBodyFor(t *testing.T) {
 	}
 	const base = `{"model":"m","max_tokens":5}`
 	body := []byte(base)
-	hopBody := HopBodyFor(hops, "m")
+	hopBody := HopBodyFor(nil, hops, "m")
 	for i, want := range []string{base, `{"model":"acme/m-v1:0","max_completion_tokens":5}`} {
 		if got, _ := hopBody(&hops[i], adapters.OpenAI, body); string(got) != want {
 			t.Errorf("hop %d: body = %s, want %s", i, got, want)
@@ -111,8 +112,85 @@ func TestHopBodyFor(t *testing.T) {
 		t.Fatalf("base body modified to %s", body)
 	}
 	same := hops[:1]
-	if n := testing.AllocsPerRun(100, func() { HopBodyFor(same, "m")(&same[0], adapters.OpenAI, body) }); n != 0 && !raceInstrumented {
+	if n := testing.AllocsPerRun(100, func() { HopBodyFor(nil, same, "m")(&same[0], adapters.OpenAI, body) }); n != 0 && !raceInstrumented {
 		t.Errorf("HopBodyFor over hops sending the body's name allocates %v times", n)
+	}
+}
+
+// A shape's envelope edits the hop body in one pass after the host renames and the model set: drops, then defaults for keys the body lacks.
+func TestEditHopBody_Envelope(t *testing.T) {
+	dropModel := &adapter.RequestEnvelope{DropMembers: []string{"model"}}
+	withDefault := &adapter.RequestEnvelope{DefaultMembers: []adapter.BodyMember{{Key: "version", Value: []byte(`"v1"`)}}}
+	both := &adapter.RequestEnvelope{DropMembers: []string{"model", "stream"}, DefaultMembers: withDefault.DefaultMembers}
+	renames := host.Spec{RequestParamRenames: map[adapters.Name]map[string]string{"shape-member": {"max_tokens": "max_completion_tokens"}}}.ParamRenames("shape-member")
+	for _, tc := range []struct {
+		name      string
+		body      string
+		renames   []host.ParamRename
+		model     string
+		env       *adapter.RequestEnvelope
+		want      string
+		untouched bool
+	}{
+		{"drop", `{"model":"m","stream":true,"x":1}`, nil, "", both, `{"x":1,"version":"v1"}`, false},
+		{"default when absent", `{"x":1}`, nil, "", withDefault, `{"x":1,"version":"v1"}`, false},
+		{"default not over a sent value", `{"version":"mine","x":1}`, nil, "", withDefault, `{"version":"mine","x":1}`, true},
+		{"default not over a null", `{"version":null}`, nil, "", withDefault, `{"version":null}`, true},
+		{"with renames", `{"model":"m","max_tokens":5}`, renames, "", both, `{"max_completion_tokens":5,"version":"v1"}`, false},
+		{"model set skipped when dropped", `{"model":"m","x":1}`, nil, "acme/m", dropModel, `{"x":1}`, false},
+		{"model set when kept", `{"model":"m","x":1}`, nil, "acme/m", withDefault, `{"model":"acme/m","x":1,"version":"v1"}`, false},
+		{"body without the member", `{"contents":[]}`, nil, "acme/m", dropModel, `{"contents":[]}`, true},
+		{"not an object", `[{"model":"m"}]`, nil, "", both, `[{"model":"m"}]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(tc.body)
+			got, superseded := editHopBody(body, tc.renames, tc.model, tc.env)
+			if string(got) != tc.want {
+				t.Errorf("body = %s, want %s", got, tc.want)
+			}
+			if superseded != nil {
+				t.Errorf("superseded = %v, want none: an envelope drop is not a rename", superseded)
+			}
+			if tc.untouched && &got[0] != &body[0] {
+				t.Error("an unchanged body was copied")
+			}
+		})
+	}
+}
+
+// familySpecs registers a base shape and a member of its family whose envelope drops the model and sets a default member.
+func familySpecs() *adapter.Registry {
+	return adapter.NewRegistry(
+		(&adapter.Spec{Name: "shape-base"}).Build(),
+		(&adapter.Spec{Name: "shape-member", Family: "shape-base", Envelope: &adapter.RequestEnvelope{
+			DropMembers:    []string{"model"},
+			DefaultMembers: []adapter.BodyMember{{Key: "version", Value: []byte(`"v1"`)}},
+		}}).Build(),
+	)
+}
+
+// A failover over hops of one family sends each the same base body in the form its shape takes: a hop without an envelope keeps the model, a hop with one loses it. Hops none of whose shapes has an envelope cost nothing.
+func TestHopBodyFor_Envelope(t *testing.T) {
+	specs := familySpecs()
+	base, member := &binding.Binding{Spec: binding.Spec{Adapter: "shape-base"}}, &binding.Binding{Spec: binding.Spec{Adapter: "shape-member"}}
+	hops := []plan.RouteHop{{Binding: base, Host: &host.Host{}, UpstreamModel: "m"}, {Binding: member, Host: &host.Host{}, UpstreamModel: "m"}}
+	const sent = `{"model":"m","x":1}`
+	body := []byte(sent)
+	hopBody := HopBodyFor(specs, hops, "m")
+	for i, want := range []string{sent, `{"x":1,"version":"v1"}`} {
+		if got, _ := hopBody(&hops[i], hops[i].Binding.Spec.Adapter, body); string(got) != want {
+			t.Errorf("hop %d: body = %s, want %s", i, got, want)
+		}
+	}
+	if string(body) != sent {
+		t.Fatalf("base body modified to %s", body)
+	}
+	if got, _ := HopBodyFor(nil, hops, "m")(&hops[1], "shape-member", body); string(got) != sent {
+		t.Errorf("without specs: body = %s, want the base untouched", got)
+	}
+	plain := hops[:1]
+	if n := testing.AllocsPerRun(100, func() { HopBodyFor(specs, plain, "m")(&plain[0], "shape-base", body) }); n != 0 && !raceInstrumented {
+		t.Errorf("HopBodyFor over hops without an envelope allocates %v times", n)
 	}
 }
 

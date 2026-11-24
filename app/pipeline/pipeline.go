@@ -95,17 +95,23 @@ type Request struct {
 	Body    []byte
 	Headers http.Header
 
+	// Adapter calls every hop, unless HopAdapters is set.
 	Adapter Adapter
+
+	// HopAdapters, when set, gives each hop the adapter of its binding's shape (plan.RouteHop.Binding.Spec.Adapter), which calls the hop, reads its response in post-flight, and names the shape handed to HopBody and Host.Spec.PathFor in place of BodyShape. Nil calls every hop with Adapter.
+	HopAdapters interface {
+		PipelineAdapter(adapters.Name) Adapter
+	}
 
 	Model    *model.Model
 	Provider string
 
-	// Hops are the route's pools in failover order, each with the credentials that may serve and the counters each one's request must fit. No slot in any hop → ErrNoKeys. Every hop must speak the Adapter's wire shape: the body is built once.
+	// Hops are the route's pools in failover order, each with the credentials that may serve and the counters each one's request must fit. No slot in any hop → ErrNoKeys. Body is built once, so every hop must accept it in the shape it is called with, after HopBody.
 	Hops []plan.RouteHop
 
-	// HopBody, when set, returns the body to send to hop: Body itself unless the hop's host rewrites a body in BodyShape, plus the top-level keys the rewrite dropped. It must not modify Body. Run calls it on the first attempt at each hop, so a failover sends each host its own form.
+	// HopBody, when set, returns the body to send to hop: Body itself unless the hop's host or the shape the hop is called with rewrites it, plus the top-level keys a host rename dropped. It must not modify Body. Run calls it on the first attempt at each hop, so a failover sends each host its own form.
 	HopBody func(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []string)
-	// BodyShape is the wire shape Body is in, handed to HopBody. It also picks each hop's upstream path (Host.Spec.PathFor).
+	// BodyShape is the wire shape every hop is called with when HopAdapters is nil, handed to HopBody. It also picks each hop's upstream path (Host.Spec.PathFor).
 	BodyShape adapters.Name
 
 	ModelName string
@@ -470,7 +476,7 @@ func (p *Pipeline) runPostFlight(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	tokens := chargedTokens(req.Lifecycle, req.Adapter, body)
+	tokens := chargedTokens(req.Lifecycle, st.adapter, body)
 	// A response cut short before its end may never have reported usage;
 	// the upstream still did the work, so the budgets are charged a floor
 	// rather than nothing. Usage records keep only what was reported.

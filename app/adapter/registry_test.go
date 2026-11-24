@@ -11,6 +11,28 @@ import (
 // stubTranslator is a translator the registry only stores, never calls.
 type stubTranslator struct{ v1.Translator }
 
+// uncomparableTranslator panics when compared with ==.
+type uncomparableTranslator struct {
+	v1.Translator
+	keys []string
+}
+
+func TestSpec_FamilyName(t *testing.T) {
+	var none *adapter.Spec
+	for _, tc := range []struct {
+		spec *adapter.Spec
+		want adapters.Name
+	}{
+		{&adapter.Spec{Name: "member", Family: "base"}, "base"},
+		{&adapter.Spec{Name: "base"}, "base"},
+		{none, ""},
+	} {
+		if got := tc.spec.FamilyName(); got != tc.want {
+			t.Errorf("FamilyName() of %+v = %q, want %q", tc.spec, got, tc.want)
+		}
+	}
+}
+
 func TestRegistry_Lookups(t *testing.T) {
 	a, b := newBearerSpec("/a"), dualAuthSpec()
 	a.Translator = stubTranslator{}
@@ -85,6 +107,15 @@ func TestRegistry_AssertWired(t *testing.T) {
 		{"inbound spec with a translator", func(s []*adapter.Spec) []*adapter.Spec {
 			return append(s, (&adapter.Spec{Name: "extra", InboundPaths: inbound, Translator: stubTranslator{}}).Build())
 		}, ""},
+		{"family of a registered spec", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "extra", Family: first}).Build())
+		}, ""},
+		{"unknown family", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "extra", Family: "nope"}).Build())
+		}, `adapter.Registry: spec "extra" names unregistered family "nope"`},
+		{"uncomparable translator", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "extra", Translator: uncomparableTranslator{}}).Build())
+		}, `adapter.Registry: spec "extra" has a translator of uncomparable type adapter_test.uncomparableTranslator`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
