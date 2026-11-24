@@ -35,14 +35,18 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// denyAction refuses one action and asks Inner about every other, so a test can refuse one row's own grant; rows whose ids are in hidden are not visible.
+// denyAction refuses one action and asks Inner about every other, so a test can refuse one row's own grant; rows whose ids are in hidden are not visible, and before, when set, runs as an action is asked about.
 type denyAction struct {
 	Inner  authz.RBAC
 	action *string
 	hidden map[string]bool
+	before *func(action string)
 }
 
 func (d denyAction) Authorize(ctx context.Context, action string, r authz.Resource) error {
+	if d.before != nil && *d.before != nil {
+		(*d.before)(action)
+	}
 	if action == *d.action {
 		return authz.ErrForbidden
 	}
@@ -62,6 +66,7 @@ type pseudoAgentWorld struct {
 	extraAccounts                                   []*account.Account
 	denied                                          *string
 	hidden                                          map[string]bool
+	before                                          func(action string)
 	owner                                           meta.Owner
 	teamTwoAcct, emptyAcct, bobAcct, secondHostAcct *account.Account
 	keylessAcct                                     *account.Account
@@ -75,7 +80,7 @@ func newPseudoAgentWorld(t *testing.T, opts ...func(*Deps)) *pseudoAgentWorld {
 	w := &pseudoAgentWorld{denied: new(string), hidden: map[string]bool{}}
 	w.sharesWorld = newSharesWorld(t, append([]func(*Deps){func(d *Deps) {
 		wrapped := d.Authz.(audit.Authorizer)
-		wrapped.Inner = denyAction{Inner: wrapped.Inner.(authz.RBAC), action: w.denied, hidden: w.hidden}
+		wrapped.Inner = denyAction{Inner: wrapped.Inner.(authz.RBAC), action: w.denied, hidden: w.hidden, before: &w.before}
 		d.Authz = wrapped
 		d.PlanView = func() *engine.View {
 			if w.plans == nil {
@@ -550,6 +555,32 @@ func TestPseudoAgent_HiddenShareIsNotUsed(t *testing.T) {
 	wantStatus(t, rec, http.StatusForbidden)
 	if r := refusalOf(t, rec); r.Pointer != "/spec/access/accountIds/0" {
 		t.Errorf("pointer = %q, want the account's", r.Pointer)
+	}
+}
+
+// A share another change makes while the request runs answers share_exists, worded with the rows' names: the message is not read from the transaction the failed write aborted.
+func TestPseudoAgent_ShareTakenMeanwhile(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	w.loadPlans(t)
+	w.before = func(action string) {
+		if action != "service-accounts.create" {
+			return
+		}
+		w.before = nil
+		share := account.Share(w.bobAcct, account.Receiver{Kind: account.ReceiverProject, ID: w.projTwo.Meta.ID}, w.owner, w.projTwo.Meta.Name)
+		share.Meta.Name = "shared-meanwhile"
+		must(t, "share meanwhile", w.stores.Account.CreateShare(context.Background(), share))
+	}
+	before := w.rowCounts(t)
+	rec, _ := w.post(t, "bob", w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.teamTwoAcct.Meta.ID, w.bobAcct.Meta.ID}}}), false)
+	wantStatus(t, rec, http.StatusConflict)
+	r := refusalOf(t, rec)
+	if r.Err.Code != "share_exists" || r.Pointer != "/spec/access/accountIds/1" || !strings.Contains(r.Err.Message, `project "two-app"`) {
+		t.Errorf("refusal = %+v, want share_exists naming project \"two-app\" at the account", r)
+	}
+	before["account"]++
+	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
+		t.Errorf("rows other than the share made meanwhile (-want +got):\n%s", diff)
 	}
 }
 

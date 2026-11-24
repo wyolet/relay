@@ -326,9 +326,11 @@ func (d Deps) createPseudoShare(ctx context.Context, share *account.Account) err
 	if err := c.Share(ctx, src, share); err != nil {
 		return refErr(err)
 	}
+	// Worded before the write: once it fails the transaction is aborted and reads nothing.
+	taken := refErr(c.ShareExists(ctx, src, share.Receiver()))
 	if err := d.Stores.Account.Upsert(ctx, share); err != nil {
 		if errors.Is(err, account.ErrShareTaken) {
-			return refErr(c.ShareExists(ctx, src, share.Receiver()))
+			return taken
 		}
 		return err
 	}
