@@ -30,7 +30,7 @@ func (s *Snapshot) indexModelSnapshots(m *model.Model) {
 			s.snapshotAliases[slug.From(provSlug+"/"+snap.Name)] = base
 		}
 		for _, hb := range s.BindingsForModel(m.Meta.ID) {
-			if !hb.IsEnabled() {
+			if !hb.IsEnabled() || !hb.Serves(snap.Name) {
 				continue
 			}
 			h, ok := s.hostsByID[hb.Spec.HostID]
