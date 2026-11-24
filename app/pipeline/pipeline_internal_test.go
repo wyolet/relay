@@ -14,6 +14,24 @@ import (
 	"github.com/wyolet/relay/app/plan"
 )
 
+// A spent budget records its own usage kind; a rate rule and an upstream limit record rate_limited.
+func TestClassifyFailure_LimitRefusals(t *testing.T) {
+	refusedBy := func(k limits.Kind) error {
+		return &CallerLimitedError{Refused: &limits.Refused{Counter: &limits.Counter{Kind: k}}}
+	}
+	for want, err := range map[string]error{
+		"budget_exceeded": refusedBy(limits.KindBudget),
+		"rate_limited":    refusedBy(limits.KindRule),
+	} {
+		if kind, status := classifyFailure(err); kind != want || status != 0 {
+			t.Errorf("classifyFailure(%v) = %q, %d; want %q, 0", err, kind, status, want)
+		}
+	}
+	if kind, _ := classifyFailure(&UpstreamLimitedError{}); kind != "rate_limited" {
+		t.Errorf("an upstream limit records %q, want rate_limited", kind)
+	}
+}
+
 func TestErrorStrings(t *testing.T) {
 	long := strings.Repeat("x", errorExcerpt+100)
 	for want, err := range map[string]error{

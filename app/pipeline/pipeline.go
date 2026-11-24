@@ -654,6 +654,8 @@ func classifyFailure(err error) (kind string, status int) {
 		return plan.CodeHostMisconfigured, 0
 	case errors.As(err, &upstream):
 		return "upstream_error", upstream.Status
+	case errors.As(err, &refused) && plan.LimitCode(refused) == plan.CodeBudgetExceeded:
+		return plan.CodeBudgetExceeded, 0
 	case errors.As(err, &refused), errors.As(err, &limited):
 		// Refused before any upstream call → status 0
 		// (the kind carries the 429 meaning; Status is the upstream status).
