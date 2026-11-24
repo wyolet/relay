@@ -45,12 +45,12 @@ func TestVertexAnthropicSpec(t *testing.T) {
 	}
 }
 
-// vertex_gemini sends the Gemini body from its own Vertex path with a bearer token, through a translator of its own: a canonical body serialized for the gemini spec is never sent to it.
+// vertex_gemini sends a Gemini body of its own (every fileData typed) from its own Vertex path with a bearer token: it is no member of the gemini family, and its translator is its own, so no body built for a gemini hop is sent to it.
 func TestVertexGeminiSpec(t *testing.T) {
 	reg := adapter.NewRegistry(Specs()...)
 	s, gemini := reg.Spec(adapters.VertexGemini), reg.Spec(adapters.Gemini)
-	if s.Family != adapters.Gemini || len(s.InboundPaths) != 0 || s.Envelope != nil || s.CountPath != "" || s.Org != nil {
-		t.Errorf("family %q, inbound paths %v, envelope %v, count path %q, org %v; want family gemini and none of the rest", s.Family, s.InboundPaths, s.Envelope, s.CountPath, s.Org)
+	if s.Family != "" || len(s.InboundPaths) != 0 || s.Envelope != nil || s.CountPath != "" || s.Org != nil {
+		t.Errorf("family %q, inbound paths %v, envelope %v, count path %q, org %v; want none", s.Family, s.InboundPaths, s.Envelope, s.CountPath, s.Org)
 	}
 	if s.Translator != (pkggemini.GeminiTranslator{Vertex: true}) || reg.TranslatorGroup(adapters.VertexGemini) == reg.TranslatorGroup(adapters.Gemini) {
 		t.Errorf("translator %#v in group %d beside gemini's %d; want the Vertex variant in a group of its own", s.Translator, reg.TranslatorGroup(adapters.VertexGemini), reg.TranslatorGroup(adapters.Gemini))

@@ -139,7 +139,6 @@ func Specs() []*adapter.Spec {
 		}).Build(),
 		(&adapter.Spec{
 			Name:           adapters.VertexGemini,
-			Family:         adapters.Gemini,
 			UpstreamPathFn: vertexGeminiUpstreamPath,
 			Auth:           adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 			Translator:     pkggemini.GeminiTranslator{Vertex: true},
