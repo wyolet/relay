@@ -35,6 +35,7 @@ import (
 // pseudoKinds registers each pseudo kind's route, by the name RELAY_PSEUDO_KINDS turns it on with.
 var pseudoKinds = map[string]func(huma.API, Deps, huma.Middlewares){
 	"agents": registerPseudoAgent,
+	"access": registerPseudoAccess,
 }
 
 // pseudoKindsAll in RELAY_PSEUDO_KINDS turns every pseudo kind on.
