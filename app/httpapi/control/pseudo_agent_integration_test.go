@@ -35,10 +35,11 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// denyAction refuses one action and asks Inner about every other, so a test can refuse one row's own grant.
+// denyAction refuses one action and asks Inner about every other, so a test can refuse one row's own grant; rows whose ids are in hidden are not visible.
 type denyAction struct {
 	Inner  authz.RBAC
 	action *string
+	hidden map[string]bool
 }
 
 func (d denyAction) Authorize(ctx context.Context, action string, r authz.Resource) error {
@@ -49,7 +50,7 @@ func (d denyAction) Authorize(ctx context.Context, action string, r authz.Resour
 }
 
 func (d denyAction) Visible(ctx context.Context, kind, id string, owner meta.Owner) bool {
-	return d.Inner.Visible(ctx, kind, id, owner)
+	return !d.hidden[id] && d.Inner.Visible(ctx, kind, id, owner)
 }
 
 func (d denyAction) Unwrap() authz.Authorizer { return d.Inner }
@@ -60,6 +61,7 @@ type pseudoAgentWorld struct {
 	plans                                           *engine.Engine
 	extraAccounts                                   []*account.Account
 	denied                                          *string
+	hidden                                          map[string]bool
 	owner                                           meta.Owner
 	teamTwoAcct, emptyAcct, bobAcct, secondHostAcct *account.Account
 	keylessAcct                                     *account.Account
@@ -70,10 +72,10 @@ type pseudoAgentWorld struct {
 func newPseudoAgentWorld(t *testing.T, opts ...func(*Deps)) *pseudoAgentWorld {
 	t.Helper()
 	t.Setenv("PSEUDO_AGENT_TEST_KEY", "sk-pseudo-agent-test-value")
-	w := &pseudoAgentWorld{denied: new(string)}
+	w := &pseudoAgentWorld{denied: new(string), hidden: map[string]bool{}}
 	w.sharesWorld = newSharesWorld(t, append([]func(*Deps){func(d *Deps) {
 		wrapped := d.Authz.(audit.Authorizer)
-		wrapped.Inner = denyAction{Inner: wrapped.Inner.(authz.RBAC), action: w.denied}
+		wrapped.Inner = denyAction{Inner: wrapped.Inner.(authz.RBAC), action: w.denied, hidden: w.hidden}
 		d.Authz = wrapped
 		d.PlanView = func() *engine.View {
 			if w.plans == nil {
@@ -534,6 +536,20 @@ func TestPseudoAgent_PlanIssue(t *testing.T) {
 	}
 	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
 		t.Errorf("a refused request wrote rows (-before +after):\n%s", diff)
+	}
+}
+
+// Listing an account the caller may not share answers the same whether or not the owner already holds a share of it the caller may not see.
+func TestPseudoAgent_HiddenShareIsNotUsed(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	rec := w.share("dave", w.teamAcct, account.ReceiverProject, w.projTwo.Meta.ID)
+	wantStatus(t, rec, http.StatusCreated)
+	w.hidden[decodeAccount(t, rec).Meta.ID] = true
+	w.loadPlans(t)
+	rec, _ = w.post(t, "bob", w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.teamAcct.Meta.ID}}}), false)
+	wantStatus(t, rec, http.StatusForbidden)
+	if r := refusalOf(t, rec); r.Pointer != "/spec/access/accountIds/0" {
+		t.Errorf("pointer = %q, want the account's", r.Pointer)
 	}
 }
 
