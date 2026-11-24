@@ -69,6 +69,10 @@ docker run --rm --network host \
 
 ## Release notes
 
+### Service accounts owned by a team (schema 47, auth module 6)
+
+Migration 47 lets a team own a service account directly, with no project; its row has no `project_id`. A binary from before it cannot read such a row, and fails to list every service account once one exists. Create none until no older pod runs, and before rolling the image back delete the team-owned service accounts: `relay migrate down 46` refuses while any remains.
+
 ### 0.30.0: the organization owner (schema 45)
 
 The global scope is named `organization`, and the rows that belong to the deployment rather than its catalog move to it: migration 45 moves teams, groups, custom roles, global role and policy bindings and system-owned accounts; the first boot, whatever it seeds, moves every system-owned policy, budget and pool, every system-owned rate limit except the built-in ones the binary ships, and system-owned host keys, sealing each stored value again under the organization's data key and decrypting it before the change commits. The catalog ships no system-owned policy or rate limit, so none of these is catalog data; a row the catalog had marked detached moves too and loses the mark. A rate limit of a built-in name that a binary without that name moved to the organization goes back to system at boot, unless it was edited since. A row that does not move stays system-owned, keeps serving, is logged (`organization move: … left system-owned`), and is tried again at every boot. On input, `{kind: system}` is read as `organization` for teams, groups, role and policy bindings, host keys, accounts, budgets, pools, policies and rate limits other than the built-in ones, so applying an export from before the upgrade, or a body that still says `system`, keeps those rows in the organization.
