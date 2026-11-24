@@ -34,15 +34,18 @@ func Record[T any](ctx context.Context, id string, row *T) {
 	r.mu.Unlock()
 }
 
-// except returns the rows read, in read order, leaving out those whose id is in skip: the write's own rows, read back while later rows were checked.
-func (r *reads) except(skip map[string]bool) []any {
+// except returns the rows read, in read order, leaving out those whose id is in created, the write's own new rows read back while later rows were checked, and keeping of an id in changed only the first read, the row as stored before a step updated or deleted it.
+func (r *reads) except(created, changed map[string]bool) []any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]any, 0, len(r.rows))
+	seen := map[string]bool{}
 	for _, rr := range r.rows {
-		if !skip[rr.id] {
-			out = append(out, rr.row)
+		if created[rr.id] || (changed[rr.id] && seen[rr.id]) {
+			continue
 		}
+		seen[rr.id] = true
+		out = append(out, rr.row)
 	}
 	return out
 }

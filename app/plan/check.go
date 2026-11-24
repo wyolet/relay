@@ -53,14 +53,23 @@ func NewCheck(rbac bool, timeout time.Duration) *Check {
 	return &Check{rbac: rbac, timeout: timeout, slot: make(chan struct{}, 1)}
 }
 
-// NewIssues lays read, then proposed, over live's input rows (each a pointer to an input row such as *account.Account; a later row with an id already laid replaces it), runs every controller on the result, and returns the issues of the result that the baseline does not have, warnings left out. read is what the database holds now of rows the caller read, which live may not have seen yet; a read row of no input kind is left out. The baseline is live's issues when every read row is the one live holds, else the issues of live with read laid over it, built the same way, so a row live has not seen yet neither hides nor causes an issue. Two issues are the same when their severity, code, source, target and field are. Past the timeout, the wait for an earlier check included, it returns ErrCheckTimeout.
+// Deleted proposes removing Row, a pointer to an input row such as *pool.Pool: the result holds no row of its kind under its id, whatever live or read hold.
+type Deleted struct{ Row any }
+
+// NewIssues lays read, then proposed, over live's input rows (each a pointer to an input row such as *account.Account; a later row with an id already laid replaces it; a Deleted removes one), runs every controller on the result, and returns the issues of the result that the baseline does not have, warnings left out. read is what the database holds now of rows the caller read, which live may not have seen yet; a read row of no input kind is left out. The baseline is live's issues when every read row is the one live holds, else the issues of live with read laid over it, built the same way, so a row live has not seen yet neither hides nor causes an issue. Two issues are the same when their severity, code, source, target and field are. Past the timeout, the wait for an earlier check included, it returns ErrCheckTimeout.
 func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed []any) ([]engine.Issue, error) {
+	issues, _, err := c.NewIssuesAndView(ctx, live, read, proposed)
+	return issues, err
+}
+
+// NewIssuesAndView is NewIssues that also returns the view of the result, for reading what the proposed rows make of the plans.
+func (c *Check) NewIssuesAndView(ctx context.Context, live *engine.View, read, proposed []any) ([]engine.Issue, *engine.View, error) {
 	if live == nil {
-		return nil, errors.New("plan: no published view to check against")
+		return nil, nil, errors.New("plan: no published view to check against")
 	}
 	full, stale, err := layered(live, read, proposed)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	full.RBAC = c.rbac
 	var base *Sources
@@ -74,10 +83,11 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 	select {
 	case c.slot <- struct{}{}:
 	case <-ctx.Done():
-		return nil, checkStopped(ctx)
+		return nil, nil, checkStopped(ctx)
 	}
 	type built struct {
 		before, after []engine.Issue
+		view          *engine.View
 		err           error
 	}
 	done := make(chan built, 1)
@@ -98,17 +108,17 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed
 			done <- built{err: err}
 			return
 		}
-		b.after = v.AllIssues()
+		b.after, b.view = v.AllIssues(), v
 		done <- b
 	}()
 	select {
 	case b := <-done:
 		if b.err != nil {
-			return nil, b.err
+			return nil, nil, b.err
 		}
-		return newIssues(b.before, b.after), nil
+		return newIssues(b.before, b.after), b.view, nil
 	case <-ctx.Done():
-		return nil, checkStopped(ctx)
+		return nil, nil, checkStopped(ctx)
 	}
 }
 
@@ -203,11 +213,23 @@ func layered(live *engine.View, read, proposed []any) (Sources, bool, error) {
 	return src, l.stale, nil
 }
 
-// layer is live's rows of kind T with l's read rows, then its proposed rows, of that kind laid over them; a later row with an id already laid replaces it in place.
+// layer is live's rows of kind T with l's read rows, then its proposed rows, of that kind laid over them; a later row with an id already laid replaces it in place, and a row of an id a proposed Deleted names is left out.
 func layer[T any](l *layering, id func(*T) string) rowList[T] {
 	out := rowList[T]{id: id}
 	at := map[string]int{}
+	gone := map[string]bool{}
+	for _, x := range l.proposed {
+		if d, ok := x.(Deleted); ok {
+			if r, ok := d.Row.(*T); ok && r != nil {
+				l.used++
+				gone[id(r)] = true
+			}
+		}
+	}
 	put := func(r *T) {
+		if gone[id(r)] {
+			return
+		}
 		if i, ok := at[id(r)]; ok {
 			out.rows[i] = r
 			return

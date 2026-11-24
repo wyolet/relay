@@ -145,6 +145,59 @@ func TestWriter_LaysRecordedReads(t *testing.T) {
 	}
 }
 
+// A deleted row is gone from what the plans are checked against: a key made in a lane the same write deletes names an account that is not there.
+func TestWriter_DeleteStep(t *testing.T) {
+	fw := newFrameWorld(t)
+	acc := engine.Get[account.Account](fw.plans.Engine.View(), fw.good.Value.(*key.Key).Spec.AccountID)
+	gone := Row{Kind: "account", Pointer: "/spec", Meta: &acc.Meta, Value: acc, Op: OpDelete}
+	tx := &fakeTx{}
+	_, err := fw.writer(tx).Run(t.Context(), expandTo(fw.good, gone), createAll, false)
+	var ie *IssuesError
+	if !errors.As(err, &ie) || tx.committed() {
+		t.Fatalf("error = %v, committed %v; want plan issues", err, tx.committed())
+	}
+	want := []engine.Issue{{Severity: engine.SeverityError, Code: plan.IssueRefMissing, Source: engine.Ref{Kind: plan.KindKey, ID: fw.good.Meta.ID}, Target: engine.Ref{Kind: plan.KindAccount, ID: acc.Meta.ID}, Field: "spec.accountId"}}
+	if diff := cmp.Diff(want, ie.Issues, cmpopts.IgnoreFields(engine.Issue{}, "Message")); diff != "" {
+		t.Errorf("issues (-want +got):\n%s", diff)
+	}
+}
+
+// The hook on ctx sees the plans with the steps applied once the check passed; its refusal stops the write.
+func TestWriter_AfterCheck(t *testing.T) {
+	fw := newFrameWorld(t)
+	var seen bool
+	ctx := AfterCheck(t.Context(), func(v *engine.View) error {
+		seen = engine.Get[key.Key](v, fw.good.Meta.ID) != nil
+		return nil
+	})
+	tx := &fakeTx{}
+	if _, err := fw.writer(tx).Run(ctx, expandTo(fw.good), createAll, false); err != nil || !seen || !tx.committed() {
+		t.Fatalf("error %v, key seen %v, committed %v", err, seen, tx.committed())
+	}
+	refused := errors.New("no")
+	ctx = AfterCheck(t.Context(), func(*engine.View) error { return refused })
+	tx = &fakeTx{}
+	if _, err := fw.writer(tx).Run(ctx, expandTo(fw.good), createAll, false); !errors.Is(err, refused) || tx.committed() {
+		t.Fatalf("error %v, committed %v; want the hook's refusal", err, tx.committed())
+	}
+}
+
+// A row a step creates is left out of the reads; of one a step updates or deletes only the first read stays, the row as stored before the write.
+func TestReads_Except(t *testing.T) {
+	ctx, r := withReads(t.Context())
+	before := &key.Key{Meta: meta.Metadata{ID: "changed", Name: "before"}}
+	after := &key.Key{Meta: meta.Metadata{ID: "changed", Name: "after"}}
+	other := &key.Key{Meta: meta.Metadata{ID: "other"}}
+	made := &key.Key{Meta: meta.Metadata{ID: "made"}}
+	for _, k := range []*key.Key{before, made, other, after, other} {
+		Record(ctx, k.Meta.ID, k)
+	}
+	got := r.except(map[string]bool{"made": true}, map[string]bool{"changed": true})
+	if diff := cmp.Diff([]any{before, other, other}, got); diff != "" {
+		t.Errorf("reads (-want +got):\n%s", diff)
+	}
+}
+
 func TestWriter_NoPlans(t *testing.T) {
 	tx := &fakeTx{}
 	w := Writer{Stores: tx, Check: plan.NewCheck(false, time.Minute), View: func() *engine.View { return nil }}

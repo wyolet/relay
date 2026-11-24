@@ -16,6 +16,7 @@ import (
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 )
 
 // guardHostKey checks the key's host and account, which hostkey.Validate
@@ -119,6 +120,15 @@ func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 			return nil
 		}
 		return refErr(refs(d).RoleBinding(ctx, incoming))
+	}
+}
+
+// rateLimitChecks are the checks the rate-limits routes run.
+func rateLimitChecks(d Deps) kindChecks[ratelimit.RateLimit] {
+	return kindChecks[ratelimit.RateLimit]{
+		plural: "rate-limits", singular: "rate-limit", authz: d.Authz, gov: d.Catalog,
+		validate: func(r *ratelimit.RateLimit) error { return r.Validate() },
+		guard:    guardRateLimitUpdate(d),
 	}
 }
 

@@ -170,6 +170,40 @@ func TestCheck_ReadRowsTheViewLacks(t *testing.T) {
 	}
 }
 
+// A deleted row is gone from the result, also when the caller read it: the key in a deleted lane names an account that is not there. Without the deletion the read lane raises nothing.
+func TestCheck_DeletedRow(t *testing.T) {
+	b := newBasic()
+	h := b.w.start(t)
+	lane := *b.w.saAccount(b.sa)
+	c := NewCheck(false, time.Minute)
+
+	got, err := c.NewIssues(t.Context(), h.e.View(), []any{&lane}, []any{Deleted{Row: &lane}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []engine.Issue{{Severity: engine.SeverityError, Code: IssueRefMissing, Source: engine.Ref{Kind: KindKey, ID: b.key.Meta.ID}, Target: engine.Ref{Kind: KindAccount, ID: lane.Meta.ID}, Field: "spec.accountId"}}
+	if diff := cmp.Diff(want, got, ignoreMessage); diff != "" {
+		t.Errorf("new issues (-want +got):\n%s", diff)
+	}
+	if got, err := c.NewIssues(t.Context(), h.e.View(), []any{&lane}, nil); err != nil || len(got) != 0 {
+		t.Fatalf("without the deletion: %v %v, want none", got, err)
+	}
+}
+
+// The view a check answers is the result: a deleted row is absent, a proposed one present.
+func TestCheck_AnswersTheResult(t *testing.T) {
+	b := newBasic()
+	h := b.w.start(t)
+	added := &pool.Pool{Meta: md("pool-"+seq(), system), Spec: pool.Spec{HostID: b.hostA.Meta.ID, CredentialIDs: []string{b.a1.Meta.ID}}}
+	_, v, err := NewCheck(false, time.Minute).NewIssuesAndView(t.Context(), h.e.View(), nil, []any{added, Deleted{Row: b.acctB}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engine.Get[pool.Pool](v, added.Meta.ID) == nil || engine.Get[account.Account](v, b.acctB.Meta.ID) != nil {
+		t.Errorf("result holds the pool: %v, the deleted account: %v", engine.Get[pool.Pool](v, added.Meta.ID) != nil, engine.Get[account.Account](v, b.acctB.Meta.ID) != nil)
+	}
+}
+
 // A row read that is newer than the view and broken: what it breaks among existing rows is not laid on the request, what it breaks among the proposed rows is.
 func TestCheck_ReadRowBroken(t *testing.T) {
 	b := newBasic()

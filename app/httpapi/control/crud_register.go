@@ -237,12 +237,13 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		usableFor(c, "pool", refcheck.Checker.UsableHostKey),
 	))
 
+	rlc := rateLimitChecks(d)
 	rows.add(registerKind[ratelimit.RateLimit](
-		api, "rate-limits", "rate-limit", d.Stores.RateLimit, d.Authz, rlmeta,
-		func(r *ratelimit.RateLimit) error { return r.Validate() },
+		api, rlc.plural, rlc.singular, d.Stores.RateLimit, d.Authz, rlmeta,
+		rlc.validate,
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
-		guardRateLimitUpdate(d),
+		rlc.guard,
 		nil,
 		nil,
 		d.refuseInUse,

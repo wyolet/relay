@@ -146,6 +146,15 @@ func guardPool(d Deps) mutationGuard[pool.Pool] {
 	}
 }
 
+// budgetChecks are the checks the budgets routes run; a budget takes its defaults before it is validated.
+func budgetChecks(d Deps) kindChecks[budget.Budget] {
+	return kindChecks[budget.Budget]{
+		plural: "budgets", singular: "budget", authz: d.Authz, gov: d.Catalog,
+		validate: func(b *budget.Budget) error { b.Default(); return b.Validate() },
+		guard:    guardBudgetUpdate(d),
+	}
+}
+
 // guardBudgetUpdate refuses an update that reaches an account whose policy the
 // caller may not set, or an owner move away from the policies counting against
 // the budget.

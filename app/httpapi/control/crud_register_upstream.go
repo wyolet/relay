@@ -57,12 +57,13 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		usableFor(c, "policy", refcheck.Checker.UsablePool),
 	))
 
+	buc := budgetChecks(d)
 	rows.add(registerKind[budget.Budget](
-		api, "budgets", "budget", d.Stores.Budget, d.Authz, bumeta,
-		func(b *budget.Budget) error { b.Default(); return b.Validate() },
+		api, buc.plural, buc.singular, d.Stores.Budget, d.Authz, bumeta,
+		buc.validate,
 		meta.OwnerUser,
 		listScanResolver(d.Stores.Budget, bumeta),
-		guardBudgetUpdate(d),
+		buc.guard,
 		nil,
 		nil,
 		d.refuseInUse,

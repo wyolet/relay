@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/budget"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/key"
@@ -26,6 +27,7 @@ import (
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/meta"
 )
@@ -77,13 +79,7 @@ type RowRef struct {
 
 func rowRef(m *meta.Metadata) RowRef { return RowRef{ID: m.ID, Name: m.Name} }
 
-func createdRows(rows []pseudo.Row) []CreatedRow {
-	out := make([]CreatedRow, len(rows))
-	for i, r := range rows {
-		out[i] = CreatedRow{Kind: r.Kind, ID: r.Meta.ID, Name: r.Meta.Name}
-	}
-	return out
-}
+func createdRows(rows []pseudo.Row) []CreatedRow { return stepRows(rows, pseudo.OpCreate) }
 
 // PseudoIssue is one plan issue a pseudo object's rows would raise.
 type PseudoIssue struct {
@@ -201,7 +197,7 @@ type pseudoWrite struct {
 func (d Deps) runPseudo(ctx context.Context, expand pseudo.ExpandFunc, dryRun bool) (*pseudoWrite, []pseudo.Row, error) {
 	w := &pseudoWrite{d: d, plaintexts: map[string]string{}}
 	writer := pseudo.Writer{Stores: d.Stores, Check: d.PlanCheck, View: d.PlanView}
-	rows, err := writer.Run(ctx, expand, w.create, dryRun)
+	rows, err := writer.Run(ctx, expand, w.write, dryRun)
 	if err != nil {
 		return nil, nil, d.pseudoError(ctx, err)
 	}
@@ -231,6 +227,14 @@ func (w *pseudoWrite) create(ctx context.Context, tx *appcatalog.Stores, r pseud
 		}
 	case *policybinding.PolicyBinding:
 		_, _, err = d.createBinding(ctx, v)
+	case *budget.Budget:
+		if err = checkCreate(ctx, budgetChecks(d), "", &v.Meta, v); err == nil {
+			err = insertRow(ctx, d.Stores.Budget, v)
+		}
+	case *ratelimit.RateLimit:
+		if err = checkCreate(ctx, rateLimitChecks(d), "", &v.Meta, v); err == nil {
+			err = insertRow(ctx, d.Stores.RateLimit, v)
+		}
 	case *key.Key:
 		var plaintext string
 		plaintext, err = d.createKey(ctx, v, createKeySpec{AccountID: v.Spec.AccountID, ExpiresAt: v.Spec.ExpiresAt, Enabled: v.Spec.Enabled, PassthroughAllowed: v.Spec.PassthroughAllowed, PayloadLoggingEnabled: v.Spec.PayloadLoggingEnabled})

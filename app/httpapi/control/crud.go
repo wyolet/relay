@@ -172,6 +172,94 @@ func insertRow[T any](ctx context.Context, store entityStore[T], v *T) error {
 	return create(ctx, v)
 }
 
+// checkUpdate settles v's id and owner and runs the update checks on it, as the generic update route does once it found existing, the stored row v replaces.
+func checkUpdate[T any](ctx context.Context, checks kindChecks[T], metaOf func(*T) *meta.Metadata, mergeUpdate mergeOnUpdateFn[T], id string, existing, v *T) error {
+	singular := checks.singular
+	if !visibleTo(ctx, checks.authz, singular, metaOf(existing).ID, metaOf(existing).Owner) {
+		return huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, id))
+	}
+	// Authorize with the fetched row's owner so an owner-aware Authorizer
+	// can enforce owner.id == caller for user-owned rows.
+	if err := checks.mayUpdate(ctx, id, metaOf(existing)); err != nil {
+		return err
+	}
+	m := metaOf(v)
+	m.ID = id // path id wins over body id
+	// Early answer for a stale body; the store re-checks atomically.
+	if m.ResourceVersion != "" && m.ResourceVersion != metaOf(existing).ResourceVersion {
+		return staleVersionError(singular, id)
+	}
+	if err := refuseTenantOwner(singular, m.Owner); err != nil {
+		return err
+	}
+	if mergeUpdate != nil {
+		mergeUpdate(existing, v)
+	}
+	readSystemAsGlobal(singular, &m.Owner, metaOf(existing).Owner)
+	// An omitted owner, or the stored kind without an id, keeps the stored
+	// owner: a body echoing {kind: user} must not chown a row to its editor.
+	if stored := metaOf(existing).Owner; m.Owner == (meta.Owner{}) || (m.Owner.Kind == stored.Kind && (m.Owner.ID == "" || m.Owner.ID == stored.ID)) {
+		m.Owner = stored
+	} else {
+		if err := stampOwnerID(ctx, &m.Owner); err != nil {
+			return huma.Error400BadRequest(err.Error())
+		}
+		if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
+			return err
+		}
+		if err := refuseOrganizationOwner(ctx, checks.authz, singular, m.Owner); err != nil {
+			return err
+		}
+	}
+	m.CatalogDetachedAt = metaOf(existing).CatalogDetachedAt
+	// The organization's rows are never the catalog's, so one moved there sheds the detach mark.
+	if m.Owner.Kind == meta.OwnerOrganization {
+		m.CatalogDetachedAt = nil
+	}
+	if err := checks.valid(v); err != nil {
+		return err
+	}
+	if err := checks.guarded(ctx, "update", existing, v); err != nil {
+		return err
+	}
+	// A row moved by metadata.owner, or by the spec field its owner mirrors
+	// (re-derived in validate or the guard), lands in a new scope, which
+	// takes the create grant there, as POST of the same body would.
+	if m.Owner != metaOf(existing).Owner {
+		if err := checks.mayCreate(ctx, &m.Owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// updateRow writes v, whose metadata is m, over its stored row through the store's update when it has one, else its upsert.
+func updateRow[T any](ctx context.Context, store entityStore[T], m *meta.Metadata, v *T) error {
+	m.Dirty = true // operator-edited; seed must not clobber it on re-seed
+	update := store.Upsert
+	if w, ok := store.(kindWriter[T]); ok {
+		update = w.Update
+	}
+	return update(ctx, v)
+}
+
+// checkDelete runs the delete checks on existing, the stored row whose metadata is m, as the generic delete route does once it found it, and returns the links the delete takes from rows that stay.
+func checkDelete[T any](ctx context.Context, checks kindChecks[T], refuseInUse inUseFn, m *meta.Metadata, existing *T) (*droppedLinks, error) {
+	if !visibleTo(ctx, checks.authz, checks.singular, m.ID, m.Owner) {
+		return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", checks.singular, m.ID))
+	}
+	if err := checks.mayDelete(ctx, m.ID, m); err != nil {
+		return nil, err
+	}
+	if err := checks.guarded(ctx, "delete", existing, nil); err != nil {
+		return nil, err
+	}
+	if refuseInUse == nil {
+		return nil, nil
+	}
+	return refuseInUse(ctx, checks.singular, m.ID, m.Name)
+}
+
 // registerKind installs the five CRUD operations for kind T on api and returns how they find a row. The metaOf, validate, defaultOwnerKind, and resolveSlug closures supply the kind-specific glue.
 //
 // defaultOwnerKind is stamped on Create when the caller omits
@@ -441,69 +529,12 @@ func registerKind[T any](
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
-		}
-		// Authorize with the fetched row's owner so an owner-aware Authorizer
-		// can enforce owner.id == caller for user-owned rows.
-		if err := checks.mayUpdate(ctx, in.ID, metaOf(existing)); err != nil {
-			return nil, err
-		}
 		v := &in.Body
-		m := metaOf(v)
-		m.ID = in.ID // path id wins over body id
-		// Early answer for a stale body; the store re-checks atomically.
-		if m.ResourceVersion != "" && m.ResourceVersion != metaOf(existing).ResourceVersion {
-			return nil, staleVersionError(singular, in.ID)
-		}
-		if err := refuseTenantOwner(singular, m.Owner); err != nil {
+		if err := checkUpdate(ctx, checks, metaOf, mergeUpdate, in.ID, existing, v); err != nil {
 			return nil, err
-		}
-		if mergeUpdate != nil {
-			mergeUpdate(existing, v)
-		}
-		readSystemAsGlobal(singular, &m.Owner, metaOf(existing).Owner)
-		// An omitted owner, or the stored kind without an id, keeps the stored
-		// owner: a body echoing {kind: user} must not chown a row to its editor.
-		if stored := metaOf(existing).Owner; m.Owner == (meta.Owner{}) || (m.Owner.Kind == stored.Kind && (m.Owner.ID == "" || m.Owner.ID == stored.ID)) {
-			m.Owner = stored
-		} else {
-			if err := stampOwnerID(ctx, &m.Owner); err != nil {
-				return nil, huma.Error400BadRequest(err.Error())
-			}
-			if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
-				return nil, err
-			}
-			if err := refuseOrganizationOwner(ctx, authzr, singular, m.Owner); err != nil {
-				return nil, err
-			}
-		}
-		m.CatalogDetachedAt = metaOf(existing).CatalogDetachedAt
-		// The organization's rows are never the catalog's, so one moved there sheds the detach mark.
-		if m.Owner.Kind == meta.OwnerOrganization {
-			m.CatalogDetachedAt = nil
-		}
-		if err := checks.valid(v); err != nil {
-			return nil, err
-		}
-		if err := checks.guarded(ctx, "update", existing, v); err != nil {
-			return nil, err
-		}
-		// A row moved by metadata.owner, or by the spec field its owner mirrors
-		// (re-derived in validate or the guard), lands in a new scope, which
-		// takes the create grant there, as POST of the same body would.
-		if m.Owner != metaOf(existing).Owner {
-			if err := checks.mayCreate(ctx, &m.Owner); err != nil {
-				return nil, err
-			}
 		}
 		audit.Changed(ctx, audit.DiffFields(existing, v))
-		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
-		update := store.Upsert
-		if w, ok := store.(kindWriter[T]); ok {
-			update = w.Update
-		}
-		if err := update(ctx, v); err != nil {
+		if err := updateRow(ctx, store, metaOf(v), v); err != nil {
 			return nil, mapWriteErr(singular, in.ID, err)
 		}
 		updated, err := store.Get(ctx, in.ID)
@@ -541,20 +572,9 @@ func registerKind[T any](
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
-		}
-		if err := checks.mayDelete(ctx, in.ID, metaOf(existing)); err != nil {
+		dropped, err := checkDelete(ctx, checks, refuseInUse, metaOf(existing), existing)
+		if err != nil {
 			return nil, err
-		}
-		if err := checks.guarded(ctx, "delete", existing, nil); err != nil {
-			return nil, err
-		}
-		var dropped *droppedLinks
-		if refuseInUse != nil {
-			if dropped, err = refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); err != nil {
-				return nil, err
-			}
 		}
 		audit.Changed(ctx, []string{audit.AnyField})
 		if err := store.Delete(ctx, in.ID); err != nil {
