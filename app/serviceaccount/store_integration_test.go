@@ -102,9 +102,7 @@ func TestIntegration_ServiceAccountUserOwnerMigrationDown(t *testing.T) {
 	}
 	pool.Reset()
 
-	if err := storage.MigrateTo(dsn, 47); err == nil || !strings.Contains(err.Error(), "owned by a user") {
-		t.Fatalf("migrate down to 47 = %v, want 000048's refusal", err)
-	}
+	wantRefusedDown(t, pool, dsn, 47, 48, "migration 000048 down: 1 service accounts are owned by a user; delete them first")
 	if err := x.accounts.Delete(ctx, bot.Meta.ID); err != nil {
 		t.Fatalf("delete the user's service account: %v", err)
 	}
@@ -187,6 +185,22 @@ func TestIntegration_ServiceAccountOwnerDownsHoldTheTable(t *testing.T) {
 				t.Fatalf("schema dirty %v (%v) after %v, want clean", dirty, err, down)
 			}
 		})
+	}
+}
+
+// wantRefusedDown migrates down to target and wants it refused with refusal, leaving the schema clean at version at.
+func wantRefusedDown(t *testing.T, pool *pgxpool.Pool, dsn string, target, at uint, refusal string) {
+	t.Helper()
+	if err := storage.MigrateTo(dsn, target); err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("migrate down to %d = %v, want refused with %q", target, err, refusal)
+	}
+	var version uint
+	var dirty bool
+	if err := pool.QueryRow(context.Background(), `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty); err != nil {
+		t.Fatal(err)
+	}
+	if version != at || dirty {
+		t.Fatalf("schema at %d (dirty %v) after the refused down, want %d clean", version, dirty, at)
 	}
 }
 
@@ -299,12 +313,7 @@ func TestIntegration_ServiceAccountTeamOwnerMigrationDown(t *testing.T) {
 	}
 	pool.Reset()
 
-	if err := storage.MigrateTo(dsn, 46); err == nil {
-		t.Fatal("migrated down to 46 while a team owns a service account")
-	}
-	if err := storage.ForceVersion(dsn, 47); err != nil {
-		t.Fatalf("clear the failed down's dirty flag: %v", err)
-	}
+	wantRefusedDown(t, pool, dsn, 46, 47, "migration 000047 down: 1 service accounts are owned by a team; delete them first")
 	if err := x.accounts.Delete(ctx, inTeam.Meta.ID); err != nil {
 		t.Fatalf("delete team service account: %v", err)
 	}

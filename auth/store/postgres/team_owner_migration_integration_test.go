@@ -8,30 +8,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-
 	"github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/directory"
 )
 
-// forceModule records version as the module's schema version and clears the dirty flag a failed migration leaves.
-func forceModule(t *testing.T, dsn string, version int) {
+// wantRefusedDown runs the module's down to target and wants it refused with refusal, leaving the module clean at the version it was.
+func wantRefusedDown(t *testing.T, dsn string, target, at int, refusal string) {
 	t.Helper()
-	src, err := iofs.New(migrationFiles, "migrations")
-	if err != nil {
-		t.Fatal(err)
+	if err := MigrateDown(dsn, uint(target)); err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("down to %d = %v, want refused with %q", target, err, refusal)
 	}
-	target, err := migrateURL(dsn)
-	if err != nil {
-		t.Fatal(err)
+	var version int
+	var dirty bool
+	must(t, openPool(t, dsn).QueryRow(context.Background(), `SELECT version, dirty FROM `+MigrationsTable).Scan(&version, &dirty))
+	if version != at || dirty {
+		t.Fatalf("module at %d (dirty %v) after the refused down, want %d clean", version, dirty, at)
 	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	must(t, m.Force(version))
 }
 
 // serviceAccountOwnerColumns is how service_accounts reads at one schema version: whether project_id is nullable and whether team_id exists.
@@ -69,10 +61,7 @@ func TestServiceAccountTeamOwnerDownMigration(t *testing.T) {
 				return
 			}
 
-			if err := MigrateDown(dsn, 5); err == nil {
-				t.Fatal("migrated down to 5 while a team owns a service account")
-			}
-			forceModule(t, dsn, 6)
+			wantRefusedDown(t, dsn, 5, 6,"auth migration 000006 down: 1 service accounts are owned by a team; delete them first")
 			must(t, stores.ServiceAccounts.Delete(ctx, bot.Meta.ID))
 			migrateModule(t, dsn, 5)
 			if nullable, teamColumns := serviceAccountOwnerColumns(t, dsn); nullable != "NO" || teamColumns != 0 {
@@ -163,10 +152,7 @@ func TestServiceAccountUserOwnerDownMigration(t *testing.T) {
 				return
 			}
 
-			if err := MigrateDown(dsn, 6); err == nil {
-				t.Fatal("migrated down to 6 while a user owns a service account")
-			}
-			forceModule(t, dsn, 7)
+			wantRefusedDown(t, dsn, 6, 7, "auth migration 000007 down: 1 service accounts are owned by a user; delete them first")
 			must(t, stores.ServiceAccounts.Delete(ctx, bot.Meta.ID))
 			migrateModule(t, dsn, 6)
 			if n := userOwnerColumns(t, dsn); n != 0 {

@@ -67,7 +67,7 @@ func migrationFile(src source.Driver, version uint, up bool) string {
 	return fmt.Sprintf("%06d_%s.%s.sql", version, ident, dir)
 }
 
-// raiseException is the SQLSTATE of RAISE EXCEPTION, which a down migration uses to refuse.
+// raiseException is the SQLSTATE of RAISE EXCEPTION, which a migration, up or down, uses to refuse.
 const raiseException = "P0001"
 
 // refused reports whether err is a migration that refused with RAISE EXCEPTION.
