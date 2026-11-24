@@ -465,13 +465,13 @@ func (t *RouteTable) callerCounters(prov string, m *model.Model, hostSlug string
 	return out
 }
 
-// unpriced is the caller's refusal of a binding with no pricing while a caller budget applies; nil otherwise.
+// unpriced is the caller's refusal of a binding with no enabled pricing while a caller budget applies; nil otherwise.
 func (cp *CallerPlan) unpriced(b *binding.Binding, priced bool) *Refusal {
 	if priced || cp.budgetAt < 0 {
 		return nil
 	}
 	r := &cp.Rungs[cp.budgetAt]
-	return rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no pricing and a budget applies")
+	return rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no enabled pricing and a budget applies")
 }
 
 // notAllowed names the caller rung that refused a model.

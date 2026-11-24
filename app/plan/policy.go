@@ -174,7 +174,7 @@ func parseRefs(tx *engine.Txn, src engine.Ref, field string, raw []string) []mod
 	return refs
 }
 
-// warnUnpriced reports the bindings a budgeted policy allows that have no pricing: requests for them are refused while the budget applies. Limited to the hosts of the pools the policy links, when it links any.
+// warnUnpriced reports the bindings a budgeted policy allows that have no enabled pricing: requests for them are refused while the budget applies. Limited to the hosts of the pools the policy links, when it links any.
 func warnUnpriced(tx *engine.Txn, src engine.Ref, ep *ExpandedPolicy, hosts map[string]bool) {
 	idx := engine.Get[CatalogIndex](tx, "")
 	if idx == nil {
@@ -209,7 +209,7 @@ func warnUnpriced(tx *engine.Txn, src engine.Ref, ep *ExpandedPolicy, hosts map[
 	if n > 0 {
 		tx.Issue(engine.Issue{
 			Severity: engine.SeverityWarning, Code: CodeUnpricedUnderBudget, Source: src, Field: "spec.budgets",
-			Message: fmt.Sprintf("%d bindings this policy allows have no pricing (e.g. %s); requests for them are refused while a budget applies", n, first),
+			Message: fmt.Sprintf("%d bindings this policy allows have no enabled pricing (e.g. %s); requests for them are refused while a budget applies", n, first),
 		})
 	}
 }

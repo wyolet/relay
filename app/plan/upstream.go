@@ -230,7 +230,7 @@ func (s *KeySlot) refuses(providerSlug string, m *model.Model, b *binding.Bindin
 		if r.Policy == nil || len(r.Policy.Budgets) == 0 {
 			r = &s.Via
 		}
-		return stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no pricing and a budget applies")
+		return stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no enabled pricing and a budget applies")
 	}
 	return 0, nil
 }
