@@ -351,12 +351,14 @@ The dry run without a change answers the case and what you may see of the curren
 
 Each row passes what its own create, update or delete call passes, with the same answers and pointers, and is audited as that call; then the result is checked against the plans as for `POST /api/pseudo-agents`, and against what every other account reaches: Relay compares what each account reaches with and without the request's rows, whichever row changes it, and a request that would give any account other than the target, and those under a team or project target, more or less (a model, a host, or a pool or account a model comes through) answers `422` `other_accounts_changed`, counting them and naming none, accounts you may not see included. A share made for the target reaches no other account: an account reaches by ownership only the host keys its scopes own, and a share's keys stay its real account's. A request that would leave the target's account refusing every request answers `422` `plan_issue`.
 
-A change on a team or project applies to everything under it: the lanes of its projects, service accounts and members climb its policy. That is never a refusal; `under`, answered on the dry run and the save for a team or project target, is how to see the effect before saving: `lanes` counts the lanes under the target, `narrowed` and `widened` those that lose or gain a model, host, or pool or account a model comes through, and `unreachable` lists, up to 20 with `unreachableMore` counting the rest, the lanes you may see that served a model before and serve none after (`kind`, `id`, `name`); `unreachableHidden` counts those you may not see. Nothing is compared, and `under` is absent, when the request writes nothing:
+A change on a team or project applies to everything under it: the lanes of its projects, service accounts and members climb its policy. That is never a refusal; `under`, answered on the dry run and the save for a team or project target, is how to see the effect before saving: `lanes` counts the lanes under the target. Each lane is compared by the models it can be served and the hosts that serve them; another pool or account serving the same model at the same host is no change. `narrowed` counts the lanes that lose at least one model at a host and gain none, `widened` those that gain and lose none, `changed` those that do both. `unreachable` lists, up to 20 with `unreachableMore` counting the rest, the lanes served at some model and host before and at none after, each by who holds it: `{"kind": "service-account", "id", "name"}` with the service account's display name, `{"kind": "user", …}` with the username for a member's lane, or the project or team for its own account. `unreachableHidden` counts those whose holder you may not see. Nothing is compared, and `under` is absent, when the request writes nothing:
 
 ```json
-{ "under": { "lanes": 3, "narrowed": 1, "widened": 0,
-             "unreachable": [{ "kind": "account", "id": "…", "name": "sa-ci-bot" }] } }
-``` A concurrent change to a row the request read answers `409` `conflict`. Nothing is written on any refusal.
+{ "under": { "lanes": 3, "narrowed": 1, "widened": 0, "changed": 0,
+             "unreachable": [{ "kind": "service-account", "id": "…", "name": "CI bot" }] } }
+```
+
+A concurrent change to a row the request read answers `409` `conflict`. Nothing is written on any refusal.
 
 ### Provider keys in one request
 

@@ -50,10 +50,10 @@ func callerOf(v *engine.View, acc *account.Account) *CallerPlan {
 	return foldFor(v, acc, nil)
 }
 
-// LaneReachChange is one lane and how its reach changed between two views: it lost something, gained something, or, Unreachable, served a model at some host before and serves none after.
+// LaneReachChange is one lane and how the (model, host) pairs it is served at changed between two views: Lost and Gained say whether it lost or gained any; Unreachable, that it was served at some pair before and at none after. Another pool or account carrying the same model at the same host is no change.
 type LaneReachChange struct {
-	AccountID                      string
-	Narrowed, Widened, Unreachable bool
+	AccountID                 string
+	Lost, Gained, Unreachable bool
 }
 
 // LanesUnder counts the lanes after holds that under reports, and lists, by account id, those of them whose reach differs from before's. It stops with ctx's error once ctx ends.
@@ -70,26 +70,34 @@ func LanesUnder(ctx context.Context, before, after *engine.View, under func(*Cal
 		if prev := LanePlan(before, id); prev != nil && laneState(prev) == laneState(cp) {
 			continue
 		}
-		was, is := ReachOf(before, id, nil), ReachOf(after, id, nil)
-		if lost, gained := diffReach(was, is); lost || gained {
-			changed = append(changed, LaneReachChange{AccountID: id, Narrowed: lost, Widened: gained, Unreachable: serves(was) && !serves(is)})
+		was, is := servedPairs(ReachOf(before, id, nil)), servedPairs(ReachOf(after, id, nil))
+		c := LaneReachChange{AccountID: id, Unreachable: len(was) > 0 && len(is) == 0}
+		for p := range was {
+			c.Lost = c.Lost || !is[p]
+		}
+		for p := range is {
+			c.Gained = c.Gained || !was[p]
+		}
+		if c.Lost || c.Gained {
+			changed = append(changed, c)
 		}
 	}
 	slices.SortFunc(changed, func(a, b LaneReachChange) int { return strings.Compare(a.AccountID, b.AccountID) })
 	return lanes, changed, nil
 }
 
-// serves reports whether r reaches some model at some host.
-func serves(r *Reach) bool {
+// servedPairs is each model r reaches at each host it is served at; none for a lane refused as a whole.
+func servedPairs(r *Reach) map[string]bool {
+	out := map[string]bool{}
 	if r == nil || r.Refused != nil {
-		return false
+		return out
 	}
 	for _, m := range r.Models {
-		if len(m.Hosts) > 0 {
-			return true
+		for _, h := range m.Hosts {
+			out[m.Model.Meta.ID+"@"+h.Meta.ID] = true
 		}
 	}
-	return false
+	return out
 }
 
 // diffReach reports whether after lost anything before had (a refusal it did not have, or with another code, counts) and whether it gained anything (a refusal lifted counts).
