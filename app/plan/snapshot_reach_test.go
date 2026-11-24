@@ -194,10 +194,10 @@ func TestPolicyCheck_ModelRefFollowsServedSnapshots(t *testing.T) {
 		route answer
 		want  []issueAt
 	}{
-		{"host-a serves another snapshot of the model", m1, "m1-remote", answer{Hosts: []string{"host-a"}}, nil},
-		{"a binding listing no snapshots", m2, "m2", answer{Hosts: []string{"host-a"}}, nil},
+		{"unchanged: host-a serves another snapshot of the model", m1, "m1-remote", answer{Hosts: []string{"host-a"}}, nil},
+		{"unchanged: a binding listing no snapshots", m2, "m2", answer{Hosts: []string{"host-a"}}, nil},
 		{"host-a serves no snapshot of the model", m3, "m3", answer{Refused: plan.CodeNoBinding}, unreachable},
-		{"the entry names a snapshot", bySnapshot, "m1-remote", answer{Refused: plan.CodeModelNotAllowed}, unreachable},
+		{"unchanged: the entry names a snapshot", bySnapshot, "m1-remote", answer{Refused: plan.CodeModelNotAllowed}, unreachable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []issueAt
@@ -268,6 +268,33 @@ func TestModelRefBlocked_RungAllowsOnlyAHostServingNoSnapshot(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, issuesOf(plans.Engine.View(), engine.Ref{Kind: plan.KindPolicy, ID: projPol.Meta.ID})); diff != "" {
 		t.Errorf("project policy issues (-want +got):\n%s", diff)
+	}
+}
+
+// A provider account's keys count as able to serve a model only at a host whose binding serves one of its snapshots.
+func TestReach_UpstreamChecksSkipBindingsServingNoSnapshot(t *testing.T) {
+	w := &plantest.World{}
+	prov := w.Provider("acme")
+	ha := w.Host("host-a", "http://a.invalid")
+	w.Bind(w.Model(prov, "m1"), ha, adapters.OpenAI)
+	w.Bind(w.Model(prov, "m3"), ha, adapters.OpenAI, "m3-retired")
+	acc := w.Account(ha)
+	pa := w.Pool(ha, w.Credential(ha, acc, plantest.System, "sk-a"))
+	s := &snapshotWorld{w: w, proj: w.Project(w.Team())}
+	l := s.lane(nil, pa)
+	plans := w.Load(t)
+	r := plan.ReachOf(plans.Engine.View(), l.acct.Meta.ID, nil)
+	got := map[string][]string{}
+	for _, list := range [2][]plan.ModelReach{r.Models, r.Excluded} {
+		for _, mr := range list {
+			got[mr.Model.Meta.Name] = []string{}
+			for _, u := range mr.Upstream {
+				got[mr.Model.Meta.Name] = append(got[mr.Model.Meta.Name], u.Account.Meta.Name)
+			}
+		}
+	}
+	if diff := cmp.Diff(map[string][]string{"m1": {acc.Meta.Name}, "m3": {}}, got); diff != "" {
+		t.Errorf("upstream accounts by model (-want +got):\n%s", diff)
 	}
 }
 
