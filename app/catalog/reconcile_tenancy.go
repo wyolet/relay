@@ -14,7 +14,14 @@ import (
 
 func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) error {
 	if !sa.IsEnabled() {
-		return c.ApplyServiceAccountDelete(sa.Meta.ID)
+		// Disabling stops it serving but leaves it in its owner's read scope: the traffic it already produced stays theirs.
+		c.rmu.Lock()
+		defer c.rmu.Unlock()
+		s := c.snap.Load().clone()
+		deleteServiceAccount(s, sa.Meta.ID)
+		s.indexServiceAccountOwner(sa)
+		c.snap.Store(s)
+		return nil
 	}
 	if err := sa.Validate(); err != nil {
 		return err
@@ -25,6 +32,7 @@ func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) e
 		return err
 	}
 	s := c.snap.Load().clone()
+	s.indexServiceAccountOwner(sa)
 	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), snapIDs(s.teamsByID))
 	if !keep {
 		deleteServiceAccount(s, sa.Meta.ID)
@@ -42,6 +50,7 @@ func (c *Catalog) ApplyServiceAccountDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteServiceAccount(s, id)
+	s.dropServiceAccountOwner(id)
 	c.snap.Store(s)
 	return nil
 }

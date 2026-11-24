@@ -235,7 +235,7 @@ A binding names a group by name. The name is matched by a local `Group` row and 
 
 ### Reads
 
-List endpoints return only the rows the caller could `get`, and a row they may not see answers `404`, not `403`, so its existence is not revealed. Usage and request logs narrow the same way: a caller with a global binding reads every event; everyone else reads the events of the projects they can see, of the service accounts the teams they can see own directly, of the service accounts they own, and the events their own keys produced.
+List endpoints return only the rows the caller could `get`, and a row they may not see answers `404`, not `403`, so its existence is not revealed. Usage and request logs narrow the same way: a caller with a global binding reads every event; everyone else reads the events of the projects they can see, of the service accounts the teams they can see own directly and of the service accounts they own, disabled ones included, and the events their own keys produced.
 
 ### Checking access
 

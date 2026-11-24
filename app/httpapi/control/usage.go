@@ -75,12 +75,10 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 				sc.projectIDs = append(sc.projectIDs, p.Meta.ID)
 			}
 		}
-		// A service account a team owns itself sits in no project, so its traffic carries none: it reads by principal, to whoever reads the team's.
+		// A service account a team owns itself sits in no project, so its traffic carries none: it reads by principal, to whoever reads the team's, disabled ones included.
 		for _, t := range snap.AllTeams() {
-			if s.Visible(ctx, kind, "", meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}) {
-				for _, sa := range snap.ServiceAccountsForTeam(t.Meta.ID) {
-					sc.principalIDs = append(sc.principalIDs, sa.Meta.ID)
-				}
+			if team := (meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}); s.Visible(ctx, kind, "", team) {
+				sc.principalIDs = append(sc.principalIDs, snap.ServiceAccountIDsOwnedBy(team)...)
 			}
 		}
 	}
@@ -94,9 +92,7 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 		if cat != nil {
 			snap := cat.Current()
 			sc.keyHashes = snap.KeyHashesForUser(a.UserID)
-			for _, sa := range snap.ServiceAccountsForUser(a.UserID) {
-				sc.principalIDs = append(sc.principalIDs, sa.Meta.ID)
-			}
+			sc.principalIDs = append(sc.principalIDs, snap.ServiceAccountIDsOwnedBy(meta.Owner{Kind: meta.OwnerUser, ID: a.UserID})...)
 		}
 	}
 	return sc, nil
