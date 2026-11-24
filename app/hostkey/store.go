@@ -29,6 +29,7 @@ import (
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/meta"
+	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	"github.com/wyolet/relay/secret"
 )
 
@@ -129,6 +130,13 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 		if k.Spec.Value == "" && k.Resolved == "" && !keepValue {
 			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
 		}
+		if k.Spec.ValueFrom.Kind == ValueKindOAuth && k.Spec.Value != "" {
+			prepared, err := pkgoauth.PrepareValue(ctx, []byte(k.Spec.Value))
+			if err != nil {
+				return fmt.Errorf("hostkey.Upsert %q: %w", k.Meta.Name, err)
+			}
+			k.Spec.Value = string(prepared)
+		}
 		scope := SecretScope(k.Meta.Owner)
 		// The row and its value commit together, so a stale conditional write
 		// replaces no value and a failed create leaves no valueless row.
@@ -149,6 +157,12 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 			}
 			if _, err := backend.CreateScoped(ctx, scope, k.Meta.ID, []byte(k.Spec.Value)); err != nil {
 				return fmt.Errorf("hostkey.Upsert store secret: %w", err)
+			}
+			// A new credential starts with no renewal history, so a revoked one is renewed again.
+			if k.Spec.ValueFrom.Kind == ValueKindOAuth {
+				if err := q.UpdateSecretStatus(ctx, gen.UpdateSecretStatusParams{ID: k.Meta.ID}); err != nil {
+					return fmt.Errorf("hostkey.Upsert clear status: %w", err)
+				}
 			}
 			return nil
 		})
@@ -293,8 +307,8 @@ func marshalSpec(s *Spec) ([]byte, error) {
 }
 
 // SetCredentialStatus persists the observed credential state on the
-// hostkey row (the refresher's renewed/revoked reports). A later value
-// update (operator re-auth) clears it — see UpdateSecretStored.
+// hostkey row (the refresher's renewed/revoked reports). A later write of a
+// new oauth value (operator re-auth) clears it.
 func (s *Store) SetCredentialStatus(ctx context.Context, id string, cs CredentialStatus) error {
 	st, err := json.Marshal(Status{Credential: &cs})
 	if err != nil {
