@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/kv"
 	secretoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	"github.com/wyolet/relay/secret"
@@ -66,12 +67,16 @@ func kvPoolBusy(s kv.Store) func() bool {
 	return nil
 }
 
-func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, stores *appcatalog.Stores, kvStore kv.Store) {
+func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, stores *appcatalog.Stores, kvStore kv.Store, plans *engine.Engine) {
 	// Proactive OAuth renewal: keeps subscription tokens fresh ahead of
 	// expiry so requests never pay refresh latency. Cluster-safe via the kv
 	// lock; outcomes persist on the hostkey status (UI-visible on the same
 	// key) and broadcast through the catalog hostkey NOTIFY so every pod
 	// reloads the credential (secret_values has no trigger of its own).
+	oauthNotify := func(ctx context.Context, id string) error {
+		_, err := st.Pool().Exec(ctx, "select pg_notify('catalog_events', $1)", "hostkey:upsert:"+id)
+		return err
+	}
 	oauthRefs := func(ctx context.Context) ([]secret.Ref, error) {
 		keys, err := stores.HostKey.List(ctx)
 		if err != nil {
@@ -87,15 +92,17 @@ func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, st
 			if c := k.Status.Credential; c != nil && c.State == hostkey.CredentialRevoked {
 				continue
 			}
+			// Listing re-mints an expired token without a NOTIFY, and Renew then finds nothing due, so a key dropped while its token endpoint was down would stay out of routing until its next renewal.
+			if published := engine.Get[hostkey.HostKey](plans.View(), k.Meta.ID); published != nil && published.Resolved != k.Resolved {
+				if err := oauthNotify(ctx, k.Meta.ID); err != nil {
+					slog.Error("oauth refresher: announce re-resolved credential", "id", k.Meta.ID, "err", err)
+				}
+			}
 			refs = append(refs, secret.Ref{
 				Kind: secret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
 			})
 		}
 		return refs, nil
-	}
-	oauthNotify := func(ctx context.Context, id string) error {
-		_, err := st.Pool().Exec(ctx, "select pg_notify('catalog_events', $1)", "hostkey:upsert:"+id)
-		return err
 	}
 	oauthHooks := secretoauth.Hooks{
 		OnRenewed: func(ctx context.Context, id string, expiresAt time.Time) error {

@@ -93,7 +93,7 @@ func main() {
 		defer postFlightKV.Close()
 	}
 
-	startOAuthRefresher(listenerCtx, st, stores, kvStore)
+	startOAuthRefresher(listenerCtx, st, stores, kvStore, plans.engine)
 
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
 	sessMgr := session.NewWithGroups(kvStore, cookieSecure, func(userID string) []string { return cat.Current().GroupsForUser(userID) })
