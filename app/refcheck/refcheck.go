@@ -359,6 +359,9 @@ func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 		if sa == nil || !Visible(ctx, c.Authz, "service-account", sa.Meta.ID, sa.Meta.Owner) {
 			return notVisible("service-account", k.Spec.Principal.ID)
 		}
+		if err := c.UserServiceAccountKey(ctx, sa.Meta.Owner); err != nil {
+			return err
+		}
 		k.Meta.Owner = sa.Meta.Owner
 	case key.PrincipalUser:
 		k.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: k.Spec.Principal.ID}
@@ -376,6 +379,20 @@ func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 		return badRequest("spec.principal.kind must be serviceaccount or user")
 	}
 	return nil
+}
+
+// UserServiceAccountKey refuses minting a credential of a service account owned by owner, a user, to anyone but that user and an admin: the key runs under the user's personal account and reaches what the user owns, as a key of the user's own, which no one else may create either.
+func (c Checker) UserServiceAccountKey(ctx context.Context, owner meta.Owner) error {
+	if owner.Kind != meta.OwnerUser {
+		return nil
+	}
+	if _, scoped := c.Authz.(authz.Scoper); !scoped || authz.Admin(ctx, c.Authz) {
+		return nil
+	}
+	if a := actor.From(ctx); a == nil || a.UserID == owner.ID {
+		return nil
+	}
+	return forbidden(fmt.Errorf("%w: a key of a user's service account is created and rotated by that user or an admin", authz.ErrForbidden))
 }
 
 // KeyOwnedByPrincipal refuses a key whose owner is not the one KeyOwner gives its principal: a write that would move a key's row out of its principal's scope while it keeps running in the principal's lane.
