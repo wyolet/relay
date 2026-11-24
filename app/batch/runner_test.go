@@ -430,3 +430,33 @@ func TestRun_KeepsThePlanItStartedWith(t *testing.T) {
 		t.Fatal("the swapped plans did not refuse the disabled submitter; the test proves nothing")
 	}
 }
+
+// A failover between hosts that name the model differently sends each its own name: the body is built for the first hop and reset for the next.
+func TestRun_FailoverSendsEachHopItsUpstreamName(t *testing.T) {
+	const wire = "global.vendor/test-model-v1:0"
+	named := newUpstream(t, answering(http.StatusInternalServerError, `{"error":{"message":"down"}}`))
+	direct := newUpstream(t, answering(http.StatusOK, `{"id":"x","usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+
+	var w plantest.World
+	m := w.Model(w.Provider("vendor"), "test-model")
+	cloud, vendor := w.Host("cloud", named.URL), w.Host("vendor", direct.URL)
+	b := w.Bind(m, cloud, adapters.OpenAI)
+	b.Spec.UpstreamName, b.Spec.Snapshots = wire, []string{"test-model"}
+	w.Bind(m, vendor, adapters.OpenAI)
+	w.Credential(cloud, nil, plantest.System, "sk-cloud")
+	w.Credential(vendor, nil, plantest.System, "sk-vendor")
+	u := w.User()
+	k := w.UserKey(u, "rk-secret")
+	rn, _, _ := runnerOver(t, w.Load(t))
+
+	attr := Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: u.ID, CredentialKind: inference.CredentialKey, CredentialID: k.Meta.ID}
+	if status, _, err := rn.Run(context.Background(), "item-1", k.Spec.KeyHash, TokenClaims{}, attr, adapters.OpenAI, []byte(itemBody)); err != nil || status != http.StatusOK {
+		t.Fatalf("Run: status %d, err %v; want the second hop's 200", status, err)
+	}
+	if d := cmp.Diff([]sent{{"/v1/chat/completions", "Bearer sk-cloud", `{"model":"` + wire + `"}`}}, named.sent()); d != "" {
+		t.Errorf("named hop (-want +got):\n%s", d)
+	}
+	if d := cmp.Diff([]sent{{"/v1/chat/completions", "Bearer sk-vendor", itemBody}}, direct.sent()); d != "" {
+		t.Errorf("direct hop (-want +got):\n%s", d)
+	}
+}

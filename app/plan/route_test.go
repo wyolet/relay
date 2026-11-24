@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
@@ -411,6 +412,91 @@ func TestRoute_AliasCarriesItsWireName(t *testing.T) {
 	}
 	if r := h.route(b.key, "m1"); r.UpstreamModel != "m1" || r.ResolvedVia != "" {
 		t.Fatalf("plain route = upstream %q via %q", r.UpstreamModel, r.ResolvedVia)
+	}
+}
+
+// A binding's upstreamName is the wire model name through it, over the snapshot's name and over an alias the host does not know; ResolvedVia still tags the alias. A hop through a binding without one keeps the alias's or the snapshot's name. m1 has one snapshot, so the name applies whether the binding lists it or lists none.
+func TestRoute_BindingUpstreamNameIsTheWireName(t *testing.T) {
+	const wire = "global.acme/m1-v1:0"
+	for _, shape := range []struct {
+		name         string
+		upstreamName string
+		snapshots    []string
+	}{
+		{name: "no upstream name"},
+		{name: "lists the one snapshot", upstreamName: wire, snapshots: []string{"m1"}},
+		{name: "lists none", upstreamName: wire},
+	} {
+		named := shape.upstreamName != ""
+		b := newBasic()
+		b.m1.Spec.Aliases = []string{"m1-latest", "m1[*]"}
+		bd := b.w.bindingAt(b.m1, b.hostA)
+		bd.Spec.UpstreamName, bd.Spec.Snapshots = shape.upstreamName, shape.snapshots
+		h := b.w.start(t)
+		for _, tc := range []struct {
+			ref, fallback, via string
+			firstAtA           bool
+		}{
+			{ref: "m1", fallback: "m1", firstAtA: true},
+			{ref: "acme/m1", fallback: "m1", firstAtA: true},
+			{ref: "m1@host-a", fallback: "m1", firstAtA: true},
+			{ref: "m1@host-b", fallback: "m1"},
+			{ref: "m1-latest", fallback: "m1-latest", via: "alias:m1-latest", firstAtA: true},
+			{ref: "m1-latest@host-a", fallback: "m1-latest", via: "alias:m1-latest", firstAtA: true},
+			{ref: "m1[1m]", fallback: "m1[1m]", via: "alias:m1[*]", firstAtA: true},
+		} {
+			sentAtA := tc.fallback
+			if named {
+				sentAtA = wire
+			}
+			want := tc.fallback
+			if tc.firstAtA {
+				want = sentAtA
+			}
+			r := h.route(b.key, tc.ref)
+			if r.Refused != nil || r.UpstreamModel != want || r.ResolvedVia != tc.via {
+				t.Errorf("%s, %s: route sends %q via %q (refused %v), want %q via %q", shape.name, tc.ref, r.UpstreamModel, r.ResolvedVia, r.Refused, want, tc.via)
+			}
+			for i := range r.Hops {
+				hop := &r.Hops[i]
+				hopWant := tc.fallback
+				if hop.Host.Meta.ID == b.hostA.Meta.ID {
+					hopWant = sentAtA
+				}
+				if got := hop.UpstreamModel; got != hopWant {
+					t.Errorf("%s, %s: hop %d at %s sends %q, want %q", shape.name, tc.ref, i, hop.Host.Meta.Name, got, hopWant)
+				}
+			}
+		}
+	}
+}
+
+// One upstreamName names one upstream model. On a binding serving several snapshots (a row listing none, of a model with several) it is ignored and every snapshot is sent its own name, as without it; a binding listing one snapshot sends the name for that snapshot and serves no other.
+func TestRoute_UpstreamNameAppliesOnlyToOneServedSnapshot(t *testing.T) {
+	const wire = "global.acme/m1-v1:0"
+	for _, tc := range []struct {
+		name      string
+		snapshots []string
+		want      map[string][]string // ref → the name each hop is sent, host-a's first
+	}{
+		{"lists none", nil, map[string][]string{"m1": {"m1", "m1", "m1"}, "m1-2026-01-01": {"m1-2026-01-01", "m1-2026-01-01", "m1-2026-01-01"}}},
+		{"lists one", []string{"m1"}, map[string][]string{"m1": {wire, wire, "m1"}, "m1-2026-01-01": {"m1-2026-01-01"}}},
+	} {
+		b := newBasic()
+		b.m1.Spec.Snapshots = append(b.m1.Spec.Snapshots, model.Snapshot{Name: "m1-2026-01-01"})
+		bd := b.w.bindingAt(b.m1, b.hostA)
+		bd.Spec.UpstreamName, bd.Spec.Snapshots = wire, tc.snapshots
+		h := b.w.start(t)
+		for ref, want := range tc.want {
+			r := h.route(b.key, ref)
+			var got []string
+			for _, hop := range r.Hops {
+				got = append(got, hop.UpstreamModel)
+			}
+			if r.Refused != nil || !slices.Equal(got, want) || r.UpstreamModel != want[0] {
+				t.Errorf("%s, %s: hops send %v, route %q (refused %v); want %v", tc.name, ref, got, r.UpstreamModel, r.Refused, want)
+			}
+		}
 	}
 }
 

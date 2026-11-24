@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -34,7 +35,7 @@ type Spec struct {
 	ModelID      string        `json:"modelId"                yaml:"modelId"                validate:"required,uuid" doc:"Id of the model the host serves. One binding per (model, host) pair."`
 	HostID       string        `json:"hostId"                 yaml:"hostId"                 validate:"required,uuid" doc:"Id of the host serving the model."`
 	Adapter      adapters.Name `json:"adapter"                yaml:"adapter"                doc:"Wire shape relay speaks to the host for this model, such as openai, openai_responses, openai_embeddings, anthropic or gemini."`
-	UpstreamName string        `json:"upstreamName,omitempty" yaml:"upstreamName,omitempty" doc:"Model name sent upstream. Empty sends the model's own name."`
+	UpstreamName string        `json:"upstreamName,omitempty" yaml:"upstreamName,omitempty" doc:"Model name sent upstream. Applies only while the binding serves one snapshot of the model (snapshots lists one, or the model has one); otherwise, or when empty, the model's own name is sent."`
 	PricingID    string        `json:"pricingId,omitempty"    yaml:"pricingId,omitempty"    validate:"omitempty,uuid" doc:"Id of the pricing that costs this binding's traffic. Empty leaves it unpriced: requests governed by a budget refuse it with unpriced_under_budget."`
 	Enabled      *bool         `json:"enabled,omitempty"      yaml:"enabled,omitempty"      doc:"False stops routing the model to this host. Omitted means true."`
 	// Snapshots optionally narrows which of the Model's snapshots this Host
@@ -60,12 +61,26 @@ func (b *Binding) Serves(snapshotName string) bool {
 	return false
 }
 
+// UpstreamNameFor returns the model name sent upstream through b for model m: b's UpstreamName when b serves exactly one snapshot of m (it lists one, or lists none and m has one), else fallback (the snapshot's upstream name, or an alias's). An UpstreamName names one upstream model, so a binding serving several snapshots ignores it rather than sending every snapshot that id. Bindings load without Validate, so a stored row can carry it that way.
+func (b *Binding) UpstreamNameFor(m *model.Model, fallback string) string {
+	if b.Spec.UpstreamName == "" {
+		return fallback
+	}
+	if n := len(b.Spec.Snapshots); n == 1 || n == 0 && len(m.Spec.Snapshots) == 1 {
+		return b.Spec.UpstreamName
+	}
+	return fallback
+}
+
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the binding-specific invariants:
 //   - Adapter defaults to OpenAI when omitted, then must be a valid upstream
 //     binding (the dispatch key — see adapters.UpstreamBindingNames).
 //   - The owner is never a user, team or project: a binding decides which
 //     host a model's traffic goes to, so it is shared catalog data.
+//   - An UpstreamName names one upstream model, so snapshots lists at most
+//     one. An empty list stays valid; routing then applies the name only
+//     when the model has one snapshot (UpstreamNameFor).
 //
 // Cross-entity checks (ModelID/HostID/PricingID resolve; the (model, host)
 // pair is unique; Snapshots name real model snapshots) live in the catalog
@@ -83,6 +98,10 @@ func (b *Binding) Validate() error {
 	if !b.Spec.Adapter.UpstreamBinding() {
 		return fmt.Errorf("binding %q: adapter %q is not a valid upstream binding (want one of %v)",
 			b.Meta.Name, b.Spec.Adapter, adapters.UpstreamBindingNames())
+	}
+	if b.Spec.UpstreamName != "" && len(b.Spec.Snapshots) > 1 {
+		return fmt.Errorf("binding %q: upstreamName %q names one upstream model, so snapshots may list at most one snapshot (got %d)",
+			b.Meta.Name, b.Spec.UpstreamName, len(b.Spec.Snapshots))
 	}
 	return nil
 }

@@ -37,7 +37,7 @@ import (
 
 // Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.
 //
-// upstreamModel is the resolved upstream model name (snapshot.Upstream());
+// upstreamModel is the model name the hop is sent (plan.RouteHop.UpstreamModel);
 // stream reports whether the caller requested a streamed response. Most
 // shapes ignore both (model + stream live in the request body), but shapes
 // that encode them in the URL path — Gemini's generateContent vs
@@ -110,10 +110,9 @@ type Request struct {
 
 	ModelName string
 
-	// UpstreamModel is the resolved upstream wire name (routing's
-	// Plan.UpstreamModel() — the snapshot's upstream name, or the alias
-	// verbatim override when resolution matched a declared alias). Passed
-	// to Adapter.Call for shapes that put the model in the URL path.
+	// UpstreamModel is the model name Body carries. Adapter.Call, for
+	// shapes that put the model in the URL path, gets the hop's own
+	// plan.RouteHop.UpstreamModel instead when the hop has one.
 	UpstreamModel string
 
 	// Stream reports whether the caller requested a streamed response, passed

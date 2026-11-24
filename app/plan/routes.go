@@ -48,7 +48,7 @@ type Route struct {
 	Model    *model.Model
 	Snapshot *model.Snapshot
 	Provider string
-	// UpstreamModel is the wire model name: the alias's override when one matched, else the snapshot's upstream name. ResolvedVia tags an alias match for usage rows.
+	// UpstreamModel is the first hop's UpstreamModel; with no hop, the alias's override when one matched, else the snapshot's upstream name. ResolvedVia tags an alias match for usage rows.
 	UpstreamModel string
 	ResolvedVia   string
 	Hops          []RouteHop
@@ -70,6 +70,8 @@ type RouteHop struct {
 	CallerN int
 	// ParamRenames are the request-body renames the host applies to the binding's wire shape, resolved with the route so a request reads them without a lookup.
 	ParamRenames []host.ParamRename
+	// UpstreamModel is the model name sent through this hop: the binding's upstreamName when it applies (binding.UpstreamNameFor), which wins over an alias the host does not know, else the alias's or the snapshot's name.
+	UpstreamModel string
 }
 
 // CallerCounters returns the caller rungs' counters of this hop.
@@ -284,6 +286,12 @@ func (t *RouteTable) fill(ref string) *Route {
 	r.ResolvedVia, r.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
 	if r.UpstreamModel == "" && res.Snapshot != nil {
 		r.UpstreamModel = res.Snapshot.Upstream()
+	}
+	for i := range r.Hops {
+		r.Hops[i].UpstreamModel = r.Hops[i].Binding.UpstreamNameFor(r.Model, r.UpstreamModel)
+	}
+	if len(r.Hops) > 0 {
+		r.UpstreamModel = r.Hops[0].UpstreamModel
 	}
 	return r
 }

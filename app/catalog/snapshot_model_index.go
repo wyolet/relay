@@ -16,18 +16,6 @@ type snapshotRef struct {
 	HostID   string
 }
 
-// hostPinSkip names hosts whose models carry non-normalizable upstream names
-// (Bedrock ARNs, Vertex publisher paths with colons/slashes) that slug.From
-// would mangle. We skip generating host-pinned aliases for them until per-host
-// upstream-name handling lands; bare + provider-qualified addressing still
-// works for their models.
-// TODO(bedrock/vertex): drop this skip once host-specific upstream names are
-// handled in alias generation.
-var hostPinSkip = map[string]struct{}{
-	"amazon-bedrock": {},
-	"google-vertex":  {},
-}
-
 // indexModelSnapshots materializes every addressable alias for a model's
 // snapshots into the bare-name + alias indices. Providers and hosts must
 // already be indexed (build order guarantees this; reconcile clones a full
@@ -47,9 +35,6 @@ func (s *Snapshot) indexModelSnapshots(m *model.Model) {
 			}
 			h, ok := s.hostsByID[hb.Spec.HostID]
 			if !ok {
-				continue
-			}
-			if _, skip := hostPinSkip[h.Meta.Name]; skip {
 				continue
 			}
 			pinned := snapshotRef{Model: m, Snapshot: snap, HostID: hb.Spec.HostID}
