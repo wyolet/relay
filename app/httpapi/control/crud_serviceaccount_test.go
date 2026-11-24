@@ -78,6 +78,7 @@ func TestCreateServiceAccountForEitherOwner(t *testing.T) {
 		{"a project owner and its spec.projectId", `{"metadata":{"name":"ci-3","owner":{"kind":"project","id":"` + projectID + `"}},"spec":{"projectId":"` + projectID + `"}}`, project, serviceaccount.Spec{ProjectID: projectID}},
 		{"a team owner", `{"metadata":{"name":"deployer","owner":{"kind":"team","id":"` + teamID + `"}},"spec":{}}`, team, serviceaccount.Spec{TeamID: teamID}},
 		{"a team owner and a spec.teamId sent back", `{"metadata":{"name":"deployer-2","owner":{"kind":"team","id":"` + teamID + `"}},"spec":{"teamId":"` + otherID + `"}}`, team, serviceaccount.Spec{TeamID: teamID}},
+		{"a team owner and a spec.teamId that is no id", `{"metadata":{"name":"deployer-3","owner":{"kind":"team","id":"` + teamID + `"}},"spec":{"teamId":"platform"}}`, team, serviceaccount.Spec{TeamID: teamID}},
 	} {
 		w := scopeReq(t, h, "alice", http.MethodPost, "/service-accounts", tc.body)
 		if w.Code != http.StatusCreated {
@@ -121,6 +122,13 @@ func TestUpdateServiceAccountKeepsItsOwner(t *testing.T) {
 	}
 	if got := decodeServiceAccount(t, w.Body.Bytes()); got.Meta.Owner != team || got.Spec != (serviceaccount.Spec{TeamID: teamID}) {
 		t.Errorf("renamed team service account = owner %+v spec %+v, want its team kept", got.Meta.Owner, got.Spec)
+	}
+	w = scopeReq(t, h, "alice", http.MethodPut, teamPath, `{"metadata":{"name":"deployer"},"spec":{"teamId":"platform"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update sending back a spec.teamId that is no id = %d %s, want 200: the field is ignored on write", w.Code, w.Body)
+	}
+	if got := decodeServiceAccount(t, w.Body.Bytes()); got.Spec.TeamID != teamID {
+		t.Errorf("spec.teamId after an update sending another = %q, want the team's id", got.Spec.TeamID)
 	}
 
 	inUse := func(name, kind string) string {

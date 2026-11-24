@@ -68,6 +68,7 @@ func TestValidate(t *testing.T) {
 		{"owner id drifted from projectId", meta.Owner{Kind: meta.OwnerProject, ID: otherID}, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner.id "0195f8a0-0000-7000-8000-000000000002" does not match spec.projectId "0195f8a0-0000-7000-8000-000000000001"`},
 		{"team owner", team, Spec{TeamID: teamID}, ""},
 		{"team owner with teamId left to be stamped", team, Spec{}, ""},
+		{"team owner with a teamId sent back that is no id", team, Spec{TeamID: "platform"}, ""},
 		{"team owner and a projectId", team, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner is team "0195f8a0-0000-7000-8000-000000000003" but spec.projectId names project "0195f8a0-0000-7000-8000-000000000001"; a service account has one owner`},
 		{"team owner without an id", meta.Owner{Kind: meta.OwnerTeam}, Spec{}, `serviceaccount "indexer": a team owner needs metadata.owner.id`},
 		{"user owner", meta.Owner{Kind: meta.OwnerUser, ID: projectID}, Spec{ProjectID: projectID}, `serviceaccount "indexer": owner.kind must be project or team, got "user"`},

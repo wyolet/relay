@@ -25,7 +25,7 @@ type Spec struct {
 	ProjectID string `json:"projectId,omitempty" yaml:"projectId,omitempty" validate:"omitempty,uuid" doc:"Id of the owning project when metadata.owner is a project. A create that names only spec.projectId is owned by that project."`
 
 	// TeamID mirrors Meta.Owner.ID when the owner is a Team.
-	TeamID string `json:"teamId,omitempty" yaml:"teamId,omitempty" validate:"omitempty,uuid" readOnly:"true" doc:"Id of the owning team when metadata.owner is a team. Mirrors the owner; ignored on write."`
+	TeamID string `json:"teamId,omitempty" yaml:"teamId,omitempty" readOnly:"true" doc:"Id of the owning team when metadata.owner is a team. Mirrors the owner; ignored on write."`
 
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference with the service account's keys (403 subject_disabled). Omitted means true."`
