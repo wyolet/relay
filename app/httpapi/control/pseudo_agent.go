@@ -61,6 +61,9 @@ func registerPseudoAgent(api huma.API, d Deps, protect huma.Middlewares) {
 	}, func(ctx context.Context, in *pseudoAgentInput) (*pseudoAgentOutput, error) {
 		var reads pseudo.AgentReads
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
+			if err := pseudo.CheckAgent(in.Body); err != nil {
+				return nil, err
+			}
 			var err error
 			if reads, err = d.boundTo(tx).agentReads(ctx, in.Body); err != nil {
 				return nil, err
@@ -90,7 +93,7 @@ func registerPseudoAgent(api huma.API, d Deps, protect huma.Middlewares) {
 
 // agentReads reads what expanding body needs, refusing a listed pool a policy of the owner may not link, or an account the caller may not see, with its pointer: the listed accounts, their hosts' names and which take no key, the owner's shares, the owner's name, the bound policy's name, and the names taken. It records for the plan check what the agent will draw on: those accounts and hosts, the listed or bound policy's pools, and their accounts and host keys.
 func (d Deps) agentReads(ctx context.Context, body pseudo.Agent) (pseudo.AgentReads, error) {
-	owner := body.Metadata.Owner
+	owner := body.Metadata.Owner.Owner()
 	c := refs(d)
 	in := pseudo.AgentReads{
 		Accounts:     map[string]*account.Account{},
@@ -117,8 +120,10 @@ func (d Deps) agentReads(ctx context.Context, body pseudo.Agent) (pseudo.AgentRe
 			return in, err
 		}
 		receiver := account.Receiver{Kind: account.ReceiverKind(owner.Kind), ID: owner.ID}
+		sees := sharerAuthz{Authorizer: d.Authz, d: d}
 		for _, s := range all {
-			if s.IsShared() && s.Meta.Owner == owner && s.Receiver() == receiver {
+			// A share the caller may not see is not used: whether the owner holds one must not show in the answer.
+			if s.IsShared() && s.Meta.Owner == owner && s.Receiver() == receiver && sees.Visible(ctx, "account", s.Meta.ID, s.Meta.Owner) {
 				in.Shares[s.Spec.SourceAccountID] = s
 			}
 		}

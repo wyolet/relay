@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
 	"slices"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/audit"
@@ -116,10 +119,26 @@ func pseudoResponses(api huma.API, conflicts string) map[string]*huma.Response {
 	}
 }
 
-// documentPlanIssue documents the 422 of the pseudo route at path once it is registered: huma writes its own 422 for a body over the operation's responses.
+// documentPlanIssue documents the answers of the pseudo route at path once it is registered, over what huma writes for its errors list: every refusal carries the pseudo refusal body, and a dry run answers 200 with the body a write answers 201 with.
 func documentPlanIssue(api huma.API, path string) {
-	if item := api.OpenAPI().Paths[path]; item != nil && item.Post != nil {
-		item.Post.Responses["422"] = jsonResponse(api, "plan_issue: every row passes its own checks, but together they would raise errors in the plans that are not there now; issues lists them, each with the pointer of the part of the body it came from. Nothing was written. Also a body that does not match the schema, with error.details.", pseudoRefusal{})
+	item := api.OpenAPI().Paths[path]
+	if item == nil || item.Post == nil {
+		return
+	}
+	responses := item.Post.Responses
+	for code, desc := range map[string]string{
+		"400": "The body, or a row it makes, breaks a rule the schema cannot express; error.message says which and pointer names the part of the body.",
+		"403": "A row's own grant refuses it, as its own create call would; pointer names the part of the body it came from.",
+		"404": "The body names a row the caller may not see; pointer names where.",
+		"422": "plan_issue: every row passes its own checks, but together they would raise errors in the plans that are not there now, or a lane they make or bind would refuse every request; issues lists them, each with the pointer of the part of the body it came from. Nothing was written. Also a body that does not match the schema, with error.details.",
+		"500": "The write failed on the server; nothing was written.",
+	} {
+		responses[code] = jsonResponse(api, desc, pseudoRefusal{})
+	}
+	if made := responses["201"]; made != nil {
+		dry := *made
+		dry.Description = "dryRun=true: what the write would make, ids included and key plaintexts left out. Nothing was written."
+		responses["200"] = &dry
 	}
 }
 
@@ -207,14 +226,38 @@ func (d Deps) runPseudo(ctx context.Context, expand pseudo.ExpandFunc, dryRun bo
 	writer := pseudo.Writer{Stores: d.Stores, Check: d.PlanCheck, View: d.PlanView, Outside: outside}
 	rows, err := writer.Run(ctx, expand, w.create, dryRun)
 	if err != nil {
-		return nil, nil, d.pseudoError(ctx, err)
+		err = d.pseudoError(ctx, err)
 	}
-	if dryRun {
+	switch {
+	case dryRun:
 		audit.Discard(ctx)
-	} else {
+	case err != nil:
+		audit.RecordEach(ctx, []audit.Row{refusedRow(ctx, err)})
+	default:
 		audit.RecordEach(ctx, w.audit)
 	}
+	if err != nil {
+		return nil, nil, err
+	}
 	return w, rows, nil
+}
+
+// refusedRow is the one audit row of a refused pseudo request: it names the request (pseudo-agents.create, from the route) rather than the row it got to, since nothing was written; a refused grant is denied, any other refusal an error.
+func refusedRow(ctx context.Context, refused error) audit.Row {
+	code := http.StatusInternalServerError
+	var se huma.StatusError
+	if errors.As(refused, &se) {
+		code = se.GetStatus()
+	}
+	plural := "pseudo"
+	if rc := chi.RouteContext(ctx); rc != nil && rc.RoutePattern() != "" {
+		plural = path.Base(rc.RoutePattern())
+	}
+	status := audit.StatusError
+	if code == http.StatusUnauthorized || code == http.StatusForbidden {
+		status = audit.StatusDenied
+	}
+	return audit.Row{Action: plural + ".create", Resource: audit.Resource{Kind: strings.TrimSuffix(plural, "s")}, Status: status, Code: code}
 }
 
 func (w *pseudoWrite) create(ctx context.Context, tx *appcatalog.Stores, r pseudo.Row) error {
@@ -293,9 +336,11 @@ func (d Deps) createPseudoShare(ctx context.Context, share *account.Account) err
 	if err := c.Share(ctx, src, share); err != nil {
 		return refErr(err)
 	}
+	// Worded before the write: once it fails the transaction is aborted and reads nothing.
+	taken := refErr(c.ShareExists(ctx, src, share.Receiver()))
 	if err := d.Stores.Account.Upsert(ctx, share); err != nil {
 		if errors.Is(err, account.ErrShareTaken) {
-			return refErr(c.ShareExists(ctx, src, share.Receiver()))
+			return taken
 		}
 		return err
 	}
@@ -333,7 +378,8 @@ func (d Deps) pseudoError(ctx context.Context, err error) error {
 	case errors.As(err, &answered):
 		return answered
 	case errors.As(err, &ue):
-		return refusal(huma.Error500InternalServerError(ue.Error()), "")
+		slog.ErrorContext(ctx, "control: pseudo write failed and left behind what it wrote before its transaction", "left", ue.Left, "err", ue)
+		return refusal(huma.Error500InternalServerError(fmt.Sprintf("nothing was written, but removing what was written before the transaction failed: %s is left behind", strings.Join(ue.Left, ", "))), "")
 	case errors.As(err, &oe):
 		return organizationRefusal(oe)
 	case errors.As(err, &be):
@@ -360,14 +406,28 @@ func (d Deps) pseudoError(ctx context.Context, err error) error {
 	if storage.IsDuplicate(err) || errors.Is(err, directory.ErrConflict) {
 		return refusal(conflictError("another row holds a name or id this row takes: the given metadata.name, or one another change took at the same time; nothing was written"), pointer)
 	}
-	if re != nil {
-		var se huma.StatusError
-		if !errors.As(err, &se) {
-			err = mapWriteErr(re.Row.Kind, re.Row.Meta.ID, err)
-		}
+	if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		return refusal(&httpapi.APIError{
+			Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeClientCanceled, Message: "the request ended before the write did; nothing was written"},
+			HTTPStatus: statusClientClosed,
+		}, pointer)
 	}
-	return refusal(err, pointer)
+	var se huma.StatusError
+	if !errors.As(err, &se) && re != nil {
+		err = mapWriteErr(re.Row.Kind, re.Row.Meta.ID, err)
+	}
+	if errors.As(err, &se) && se.GetStatus() < http.StatusInternalServerError {
+		return refusal(err, pointer)
+	}
+	slog.ErrorContext(ctx, "control: pseudo write failed; nothing was written", "pointer", pointer, "err", err)
+	return refusal(huma.Error500InternalServerError("the write failed on the server; nothing was written"), pointer)
 }
+
+// A request whose client went away before the write ended: no one reads the answer, but the audit row and the access log do.
+const (
+	codeClientCanceled = "client_canceled"
+	statusClientClosed = 499
+)
 
 // refusal puts err in the pseudo refusal envelope with pointer.
 func refusal(err error, pointer string) *pseudoRefusal {
