@@ -12,11 +12,12 @@ import (
 
 // PolicyCurrent is the policy a target's account is under, as the caller may see it.
 type PolicyCurrent struct {
-	Policy       RowRef        `json:"policy"       doc:"The policy."`
-	Pools        []CurrentPool `json:"pools"        doc:"The pools it links that the caller may see, in its order."`
-	HiddenPools  int           `json:"hiddenPools"  doc:"Pools it links that the caller may not see: counted, not named."`
-	Models       []string      `json:"models"       doc:"Its models; empty allows every model its pools serve."`
-	LinksNoPools bool          `json:"linksNoPools" doc:"True when it links no pool: the account uses every credential its scope reaches."`
+	Policy         RowRef        `json:"policy"       doc:"The policy."`
+	Pools          []CurrentPool `json:"pools"        doc:"The pools it links that the caller may see, in its order."`
+	HiddenPools    int           `json:"hiddenPools"  doc:"Pools it links that the caller may not see: counted, not named."`
+	Models         []string      `json:"models"       doc:"Its models; empty allows every model its pools serve."`
+	LinksNoPools   bool          `json:"linksNoPools" doc:"True when it links no pool: the account uses every credential its scope reaches."`
+	BindingEnabled bool          `json:"bindingEnabled" doc:"False when the binding holding the account is disabled: a disabled binding binds nothing, so this policy does not govern the account now and the account is served as if in no binding. A change made through the form binds the account in an enabled binding (case copy)."`
 }
 
 // CurrentPool is one pool the policy links.
@@ -102,5 +103,8 @@ func (d Deps) readPrefill(ctx context.Context, t pseudo.Target) (pseudo.PolicyCa
 		labelled[p.Meta.ID] = true
 	}
 	cur, err := d.policyCurrent(ctx, in.Policy, labelled)
+	if cur != nil {
+		cur.BindingEnabled = in.Held == nil || in.Held.IsEnabled()
+	}
 	return c, cur, err
 }

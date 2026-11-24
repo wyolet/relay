@@ -88,6 +88,9 @@ func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
 	if p := in.Policy.Policy; p != nil {
 		poolIDs, kept = keepHidden(p.Spec.PoolIDs, poolIDs, in.HiddenPools)
 	}
+	if a.EveryCredential && kept > 0 {
+		return AccessChange{}, &HiddenPoolsError{Count: kept}
+	}
 	models := slices.Clone(a.Models)
 	c, err := ChangePolicy(in.Policy, func(s *policy.Spec) { s.PoolIDs, s.Models = poolIDs, models }, "/spec/access")
 	if err != nil {
@@ -101,6 +104,13 @@ func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
 	}
 	c.Rows = rows
 	return AccessChange{PolicyChange: c, HiddenPoolsKept: kept}, nil
+}
+
+// HiddenPoolsError refuses everyCredential on a policy that links pools the caller may not see: the policy keeps those links, so it would reach only them, the opposite of every credential.
+type HiddenPoolsError struct{ Count int }
+
+func (e *HiddenPoolsError) Error() string {
+	return fmt.Sprintf("the policy links %d pools you may not see, set by an admin of a scope above; it keeps them, so everyCredential would leave the account reaching only those. Ask that admin to unlink them, or name the pools to use", e.Count)
 }
 
 // keepHidden is named with each pool of current that hidden holds put back at its index in current (or last, past the end), and how many it put back.

@@ -27,6 +27,9 @@ const codePolicySetAbove = "policy_set_above"
 // codeLinksNotCarried refuses a copy that would carry links the target's scope may not link.
 const codeLinksNotCarried = "links_not_carried"
 
+// codeHiddenPoolsKept refuses everyCredential on a policy whose pool links the caller may not see would stay and narrow it to them.
+const codeHiddenPoolsKept = "hidden_pools_kept"
+
 // policyReads reads what the policy step needs for target t.
 func (d Deps) policyReads(ctx context.Context, t pseudo.Target) (pseudo.PolicyReads, error) {
 	in := pseudo.PolicyReads{Names: d.pseudoNamer(), NewID: ids.New}
@@ -245,11 +248,14 @@ func (d Deps) scopeOf(ctx context.Context, o meta.Owner) pseudo.Scope {
 func policyStepError(err error) error {
 	var ae *pseudo.AboveError
 	var ue *pseudo.UncarriedError
+	var he *pseudo.HiddenPoolsError
 	switch {
 	case errors.As(err, &ae):
 		return refusal(&httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: codePolicySetAbove, Message: ae.Error()}, HTTPStatus: http.StatusForbidden}, "/spec/target")
 	case errors.As(err, &ue):
 		return refusal(&httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeLinksNotCarried, Message: ue.Error()}, HTTPStatus: http.StatusBadRequest}, "/spec/target")
+	case errors.As(err, &he):
+		return refusal(&httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeHiddenPoolsKept, Message: he.Error()}, HTTPStatus: http.StatusConflict}, "/spec/access/everyCredential")
 	}
 	return err
 }

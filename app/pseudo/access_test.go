@@ -153,7 +153,6 @@ func TestExpandAccess_KeepsHiddenPools(t *testing.T) {
 		}{
 			{"one pool named", AgentAccess{PoolIDs: []string{plainID}}, []string{plainID, hiddenID}},
 			{"pools reordered", AgentAccess{PoolIDs: []string{labelledBID, plainID, labelledAID}}, []string{labelledBID, hiddenID, plainID, labelledAID}},
-			{"every credential", AgentAccess{EveryCredential: true}, []string{hiddenID}},
 		} {
 			t.Run(string(c)+"/"+tc.name, func(t *testing.T) {
 				w := newAccessWorld()
@@ -169,6 +168,22 @@ func TestExpandAccess_KeepsHiddenPools(t *testing.T) {
 					t.Errorf("case %s, kept %d, pools (-want +got):\n%s", got.Case, got.HiddenPoolsKept, diff)
 				}
 			})
+		}
+	}
+}
+
+// everyCredential on a policy that keeps pool links the caller may not see would reach only those: refused with their count, in place and in a copy.
+func TestExpandAccess_EveryCredentialWithHiddenPools(t *testing.T) {
+	const hiddenID = "01a20b40-0000-7000-8000-0000000000a9"
+	for _, c := range []PolicyCase{CaseOwn, CaseCopy} {
+		w := newAccessWorld()
+		w.own.Spec.PoolIDs = []string{plainID, hiddenID}
+		in := w.reads()
+		in.HiddenPools = map[string]bool{hiddenID: true}
+		in.Policy.Alone = c == CaseOwn
+		_, err := ExpandAccess(accessBody(&AgentAccess{EveryCredential: true}), in)
+		if diff := cmp.Diff(&HiddenPoolsError{Count: 1}, err); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", c, diff)
 		}
 	}
 }

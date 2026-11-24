@@ -131,7 +131,7 @@ func TestPseudoAccess_DryRunAndPrefill(t *testing.T) {
 	rec, pre := w.access(t, "bob", tgt, nil, true)
 	wantStatus(t, rec, http.StatusOK)
 	want := PseudoAccessAnswer{Case: pseudo.CaseOwn, Warnings: []PseudoIssue{}, Current: &PolicyCurrent{
-		Policy: RowRef{ID: own.Meta.ID, Name: own.Meta.Name}, HiddenPools: 1, Models: []string{"acme/m1"},
+		Policy: RowRef{ID: own.Meta.ID, Name: own.Meta.Name}, HiddenPools: 1, Models: []string{"acme/m1"}, BindingEnabled: true,
 		Pools: []CurrentPool{{ID: w.twoPool.Meta.ID, Name: w.twoPool.Meta.Name, Host: RowRef{ID: w.host.Meta.ID, Name: w.host.Meta.Name}, Accounts: []RowRef{{ID: w.teamTwoAcct.Meta.ID, Name: w.teamTwoAcct.Meta.Name}}}},
 	}}
 	if diff := cmp.Diff(want, pre); diff != "" {
