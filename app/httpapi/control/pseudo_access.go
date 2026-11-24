@@ -10,8 +10,8 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/pseudo"
-	"github.com/wyolet/relay/pkg/engine"
 )
 
 type pseudoAccessInput struct {
@@ -30,6 +30,7 @@ type PseudoAccessAnswer struct {
 	Created   []CreatedRow      `json:"created,omitempty"   doc:"Every row made, in write order."`
 	Updated   []CreatedRow      `json:"updated,omitempty"   doc:"Every row updated, in write order."`
 	Deleted   []CreatedRow      `json:"deleted,omitempty"   doc:"Every row deleted, in write order."`
+	Warnings  []PseudoIssue     `json:"warnings"            doc:"Plan warnings the rows written would raise that are not there now, on those rows (as the row carrying the warning, or the row it names). They refuse nothing; [] when none, and on the dry run without access. A row the caller may not see keeps its code and kind only."`
 }
 
 type pseudoAccessOutput struct {
@@ -55,18 +56,14 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 		out := &pseudoAccessOutput{Status: http.StatusOK}
 		if in.Body.Spec.Access == nil && in.DryRun {
 			c, cur, err := d.policyPrefill(ctx, in.Body.Spec.Target)
-			out.Body = PseudoAccessAnswer{Case: c, Current: cur}
+			out.Body = PseudoAccessAnswer{Case: c, Current: cur, Warnings: []PseudoIssue{}}
 			return out, err
-		}
-		var live *engine.View
-		if d.PlanView != nil {
-			live = d.PlanView()
 		}
 		var change pseudo.AccessChange
 		var targetID string
 		poolNames := map[string]string{}
-		ctx = pseudo.AfterCheck(ctx, func(after *engine.View) error {
-			return checkPolicyStep(live, change.Rows, targetID)(after)
+		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
+			return checkPolicyStep(change.Rows, targetID)(f)
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
 			if err := pseudo.CheckAccess(in.Body); err != nil {
@@ -83,11 +80,12 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 			change, err = pseudo.ExpandAccess(in.Body, reads)
 			return change.Rows, policyStepError(err)
 		}
-		_, rows, err := d.runPseudo(ctx, expand, in.DryRun)
+		w, rows, err := d.runPseudo(ctx, expand, in.DryRun)
 		if err != nil {
 			return nil, err
 		}
 		out.Body = accessAnswer(change, rows, poolNames)
+		out.Body.Warnings = w.warnings
 		if !in.DryRun && len(rows) > 0 {
 			out.Status = http.StatusCreated
 		}

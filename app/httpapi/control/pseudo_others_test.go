@@ -53,11 +53,11 @@ func TestOthersUnchanged(t *testing.T) {
 					proposed[i] = plan.Deleted{Row: r.Value}
 				}
 			}
-			_, after, err := plan.NewCheck(false, time.Minute).NewIssuesAndView(t.Context(), live, nil, proposed)
+			f, err := plan.NewCheck(false, time.Minute).Find(t.Context(), live, nil, proposed)
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = othersUnchanged(live, tc.rows, a.Meta.ID)(after)
+			err = othersUnchanged(tc.rows, a.Meta.ID)(f)
 			if got := err != nil; got != tc.refused {
 				t.Fatalf("refused = %v (%v), want %v", got, err, tc.refused)
 			}
@@ -66,7 +66,11 @@ func TestOthersUnchanged(t *testing.T) {
 			}
 		})
 	}
-	if err := othersUnchanged(live, edit, a.Meta.ID)(live); err != nil {
+	unchanged, err := plan.NewCheck(false, time.Minute).Find(t.Context(), live, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := othersUnchanged(edit, a.Meta.ID)(unchanged); err != nil {
 		t.Errorf("unchanged plans refused: %v", err)
 	}
 }

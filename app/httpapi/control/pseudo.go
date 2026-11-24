@@ -212,15 +212,19 @@ type pseudoWrite struct {
 	d          Deps
 	audit      []audit.Row
 	plaintexts map[string]string
+	// warnings are the new plan warnings on the rows made, as a kind's answer lists them ([] for none).
+	warnings []PseudoIssue
 }
 
 // runPseudo writes the rows expand returns in one transaction (pseudo.Writer); a dry run writes nothing and records no audit row.
 func (d Deps) runPseudo(ctx context.Context, expand pseudo.ExpandFunc, dryRun bool) (*pseudoWrite, []pseudo.Row, error) {
 	w := &pseudoWrite{d: d, plaintexts: map[string]string{}}
 	writer := pseudo.Writer{Stores: d.Stores, Check: d.PlanCheck, View: d.PlanView}
-	rows, err := writer.Run(ctx, expand, w.write, dryRun)
+	rows, warnings, err := writer.RunWithWarnings(ctx, expand, w.write, dryRun)
 	if err != nil {
 		err = d.pseudoError(ctx, err)
+	} else {
+		w.warnings = d.pseudoIssues(ctx, rows, warnings)
 	}
 	switch {
 	case dryRun:

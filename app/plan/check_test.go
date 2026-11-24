@@ -236,6 +236,29 @@ func TestCheck_ConfirmsRefusalsOnAFreshBaseline(t *testing.T) {
 	}
 }
 
+// Find answers the new warnings from the build the check makes anyway: one build when nothing refuses, and a warning the view already has is not new.
+func TestCheck_FindsNewWarningsInOneBuild(t *testing.T) {
+	b := newBasic()
+	old := b.w.pool(b.hostA)
+	old.Spec.AccountIDs = []string{b.acctB.Meta.ID}
+	h := b.w.start(t)
+	c := NewCheck(false, time.Minute)
+	var builds atomic.Int32
+	c.build = func(src Sources) (*engine.View, error) {
+		builds.Add(1)
+		return scratchView(src)
+	}
+	elsewhere := &pool.Pool{Meta: md("pool-"+seq(), system), Spec: pool.Spec{HostID: b.hostA.Meta.ID, AccountIDs: []string{b.acctB.Meta.ID}}}
+	got, err := c.Find(t.Context(), h.e.View(), nil, []any{elsewhere})
+	if err != nil || builds.Load() != 1 {
+		t.Fatalf("%v, %d builds, want 1", err, builds.Load())
+	}
+	want := Findings{Warnings: []engine.Issue{{Severity: engine.SeverityWarning, Code: IssueHostMismatch, Source: engine.Ref{Kind: KindPool, ID: elsewhere.Meta.ID}, Target: engine.Ref{Kind: KindAccount, ID: b.acctB.Meta.ID}, Field: "spec.accountIds[0]"}}}
+	if diff := cmp.Diff(want, got, ignoreMessage, cmpopts.IgnoreFields(Findings{}, "Result"), cmpopts.IgnoreUnexported(Findings{})); diff != "" {
+		t.Errorf("findings (-want +got):\n%s", diff)
+	}
+}
+
 // No controller writes to the input rows the scratch build shares with the live view.
 func TestCheck_LeavesInputRowsAsTheyWere(t *testing.T) {
 	b := newBasic()
@@ -331,17 +354,28 @@ func TestCheck_DeletedRow(t *testing.T) {
 	}
 }
 
-// The view a check answers is the result: a deleted row is absent, a proposed one present.
-func TestCheck_AnswersTheResult(t *testing.T) {
+// The views a check answers: the result lacks a deleted row and holds a proposed one; the baseline, built from the same rows and not the live view, is the other way round.
+func TestCheck_AnswersTheResultAndBaseline(t *testing.T) {
 	b := newBasic()
 	h := b.w.start(t)
 	added := &pool.Pool{Meta: md("pool-"+seq(), system), Spec: pool.Spec{HostID: b.hostA.Meta.ID, CredentialIDs: []string{b.a1.Meta.ID}}}
-	_, v, err := NewCheck(false, time.Minute).NewIssuesAndView(t.Context(), h.e.View(), nil, []any{added, Deleted{Row: b.acctB}})
+	f, err := NewCheck(false, time.Minute).Find(t.Context(), h.e.View(), nil, []any{added, Deleted{Row: b.acctB}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if engine.Get[pool.Pool](v, added.Meta.ID) == nil || engine.Get[account.Account](v, b.acctB.Meta.ID) != nil {
-		t.Errorf("result holds the pool: %v, the deleted account: %v", engine.Get[pool.Pool](v, added.Meta.ID) != nil, engine.Get[account.Account](v, b.acctB.Meta.ID) != nil)
+	base, err := f.Baseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type holds struct{ pool, account bool }
+	of := func(v *engine.View) holds {
+		return holds{engine.Get[pool.Pool](v, added.Meta.ID) != nil, engine.Get[account.Account](v, b.acctB.Meta.ID) != nil}
+	}
+	if diff := cmp.Diff([]holds{{true, false}, {false, true}}, []holds{of(f.Result), of(base)}, cmp.AllowUnexported(holds{})); diff != "" {
+		t.Errorf("result, baseline (-want +got):\n%s", diff)
+	}
+	if base == h.e.View() {
+		t.Error("the baseline is the live view")
 	}
 }
 

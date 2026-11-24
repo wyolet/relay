@@ -128,7 +128,7 @@ func TestPseudoAccess_DryRunAndPrefill(t *testing.T) {
 
 	rec, pre := w.access(t, "bob", tgt, nil, true)
 	wantStatus(t, rec, http.StatusOK)
-	want := PseudoAccessAnswer{Case: pseudo.CaseOwn, Current: &PolicyCurrent{
+	want := PseudoAccessAnswer{Case: pseudo.CaseOwn, Warnings: []PseudoIssue{}, Current: &PolicyCurrent{
 		Policy: RowRef{ID: own.Meta.ID, Name: own.Meta.Name}, HiddenPools: 1, Models: []string{"acme/m1"},
 		Pools: []CurrentPool{{ID: w.twoPool.Meta.ID, Name: w.twoPool.Meta.Name, Host: RowRef{ID: w.host.Meta.ID, Name: w.host.Meta.Name}, Accounts: []RowRef{{ID: w.teamTwoAcct.Meta.ID, Name: w.teamTwoAcct.Meta.Name}}}},
 	}}
@@ -295,7 +295,7 @@ func TestPseudoAccess_NothingToWrite(t *testing.T) {
 	before := w.rowCounts(t)
 	rec, out := w.access(t, "bob", target("team", w.teamTwo.Meta.ID), map[string]any{"everyCredential": true}, false)
 	wantStatus(t, rec, http.StatusOK)
-	if diff := cmp.Diff(PseudoAccessAnswer{Case: pseudo.CaseNone, Unchanged: true}, out); diff != "" {
+	if diff := cmp.Diff(PseudoAccessAnswer{Case: pseudo.CaseNone, Unchanged: true, Warnings: []PseudoIssue{}}, out); diff != "" {
 		t.Errorf("answer (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {

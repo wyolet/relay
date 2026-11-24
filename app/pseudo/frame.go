@@ -94,20 +94,27 @@ type Writer struct {
 
 // Run takes the check slot (plan.Check.Hold) before its transaction begins and frees it once the transaction ended, so one write is open at a time and a writer that waits holds no connection; one that waits past the bound answers plan.ErrCheckTimeout. It expands, writes each step in order, checks the result against the plans and commits; a dry run does all of it but the commit. It returns the steps as written, also on a dry run. A refused step is a *RowError, a body that expands to nothing a *BodyError, steps the plans refuse an *IssuesError; nothing is written on any error. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created and updated and without the rows deleted. A row a step updates or deletes is laid in the baseline as first read, before any step wrote it. Once the check passed, the hook AfterCheck put on ctx is given the result.
 func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, error) {
+	rows, _, err := w.RunWithWarnings(ctx, expand, create, dryRun)
+	return rows, err
+}
+
+// RunWithWarnings is Run that also answers the warnings the plan check found new on the rows created, updated or deleted (as their source or target), from the same build; they refuse nothing.
+func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, []engine.Issue, error) {
 	if w.Check == nil || w.View == nil {
-		return nil, ErrNoPlans
+		return nil, nil, ErrNoPlans
 	}
 	live := w.View()
 	if live == nil || live.Gen() == 0 {
-		return nil, ErrNoPlans
+		return nil, nil, ErrNoPlans
 	}
 	ctx, release, err := w.Check.Hold(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer release()
 	ctx, read := withReads(ctx)
 	var rows []Row
+	var warnings []engine.Issue
 	err = w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
 		var err error
 		if rows, err = expand(ctx, tx); err != nil {
@@ -126,15 +133,20 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 				changed[r.Meta.ID] = true
 			}
 		}
-		issues, result, err := w.Check.NewIssuesAndView(ctx, live, read.except(created, changed), proposal(rows))
+		found, err := w.Check.Find(ctx, live, read.except(created, changed), proposal(rows))
 		if err != nil {
 			return err
 		}
-		if len(issues) > 0 {
-			return &IssuesError{Rows: rows, Issues: issues}
+		if len(found.Errors) > 0 {
+			return &IssuesError{Rows: rows, Issues: found.Errors}
 		}
-		if after, _ := ctx.Value(afterCheckKey{}).(func(*engine.View) error); after != nil {
-			if err := after(result); err != nil {
+		for _, i := range found.Warnings {
+			if ours(created, changed, i.Source.ID) || ours(created, changed, i.Target.ID) {
+				warnings = append(warnings, i)
+			}
+		}
+		if after, _ := ctx.Value(afterCheckKey{}).(func(plan.Findings) error); after != nil {
+			if err := after(found); err != nil {
 				return err
 			}
 		}
@@ -144,12 +156,12 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 		return nil
 	})
 	if errors.Is(err, errDryRun) {
-		return rows, nil
+		return rows, warnings, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return rows, nil
+	return rows, warnings, nil
 }
 
 // Values is the rows' values, in order.
@@ -172,9 +184,12 @@ func proposal(rows []Row) []any {
 	return out
 }
 
+// ours reports whether id is a row a step creates, updates or deletes.
+func ours(created, changed map[string]bool, id string) bool { return created[id] || changed[id] }
+
 type afterCheckKey struct{}
 
-// AfterCheck returns ctx carrying fn for the pseudo write run under it: once the plan check passed, fn is given the view of the plans with the steps applied, before the commit; an error from fn refuses the write. A kind reads there what its rows make of the plans.
-func AfterCheck(ctx context.Context, fn func(*engine.View) error) context.Context {
+// AfterCheck returns ctx carrying fn for the pseudo write run under it: once the plan check passed, fn is given what it found, with the view of the plans with the steps applied and its baseline, before the commit and while the check's slot is held; an error from fn refuses the write. A kind reads there what its rows make of the plans.
+func AfterCheck(ctx context.Context, fn func(plan.Findings) error) context.Context {
 	return context.WithValue(ctx, afterCheckKey{}, fn)
 }

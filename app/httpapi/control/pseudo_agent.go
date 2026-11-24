@@ -30,6 +30,7 @@ type PseudoAgentCreated struct {
 	Pools          []RowRef        `json:"pools"            doc:"The pools made, one per host of access.accountIds."`
 	Shares         []RowRef        `json:"shares"           doc:"The shares made of accounts the owner did not reach."`
 	Key            *PseudoAgentKey `json:"key,omitempty"    doc:"The key; absent when spec.key was omitted."`
+	Warnings       []PseudoIssue   `json:"warnings"         doc:"Plan warnings the rows made would raise that are not there now, on those rows (as the row carrying the warning, or the row it names), such as model_ref_blocked for a model a policy above excludes. They refuse nothing; [] when none. A row the caller may not see keeps its code and kind only."`
 }
 
 // PseudoAgentKey is the service account's first key.
@@ -75,6 +76,7 @@ func registerPseudoAgent(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, err
 		}
 		out := &pseudoAgentOutput{Status: http.StatusCreated, Body: agentCreated(rows, in.Body.Spec.PolicyID, reads.PolicyName)}
+		out.Body.Warnings = w.warnings
 		if in.DryRun {
 			out.Status = http.StatusOK
 			return out, nil

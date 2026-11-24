@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/meta"
@@ -166,8 +167,8 @@ func TestWriter_DeleteStep(t *testing.T) {
 func TestWriter_AfterCheck(t *testing.T) {
 	fw := newFrameWorld(t)
 	var seen bool
-	ctx := AfterCheck(t.Context(), func(v *engine.View) error {
-		seen = engine.Get[key.Key](v, fw.good.Meta.ID) != nil
+	ctx := AfterCheck(t.Context(), func(f plan.Findings) error {
+		seen = engine.Get[key.Key](f.Result, fw.good.Meta.ID) != nil
 		return nil
 	})
 	tx := &fakeTx{}
@@ -175,7 +176,7 @@ func TestWriter_AfterCheck(t *testing.T) {
 		t.Fatalf("error %v, key seen %v, committed %v", err, seen, tx.committed())
 	}
 	refused := errors.New("no")
-	ctx = AfterCheck(t.Context(), func(*engine.View) error { return refused })
+	ctx = AfterCheck(t.Context(), func(plan.Findings) error { return refused })
 	tx = &fakeTx{}
 	if _, err := fw.writer(tx).Run(ctx, expandTo(fw.good), createAll, false); !errors.Is(err, refused) || tx.committed() {
 		t.Fatalf("error %v, committed %v; want the hook's refusal", err, tx.committed())
@@ -214,6 +215,34 @@ func TestWriter_WaitsForTheSlotBeforeItsTransaction(t *testing.T) {
 	release()
 	if _, err := w.Run(t.Context(), expandTo(fw.good), createAll, false); err != nil || !tx.committed() {
 		t.Fatalf("once the slot is free: %v, transactions %v", err, tx.answered)
+	}
+}
+
+// The warnings answered are those new on the rows written; a warning an untouched row already has is not listed, and a clean write answers none.
+func TestWriter_Warnings(t *testing.T) {
+	w := &plantest.World{}
+	hostA, hostB := w.Host("a", "http://a.invalid"), w.Host("b", "http://b.invalid")
+	atB := w.Account(hostB)
+	w.Credential(hostB, atB, plantest.System, "sk-b")
+	old := w.Pool(hostA)
+	old.Spec.AccountIDs = []string{atB.Meta.ID}
+	plans := w.Load(t)
+	writer := Writer{Stores: &fakeTx{}, Check: plan.NewCheck(false, time.Minute), View: plans.Engine.View}
+	ours := &pool.Pool{Meta: meta.Metadata{ID: meta.NewID(), Name: "ours"}, Spec: pool.Spec{HostID: hostA.Meta.ID, AccountIDs: []string{atB.Meta.ID}}}
+	row := Row{Kind: "pool", Pointer: "/spec/access/accountIds", Meta: &ours.Meta, Value: ours}
+
+	_, got, err := writer.RunWithWarnings(t.Context(), expandTo(row), createAll, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []engine.Issue{{Severity: engine.SeverityWarning, Code: plan.IssueHostMismatch, Source: engine.Ref{Kind: plan.KindPool, ID: ours.Meta.ID}, Target: engine.Ref{Kind: plan.KindAccount, ID: atB.Meta.ID}, Field: "spec.accountIds[0]"}}
+	if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(engine.Issue{}, "Message")); diff != "" {
+		t.Errorf("warnings (-want +got):\n%s", diff)
+	}
+
+	clean := &pool.Pool{Meta: meta.Metadata{ID: meta.NewID(), Name: "clean"}, Spec: pool.Spec{HostID: hostB.Meta.ID, AccountIDs: []string{atB.Meta.ID}}}
+	if _, got, err := writer.RunWithWarnings(t.Context(), expandTo(Row{Kind: "pool", Meta: &clean.Meta, Value: clean}), createAll, true); err != nil || len(got) != 0 {
+		t.Errorf("a clean write: %v %v, want no warning", got, err)
 	}
 }
 

@@ -31,6 +31,7 @@ type PseudoLimitsAnswer struct {
 	Created        []CreatedRow      `json:"created,omitempty"        doc:"Every row made, in write order."`
 	Updated        []CreatedRow      `json:"updated,omitempty"        doc:"Every row updated, in write order."`
 	Deleted        []CreatedRow      `json:"deleted,omitempty"        doc:"Every row deleted, in write order."`
+	Warnings       []PseudoIssue     `json:"warnings"                 doc:"Plan warnings the rows written would raise that are not there now, on those rows (as the row carrying the warning, or the row it names). They refuse nothing; [] when none, and on the dry run without a limit. A row the caller may not see keeps its code and kind only."`
 }
 
 type pseudoLimitsOutput struct {
@@ -56,23 +57,24 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 		s := in.Body.Spec
 		if s.Budget == nil && s.RateLimit == nil && in.DryRun {
 			c, cur, err := d.policyPrefill(ctx, s.Target)
-			out.Body = PseudoLimitsAnswer{Case: c, Current: cur}
+			out.Body = PseudoLimitsAnswer{Case: c, Current: cur, Warnings: []PseudoIssue{}}
 			return out, err
-		}
-		var live *engine.View
-		if d.PlanView != nil {
-			live = d.PlanView()
 		}
 		var change pseudo.LimitsChange
 		var targetID string
 		var unpriced []string
-		ctx = pseudo.AfterCheck(ctx, func(after *engine.View) error {
-			if err := checkPolicyStep(live, change.Rows, targetID)(after); err != nil {
+		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
+			if err := checkPolicyStep(change.Rows, targetID)(f); err != nil {
 				return err
 			}
-			if s.Budget != nil {
-				unpriced = unpricedModels(live, after, targetID)
+			if s.Budget == nil {
+				return nil
 			}
+			base, err := f.Baseline()
+			if err != nil {
+				return err
+			}
+			unpriced = unpricedModels(base, f.Result, targetID)
 			return nil
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
@@ -87,11 +89,11 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 			change, err = pseudo.ExpandLimits(in.Body, reads)
 			return change.Rows, policyStepError(err)
 		}
-		_, rows, err := d.runPseudo(ctx, expand, in.DryRun)
+		w, rows, err := d.runPseudo(ctx, expand, in.DryRun)
 		if err != nil {
 			return nil, err
 		}
-		out.Body = PseudoLimitsAnswer{Case: change.Case, UnpricedModels: unpriced, Created: stepRows(rows, pseudo.OpCreate), Updated: stepRows(rows, pseudo.OpUpdate), Deleted: stepRows(rows, pseudo.OpDelete)}
+		out.Body = PseudoLimitsAnswer{Case: change.Case, UnpricedModels: unpriced, Created: stepRows(rows, pseudo.OpCreate), Updated: stepRows(rows, pseudo.OpUpdate), Deleted: stepRows(rows, pseudo.OpDelete), Warnings: w.warnings}
 		if p := change.Policy; p != nil {
 			ref := rowRef(&p.Meta)
 			out.Body.Policy = &ref
@@ -110,9 +112,9 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 	documentPlanIssue(api, "/pseudo-limits")
 }
 
-// unpricedModels lists, as provider/model, the models account accountID reaches in live that in after it may not use for want of pricing under a budget.
-func unpricedModels(live, after *engine.View, accountID string) []string {
-	now := plan.ReachOf(live, accountID, nil)
+// unpricedModels lists, as provider/model, the models account accountID reaches in the baseline that in after it may not use for want of pricing under a budget.
+func unpricedModels(baseline, after *engine.View, accountID string) []string {
+	now := plan.ReachOf(baseline, accountID, nil)
 	then := plan.ReachOf(after, accountID, nil)
 	if now == nil || then == nil {
 		return []string{}

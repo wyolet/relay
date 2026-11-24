@@ -27,8 +27,12 @@ import (
 	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/auth/apikey"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/engine/cell"
 	"github.com/wyolet/relay/pkg/ids"
@@ -593,6 +597,52 @@ func TestPseudoAgent_ShareTakenMeanwhile(t *testing.T) {
 	before["account"]++
 	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
 		t.Errorf("rows other than the share made meanwhile (-want +got):\n%s", diff)
+	}
+}
+
+// A model the team's policy excludes is still made, and the answer says so: model_ref_blocked on the agent's policy, on the dry run and on the write alike. A request that raises no warning answers [].
+func TestPseudoAgent_Warnings(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	ctx := t.Context()
+	s := w.stores
+	system := meta.Owner{Kind: meta.OwnerSystem}
+	for _, name := range []string{"prov-a", "prov-b"} {
+		p := &provider.Provider{Meta: meta.Metadata{ID: ids.New(), Name: name, Owner: system}}
+		must(t, "provider", s.Provider.Upsert(ctx, p))
+		m := &model.Model{Meta: meta.Metadata{ID: ids.New(), Name: "m-" + name, Owner: meta.Owner{Kind: meta.OwnerProvider, ID: p.Meta.ID}}, Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m-" + name}}, Pointer: "m-" + name}}
+		must(t, "model", s.Model.Upsert(ctx, m))
+		must(t, "binding", s.Binding.Upsert(ctx, &binding.Binding{Meta: meta.Metadata{ID: ids.New(), Name: "m-" + name + "-on-share-host", Owner: system}, Spec: binding.Spec{ModelID: m.Meta.ID, HostID: w.host.Meta.ID, Adapter: adapters.OpenAI}}))
+	}
+	two := meta.Owner{Kind: meta.OwnerTeam, ID: w.teamTwo.Meta.ID}
+	teamPolicy := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "two-only-a", Owner: two}, Spec: policy.Spec{Models: []string{"prov-a"}}}
+	must(t, "team policy", s.Policy.Upsert(ctx, teamPolicy))
+	teamAcct, err := s.Account.EnsureManaged(ctx, account.ForTeam(w.teamTwo.Meta.ID, w.teamTwo.Meta.Name, ""))
+	must(t, "team account", err)
+	must(t, "team binding", s.PolicyBinding.Upsert(ctx, &policybinding.PolicyBinding{Meta: meta.Metadata{ID: ids.New(), Name: "two-only-a", Owner: two}, Spec: policybinding.Spec{PolicyID: teamPolicy.Meta.ID, AccountIDs: []string{teamAcct}}}))
+	must(t, "reload", w.cat.Reload(ctx))
+	w.loadPlans(t)
+
+	blocked := w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.teamTwoAcct.Meta.ID}, "models": []string{"prov-b"}}})
+	for _, dry := range []bool{true, false} {
+		rec, out := w.post(t, "bob", blocked, dry)
+		if rec.Code >= 300 {
+			t.Fatalf("dry run %v: %d %s", dry, rec.Code, rec.Body)
+		}
+		var got []string
+		for _, i := range out.Warnings {
+			got = append(got, i.Code+" "+i.Kind+" "+i.Field+" "+i.Pointer)
+		}
+		if diff := cmp.Diff([]string{"model_ref_blocked policy spec.models[0] /spec/access"}, got); diff != "" {
+			t.Errorf("dry run %v: warnings (-want +got):\n%s", dry, diff)
+		}
+	}
+
+	rec := w.send("bob", http.MethodPost, "/pseudo-agents?dryRun=true", mustJSON(t, w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.teamTwoAcct.Meta.ID}}})))
+	wantStatus(t, rec, http.StatusOK)
+	var raw map[string]json.RawMessage
+	must(t, "decode", json.Unmarshal(rec.Body.Bytes(), &raw))
+	if string(raw["warnings"]) != "[]" {
+		t.Errorf("a clean request's warnings = %s, want []", raw["warnings"])
 	}
 }
 

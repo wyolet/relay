@@ -19,32 +19,34 @@ import (
 // codeOthersChanged refuses rows that would change what an account other than the target may use.
 const codeOthersChanged = "other_accounts_changed"
 
-// checkPolicyStep returns the checks of the plans after rows that the plan check does not make itself: the target's lane is not refused as a whole where it was not, also when its policy changed in place with no binding written (laneServed), and no other account's reach changed (othersUnchanged).
-func checkPolicyStep(live *engine.View, rows []pseudo.Row, targetID string) func(*engine.View) error {
-	return func(after *engine.View) error {
-		if err := laneServed(live, after, targetID); err != nil {
+// checkPolicyStep returns the checks of what the plan check found for rows that it does not make itself: the target's lane is not refused as a whole where it was not, also when its policy changed in place with no binding written (laneServed), and no other account's reach changed (othersUnchanged). Both compare the result with the baseline built from the same rows, never with the live view, which may lag.
+func checkPolicyStep(rows []pseudo.Row, targetID string) func(plan.Findings) error {
+	return func(f plan.Findings) error {
+		if err := laneServed(f, targetID); err != nil {
 			return err
 		}
-		return othersUnchanged(live, rows, targetID)(after)
+		return othersUnchanged(rows, targetID)(f)
 	}
 }
 
-// laneServed refuses a result in which the lane of account id (a team's or project's own account read as a lane directly under it) refuses every request, unless it does with the same code in live.
-func laneServed(live, after *engine.View, id string) error {
+// laneServed refuses a result in which the lane of account id (a team's or project's own account read as a lane directly under it) refuses every request, unless it does with the same code in the baseline.
+func laneServed(f plan.Findings, id string) error {
 	refused := func(v *engine.View) *plan.Refusal {
 		if r := plan.ReachOf(v, id, nil); r != nil {
 			return r.Refused
 		}
 		return nil
 	}
-	now := refused(after)
+	now := refused(f.Result)
 	if now == nil {
 		return nil
 	}
-	if live != nil {
-		if prev := refused(live); prev != nil && prev.Code == now.Code {
-			return nil
-		}
+	base, err := f.Baseline()
+	if err != nil {
+		return err
+	}
+	if prev := refused(base); prev != nil && prev.Code == now.Code {
+		return nil
 	}
 	r := refusal(&httpapi.APIError{
 		Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: codePlanIssue, Message: "the rows pass one by one but would leave the target's account refusing every request; nothing was written"},
@@ -54,12 +56,9 @@ func laneServed(live, after *engine.View, id string) error {
 	return r
 }
 
-// othersUnchanged returns the check of the plans after rows against live: every account but targetID bound to a policy the rows update, or to one linking a pool they update or delete, reaches what it reaches in live.
-func othersUnchanged(live *engine.View, rows []pseudo.Row, targetID string) func(*engine.View) error {
-	return func(after *engine.View) error {
-		if live == nil {
-			return nil
-		}
+// othersUnchanged returns the check of what the plan check found for rows: every account but targetID bound, in the result or the baseline, to a policy the rows update or to one linking a pool they update or delete reaches in the result what it reaches in the baseline. Every such account counts, those the caller may not see included; the refusal counts them and names none.
+func othersUnchanged(rows []pseudo.Row, targetID string) func(plan.Findings) error {
+	return func(f plan.Findings) error {
 		policies, pools := map[string]bool{}, map[string]bool{}
 		for _, r := range rows {
 			switch {
@@ -72,9 +71,22 @@ func othersUnchanged(live *engine.View, rows []pseudo.Row, targetID string) func
 		if len(policies) == 0 && len(pools) == 0 {
 			return nil
 		}
+		accounts := boundThrough(f.Result, policies, pools)
+		if len(accounts) == 0 || slices.Equal(accounts, []string{targetID}) {
+			return nil
+		}
+		base, err := f.Baseline()
+		if err != nil {
+			return err
+		}
+		for _, id := range boundThrough(base, policies, pools) {
+			if !slices.Contains(accounts, id) {
+				accounts = append(accounts, id)
+			}
+		}
 		changed := 0
-		for _, id := range boundThrough(live, policies, pools) {
-			if id != targetID && reachKey(plan.ReachOf(live, id, nil)) != reachKey(plan.ReachOf(after, id, nil)) {
+		for _, id := range accounts {
+			if id != targetID && reachKey(plan.ReachOf(base, id, nil)) != reachKey(plan.ReachOf(f.Result, id, nil)) {
 				changed++
 			}
 		}
