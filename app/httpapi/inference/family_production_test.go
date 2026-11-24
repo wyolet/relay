@@ -81,6 +81,7 @@ func wantCloudBody(t *testing.T, label, body, version string, sent map[string]js
 // A Messages caller byte-passes to a cloud binding of the anthropic family, any other caller goes through the shared translator; either way the hop gets its own path with the model escaped as one segment (an @ kept), a bearer token alone, and the body in its envelope.
 func TestDispatch_CloudMessagesHop(t *testing.T) {
 	stream := strings.Join(anthropicMultiDeltaStream, "")
+	// Each chat completions body is one whose translation carries the same members, so every case checks the upstream body member by member, stream included.
 	for _, tc := range []struct {
 		name    string
 		inbound adapters.Name
@@ -117,27 +118,41 @@ func TestDispatch_CloudMessagesHop(t *testing.T) {
 			if want := (wireCall{Path: cloudPrefix + cloudModel + method, Auth: "Bearer sk-cloud"}); got[0].Path != want.Path || got[0].Auth != want.Auth || got[0].APIKey != "" {
 				t.Errorf("call = %+v, want path %s, bearer auth and no x-api-key", got[0], want.Path)
 			}
-			var sent map[string]json.RawMessage
-			if bytePass {
-				sent = members(t, tc.body)
-			}
-			wantCloudBody(t, "upstream body", got[0].Body, `"vertex-2023-10-16"`, sent)
+			wantCloudBody(t, "upstream body", got[0].Body, `"vertex-2023-10-16"`, members(t, tc.body))
 		})
 	}
 }
 
-// A route from a direct Messages host to a cloud one fails over within the family, byte-pass and canonical alike, each hop sent its own path, auth and body.
+// A route between a direct Messages host and a cloud one fails over within the family in either order, byte-pass and canonical alike, each hop sent its own path, auth and body.
 func TestDispatch_CloudMessagesFailover(t *testing.T) {
-	for name, inbound := range map[string]adapters.Name{"byte-pass": adapters.Anthropic, "canonical": adapters.OpenAI} {
-		t.Run(name, func(t *testing.T) {
-			directURL, directCalls := wireUpstream(t, http.StatusInternalServerError, "application/json", downReply)
-			cloudURL, cloudCalls := wireUpstream(t, http.StatusOK, "application/json", messagesReply)
-			d, pr := buildHopsDeps(t,
-				hopFixture{host: "direct", url: directURL, adapter: adapters.Anthropic},
-				hopFixture{host: "cloud", url: cloudURL, adapter: adapters.VertexAnthropic, upstreamName: cloudModel, backend: cloudBackend})
+	for _, tc := range []struct {
+		name       string
+		inbound    adapters.Name
+		cloudFirst bool
+	}{
+		{"byte-pass, direct first", adapters.Anthropic, false},
+		{"canonical, direct first", adapters.OpenAI, false},
+		{"byte-pass, cloud first", adapters.Anthropic, true},
+		{"canonical, cloud first", adapters.OpenAI, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			directStatus, directReply, cloudStatus, cloudReply := http.StatusInternalServerError, downReply, http.StatusOK, messagesReply
+			if tc.cloudFirst {
+				directStatus, directReply, cloudStatus, cloudReply = cloudStatus, cloudReply, directStatus, directReply
+			}
+			directURL, directCalls := wireUpstream(t, directStatus, "application/json", directReply)
+			cloudURL, cloudCalls := wireUpstream(t, cloudStatus, "application/json", cloudReply)
+			hops := []hopFixture{
+				{host: "direct", url: directURL, adapter: adapters.Anthropic},
+				{host: "cloud", url: cloudURL, adapter: adapters.VertexAnthropic, upstreamName: cloudModel, backend: cloudBackend},
+			}
+			if tc.cloudFirst {
+				hops[0], hops[1] = hops[1], hops[0]
+			}
+			d, pr := buildHopsDeps(t, hops...)
 			useSpecs(&d, productionSpecs())
 
-			w := dispatch(d, pr, DispatchInput{Inbound: inbound, Body: []byte(`{"model":"test-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`), ModelName: "test-model"})
+			w := dispatch(d, pr, DispatchInput{Inbound: tc.inbound, Body: []byte(`{"model":"test-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`), ModelName: "test-model"})
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status %d: %s", w.Code, w.Body)
@@ -210,6 +225,46 @@ func TestDispatch_CloudMessagesAliasInPath(t *testing.T) {
 			}
 			if got := calls(); len(got) != 1 || got[0].Path != tc.want {
 				t.Errorf("calls = %+v, want one to %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// The cloud host has no token counter: first on the route, the count falls to the estimate; behind a direct host, the exact count does not fail over to it.
+func TestCountTokens_CloudMessagesHop(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cloudFirst bool
+		wantDirect []wireCall
+	}{
+		{"cloud first", true, nil},
+		{"cloud second", false, []wireCall{{Path: "/v1/messages/count_tokens", APIKey: "sk-direct", Body: countBody}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			directURL, directCalls := wireUpstream(t, http.StatusInternalServerError, "application/json", downReply)
+			cloudURL, cloudCalls := wireUpstream(t, http.StatusOK, "application/json", `{"input_tokens":7}`)
+			hops := []hopFixture{
+				{host: "direct", url: directURL, adapter: adapters.Anthropic},
+				{host: "cloud", url: cloudURL, adapter: adapters.VertexAnthropic, upstreamName: cloudModel, backend: cloudBackend},
+			}
+			if tc.cloudFirst {
+				hops[0], hops[1] = hops[1], hops[0]
+			}
+			d, pr := buildHopsDeps(t, hops...)
+			useSpecs(&d, productionSpecs())
+
+			w := countRequest(d, pr, strings.NewReader(countBody), nil)
+
+			if tc.cloudFirst {
+				wantTokenCount(t, w, "9", "estimated")
+			} else if w.Code == http.StatusOK {
+				t.Errorf("answer = 200 %s, want the direct host's failure", w.Body)
+			}
+			if diff := cmp.Diff(tc.wantDirect, directCalls()); diff != "" {
+				t.Errorf("direct hop (-want +got):\n%s", diff)
+			}
+			if got := cloudCalls(); len(got) != 0 {
+				t.Errorf("the cloud host was asked to count: %+v", got)
 			}
 		})
 	}
