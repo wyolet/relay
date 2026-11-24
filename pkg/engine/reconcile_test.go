@@ -205,6 +205,26 @@ func TestResyncPublishesOnlyDifferences(t *testing.T) {
 	}
 }
 
+// An event compares a version-0 row by value, as a resync does: one that reads back unchanged rebuilds nothing, a changed one does.
+func TestEventDropsAnUnchangedVersionZeroRow(t *testing.T) {
+	f := newFixture(t, engine.Options{}, nil)
+	f.resetCalls()
+	f.users.put(&user{ID: "u1", Name: "ann", TeamID: "t1"})
+	f.users.put(&user{ID: "u2", Name: "bobby", TeamID: "t1"})
+	f.e.Notify(engine.Event{Ref: engine.Ref{Kind: "user", ID: "u1"}, Op: engine.OpUpsert})
+	f.e.Notify(engine.Event{Ref: engine.Ref{Kind: "user", ID: "u2"}, Op: engine.OpUpsert})
+	f.waitGen(2)
+	if engine.Get[user](f.view(), "u2").Name != "bobby" {
+		t.Fatal("the changed row was not applied")
+	}
+	if n := f.callsOf("user-plan/u1"); n != 0 {
+		t.Fatalf("user-plan/u1 rebuilt %d times for an unchanged row", n)
+	}
+	if n := f.callsOf("user-plan/u2"); n == 0 {
+		t.Fatal("user-plan/u2 not rebuilt for a changed row")
+	}
+}
+
 func TestCloseDrainsQueue(t *testing.T) {
 	f := newFixture(t, engine.Options{Debounce: time.Hour}, nil)
 	f.teams.put(&team{ID: "t1", Name: "alpha", Limit: 77})
