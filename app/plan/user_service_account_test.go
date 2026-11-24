@@ -1,14 +1,18 @@
 package plan
 
 import (
+	"iter"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
@@ -31,36 +35,154 @@ func TestLane_UserServiceAccountClimbsItsOwnersPersonalAccount(t *testing.T) {
 	}
 }
 
-// A limit shared on the owner's personal account counts once for the user and all their bots; one counted each counts per lane, under the personal account's group.
-func TestLane_PersonalLimitsCountOnceAcrossTheUserAndTheirBots(t *testing.T) {
+// counterKey is what a counter's bucket is: its identity, its atomicity group and the lane it counts under.
+type counterKey struct{ ID, Group, Lane string }
+
+func counterKeys(cs []limits.Counter) []counterKey {
+	out := make([]counterKey, len(cs))
+	for i, c := range cs {
+		out[i] = counterKey{c.ID, c.Group, c.Lane}
+	}
+	return out
+}
+
+// remakeBot deletes bot, its account and key, and makes a service account of u again with a key, as a user would to get a fresh allowance.
+func remakeBot(h *harness, w *world, u *user.User, bot *serviceaccount.ServiceAccount, k *key.Key) *key.Key {
+	h.t.Helper()
+	del(h, KindKey, k.Meta.ID)
+	del(h, KindAccount, w.saAccount(bot).Meta.ID)
+	del(h, KindServiceAccount, bot.Meta.ID)
+	again := w.userSA(u)
+	apply(h, again)
+	apply(h, w.saAccount(again))
+	k2 := w.saKey(again)
+	apply(h, k2)
+	return k2
+}
+
+// botKeys yields the keys of a user's two service accounts, then the key of the first one deleted and made again, made only once the two have been checked.
+func botKeys(bot, other *key.Key, remake func() *key.Key) iter.Seq2[string, *key.Key] {
+	return func(yield func(string, *key.Key) bool) {
+		_ = yield("bot", bot) && yield("other bot", other) && yield("bot made again", remake())
+	}
+}
+
+// A user and every service account they own are one lane for counting: a rate limit or budget on the personal account counts in one bucket for all of them, shared or not, and a service account deleted and made again finds the bucket where it was.
+func TestLane_UserAndTheirBotsCountAsOneLaneOnThePersonalAccount(t *testing.T) {
 	b := newBasic()
 	u := b.w.user()
 	bot, other := b.w.userSA(u), b.w.userSA(u)
 	userKey, botKey, otherKey := b.w.userKey(u), b.w.saKey(bot), b.w.saKey(other)
 	shared := b.w.rateLimit(rule(ratelimit.MeterRequests, 100, time.Minute))
 	perLane := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
+	bud := b.w.budget("5")
 	each := false
-	b.w.bindPolicy(b.w.policy("alice-limits", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: shared.Meta.ID}, {RateLimitID: perLane.Meta.ID, Shared: &each}}}), b.w.personal(u))
+	b.w.bindPolicy(b.w.policy("alice-limits", policy.Spec{
+		RateLimits: []policy.RateLimitLink{{RateLimitID: shared.Meta.ID}, {RateLimitID: perLane.Meta.ID, Shared: &each}},
+		Budgets:    []policy.BudgetLink{{BudgetID: bud.Meta.ID, Shared: &each}},
+	}), b.w.personal(u))
 	h := b.w.start(t)
 
 	personal := "account:" + b.w.personal(u).Meta.ID
-	c := map[string][]limits.Counter{"user": h.keyPlan(userKey).Caller.Counters, "bot": h.keyPlan(botKey).Caller.Counters, "other bot": h.keyPlan(otherKey).Caller.Counters}
-	for name, cs := range c {
-		if len(cs) != 2 {
-			t.Fatalf("%s: %d counters, want the shared and the per-lane rule", name, len(cs))
+	want := counterKeys(h.keyPlan(userKey).Caller.Counters)
+	if len(want) != 3 || want[1].Lane != personal || want[2].Lane != personal || want[0].Group != personal {
+		t.Fatalf("the user's counters = %+v, want the shared rule, then the per-lane rule and budget in the personal lane", want)
+	}
+	for name, k := range botKeys(botKey, otherKey, func() *key.Key { return remakeBot(h, b.w, u, bot, botKey) }) {
+		if diff := cmp.Diff(want, counterKeys(h.keyPlan(k).Caller.Counters)); diff != "" {
+			t.Errorf("%s: counters (-the user's +got):\n%s", name, diff)
 		}
-		if cs[0].Group != personal || cs[1].Group != personal {
-			t.Errorf("%s: groups %s / %s, want the personal account's %s", name, cs[0].Group, cs[1].Group, personal)
+	}
+	if got := h.keyPlan(otherKey).Caller.Counters[0].Rung; got != limits.RungPersonal {
+		t.Errorf("bot counter rung %s, want personal", got)
+	}
+}
+
+// A per-lane limit or budget on a provider account the user and their bots reach, by default or through an account shared with the user, counts in one bucket for all of them.
+func TestRoute_UserAndTheirBotsCountAsOneLaneUpstream(t *testing.T) {
+	each := false
+	perLaneTier := func(w *world, a *account.Account) {
+		rl := w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
+		bud := w.budget("5")
+		w.bindPolicy(w.policy("tier-"+seq(), policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID, Shared: &each}}, Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID, Shared: &each}}}), a)
+	}
+	upstream := func(h *harness, k *key.Key, ref string) []counterKey {
+		h.t.Helper()
+		r := h.route(k, ref)
+		if r.Refused != nil || len(r.Hops) == 0 {
+			h.t.Fatalf("route %s: refused %v", ref, r.Refused)
 		}
+		return counterKeys(r.Hops[0].UpstreamCounters(0))
 	}
-	if c["user"][0].ID != c["bot"][0].ID || c["bot"][0].ID != c["other bot"][0].ID {
-		t.Errorf("shared rule: %s / %s / %s, want one bucket for the user and their bots", c["user"][0].ID, c["bot"][0].ID, c["other bot"][0].ID)
-	}
-	if c["user"][1].ID == c["bot"][1].ID || c["bot"][1].ID == c["other bot"][1].ID || c["bot"][1].Lane != "account:"+b.w.saAccount(bot).Meta.ID {
-		t.Errorf("per-lane rule: %s / %s / %s lane %q, want a bucket per lane", c["user"][1].ID, c["bot"][1].ID, c["other bot"][1].ID, c["bot"][1].Lane)
-	}
-	if c["bot"][0].Rung != limits.RungPersonal || c["user"][0].Rung != limits.RungLane {
-		t.Errorf("rungs: bot %s user %s, want personal and lane", c["bot"][0].Rung, c["user"][0].Rung)
+
+	t.Run("an organization account reached by default", func(t *testing.T) {
+		b := newBasic()
+		org := b.w.ownedAccount(b.hostA, meta.Global)
+		b.w.cred(b.hostA, org, meta.Global)
+		perLaneTier(b.w, org)
+		u := b.w.user()
+		bot, other := b.w.userSA(u), b.w.userSA(u)
+		userKey, botKey, otherKey := b.w.userKey(u), b.w.saKey(bot), b.w.saKey(other)
+		h := b.w.start(t)
+
+		want := upstream(h, userKey, "m1@host-a")
+		if len(want) != 2 || want[0].Lane != "account:"+b.w.personal(u).Meta.ID {
+			t.Fatalf("the user's upstream counters = %+v, want the per-lane rule and budget in the personal lane", want)
+		}
+		for name, k := range botKeys(botKey, otherKey, func() *key.Key { return remakeBot(h, b.w, u, bot, botKey) }) {
+			if diff := cmp.Diff(want, upstream(h, k, "m1@host-a")); diff != "" {
+				t.Errorf("%s: upstream counters (-the user's +got):\n%s", name, diff)
+			}
+		}
+	})
+
+	t.Run("an account shared with the user", func(t *testing.T) {
+		s := newSharing()
+		bob := s.w.user()
+		shared := s.shareWithUser(bob)
+		perLaneTier(s.w, s.real)
+		perLaneTier(s.w, shared)
+		p := s.w.pool(s.host)
+		p.Meta.Owner = userOwner(bob)
+		p.Spec.AccountIDs = []string{shared.Meta.ID}
+		pol := s.w.policy("bob-pool", policy.Spec{PoolIDs: []string{p.Meta.ID}})
+		pol.Meta.Owner = userOwner(bob)
+		s.w.bindPolicy(pol, s.w.personal(bob)).Meta.Owner = userOwner(bob)
+		bot, other := s.w.userSA(bob), s.w.userSA(bob)
+		bobKey, botKey, otherKey := s.w.userKey(bob), s.w.saKey(bot), s.w.saKey(other)
+		h := s.w.start(t)
+
+		want := upstream(h, bobKey, "m1")
+		if len(want) != 4 {
+			t.Fatalf("bob's upstream counters = %+v, want the real account's and the share's per-lane rule and budget", want)
+		}
+		for name, k := range botKeys(botKey, otherKey, func() *key.Key { return remakeBot(h, s.w, bob, bot, botKey) }) {
+			if diff := cmp.Diff(want, upstream(h, k, "m1")); diff != "" {
+				t.Errorf("%s: upstream counters (-bob's +got):\n%s", name, diff)
+			}
+		}
+	})
+}
+
+// Service accounts a team or a project owns keep a lane each: a per-lane limit above them counts once per service account.
+func TestLane_TeamAndProjectServiceAccountsKeepTheirOwnLanes(t *testing.T) {
+	b := newBasic()
+	inTeam, otherInTeam := b.w.teamSA(b.team), b.w.teamSA(b.team)
+	perLane := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
+	each := false
+	b.w.bindPolicy(b.w.policy("team", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: perLane.Meta.ID, Shared: &each}}}), b.w.teamAccount(b.team))
+	keys := map[*serviceaccount.ServiceAccount]*key.Key{b.sa: b.key, inTeam: b.w.saKey(inTeam), otherInTeam: b.w.saKey(otherInTeam)}
+	h := b.w.start(t)
+
+	seen := map[string]bool{}
+	for sa, k := range keys {
+		cs := h.keyPlan(k).Caller.Counters
+		if len(cs) != 1 || cs[0].Lane != "account:"+b.w.saAccount(sa).Meta.ID || seen[cs[0].ID] {
+			t.Errorf("%s: counters %+v, want one in its own lane and bucket", sa.Meta.Name, cs)
+		}
+		if len(cs) == 1 {
+			seen[cs[0].ID] = true
+		}
 	}
 }
 

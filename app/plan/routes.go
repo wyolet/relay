@@ -415,12 +415,12 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 	return hops
 }
 
-// counters is the full list one slot's request must fit, built once per route so admission concatenates nothing, and how many of them lead as the caller's. An upstream counter linked per lane counts for this table's lane.
+// counters is the full list one slot's request must fit, built once per route so admission concatenates nothing, and how many of them lead as the caller's. An upstream counter linked per lane counts under the caller's counter lane.
 func (t *RouteTable) counters(s *KeySlot, prov string, m *model.Model, hostSlug string) ([]limits.Counter, int) {
 	byModel := s.ByModel[m.Meta.ID]
 	out := t.callerCounters(prov, m, hostSlug, len(s.Whole)+len(byModel))
 	callerN := len(out)
-	lane := t.caller.LaneRung().SubjectID
+	lane := t.caller.counterLane()
 	if lane == "" {
 		// A provider account used as a lane is its own caller.
 		lane = accountSubject(t.caller.Lane.Meta.ID)
