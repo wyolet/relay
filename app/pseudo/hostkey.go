@@ -9,6 +9,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -29,14 +30,14 @@ type HostKeyFormMetadata struct {
 
 // HostKeyFormSpec is the key's value, its account, the account's tier and who the account is shared with.
 type HostKeyFormSpec struct {
-	HostID          string              `json:"hostId"                    format:"uuid" doc:"Id of the host the key authenticates to."`
+	HostID          string              `json:"hostId"                    doc:"Id (metadata.id) of the host the key authenticates to; a slug answers 400."`
 	Value           string              `json:"value,omitempty"           writeOnly:"true" doc:"The secret, checked against the host, then sealed under the owner's scope and never returned. Exactly one of value and valueFrom; both omitted only for a host that takes no key, and then no host key is made."`
 	ValueFrom       *hostkey.ValueFrom  `json:"valueFrom,omitempty"       doc:"Where the secret comes from, as a host key's valueFrom takes it, such as {kind: env, env: VAR}; it is not checked against the host. Exactly one of value and valueFrom."`
 	PricingStrategy string              `json:"pricingStrategy,omitempty" enum:"api,sub" doc:"How the key's spend is accounted, as POST /host-keys takes it. Omitted means api."`
-	AccountID       string              `json:"accountId,omitempty"       format:"uuid" doc:"Id of an existing provider account of the owner at the host to add the key to. Exactly one of accountId and account."`
+	AccountID       string              `json:"accountId,omitempty"       doc:"Id (metadata.id) of an existing provider account of the owner at the host to add the key to; a slug answers 400. Exactly one of accountId and account."`
 	Account         *HostKeyFormAccount `json:"account,omitempty"         doc:"A new provider account of the owner at the host, made for the key. Exactly one of accountId and account."`
-	TierPolicyID    string              `json:"tierPolicyId,omitempty"    format:"uuid" doc:"Id of one of the host's tier presets (GET /hosts/{ref}/policies) to bind the account to alone, as PUT /accounts/{ref}/policy binds it. Omitted leaves the account's binding as it is."`
-	ShareWith       []account.Receiver  `json:"shareWith,omitempty"       doc:"Who the account is shared with, as POST /accounts/{ref}/shares takes a receiver. A receiver that already has a share of the account, or reaches it by ownership, gets none and is answered with existing: true."`
+	TierPolicyID    string              `json:"tierPolicyId,omitempty"    doc:"Id (metadata.id) of one of the host's tier presets (GET /hosts/{ref}/policies) to bind the account to alone, as PUT /accounts/{ref}/policy binds it; a slug answers 400. Omitted leaves the account's binding as it is."`
+	ShareWith       []account.Receiver  `json:"shareWith,omitempty"       doc:"Who the account is shared with, as POST /accounts/{ref}/shares takes a receiver, by id; a slug answers 400. A receiver that already has a share of the account, or reaches it by ownership, gets none and is answered with existing: true."`
 }
 
 // HostKeyFormAccount is the new account a key belongs to.
@@ -95,7 +96,10 @@ func (e *OrganizationError) Error() string { return e.Message }
 // ExpandHostKey returns the rows a host key body stands for, in write order: the new account, the account's tier binding, the host key, and a share with each receiver that neither holds one nor reaches the account.
 func ExpandHostKey(body HostKeyForm, in HostKeyReads) ([]Row, error) {
 	s := body.Spec
-	if err := CheckHostKey(s, in.HostName, in.Keyless); err != nil {
+	if err := CheckHostKey(body); err != nil {
+		return nil, err
+	}
+	if err := CheckHostKeyValue(s, in.HostName, in.Keyless); err != nil {
 		return nil, err
 	}
 	owner := body.Metadata.Owner
@@ -130,27 +134,49 @@ func ExpandHostKey(body HostKeyForm, in HostKeyReads) ([]Row, error) {
 	return x.rows, nil
 }
 
-// CheckHostKey refuses a spec that names its account twice or not at all, its value twice, or none for a host that takes keys and one for a host that takes none, or a receiver twice.
-func CheckHostKey(s HostKeyFormSpec, hostName string, keyless bool) error {
+// CheckHostKey refuses a body that names a row by anything but its id, its account twice or not at all, its value twice, or a receiver twice; it needs no read, so a caller runs it before reading what the body names. ExpandHostKey runs it too.
+func CheckHostKey(body HostKeyForm) error {
+	s := body.Spec
+	if id := body.Metadata.Owner.ID; id != "" && !ids.Valid(id) {
+		return notAnID("/metadata/owner/id", "owner", id)
+	}
+	for _, f := range []struct{ pointer, kind, id string }{{"/spec/hostId", "host", s.HostID}, {"/spec/accountId", "account", s.AccountID}, {"/spec/tierPolicyId", "policy", s.TierPolicyID}} {
+		if (f.id != "" || f.kind == "host") && !ids.Valid(f.id) {
+			return notAnID(f.pointer, f.kind, f.id)
+		}
+	}
 	if (s.AccountID == "") == (s.Account == nil) {
 		return &BodyError{Pointer: "/spec", Message: "exactly one of spec.accountId and spec.account is required"}
 	}
-	switch {
-	case s.Value != "" && s.ValueFrom != nil:
+	if s.Value != "" && s.ValueFrom != nil {
 		return &BodyError{Pointer: "/spec", Message: "spec.value and spec.valueFrom exclude each other; send one"}
+	}
+	seen := map[account.Receiver]bool{}
+	for i, r := range s.ShareWith {
+		if !ids.Valid(r.ID) {
+			return notAnID(fmt.Sprintf("/spec/shareWith/%d/id", i), "receiver", r.ID)
+		}
+		if seen[r] {
+			return &BodyError{Pointer: fmt.Sprintf("/spec/shareWith/%d", i), Message: fmt.Sprintf("receiver %s %q is listed twice", r.Kind, r.ID)}
+		}
+		seen[r] = true
+	}
+	return nil
+}
+
+func notAnID(pointer, kind, id string) error {
+	return &BodyError{Pointer: pointer, Message: fmt.Sprintf("%s %q is not an id; name the %s by its metadata.id", kind, id, kind)}
+}
+
+// CheckHostKeyValue refuses a value for a host that takes no key, and none for a host that takes one.
+func CheckHostKeyValue(s HostKeyFormSpec, hostName string, keyless bool) error {
+	switch {
 	case keyless && s.Value != "":
 		return &BodyError{Pointer: "/spec/value", Message: fmt.Sprintf("host %q takes no key; leave spec.value out", hostName)}
 	case keyless && s.ValueFrom != nil:
 		return &BodyError{Pointer: "/spec/valueFrom", Message: fmt.Sprintf("host %q takes no key; leave spec.valueFrom out", hostName)}
 	case !keyless && s.Value == "" && s.ValueFrom == nil:
 		return &BodyError{Pointer: "/spec", Message: fmt.Sprintf("host %q takes a key: exactly one of spec.value and spec.valueFrom is required", hostName)}
-	}
-	seen := map[account.Receiver]bool{}
-	for i, r := range s.ShareWith {
-		if seen[r] {
-			return &BodyError{Pointer: fmt.Sprintf("/spec/shareWith/%d", i), Message: fmt.Sprintf("receiver %s %q is listed twice", r.Kind, r.ID)}
-		}
-		seen[r] = true
 	}
 	return nil
 }

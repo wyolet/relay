@@ -42,9 +42,13 @@ func TestPseudoHostKeys_FlagGatesTheRoute(t *testing.T) {
 					t.Error(p)
 				}
 				op := operation(t, doc, "/pseudo-host-keys", "post")
-				for code, want := range map[string]string{"422": "#/components/schemas/pseudoRefusal", "409": "#/components/schemas/pseudoOrganizationRefusal"} {
-					if ref := responseRef(op, code); ref != want {
-						t.Errorf("%s answers %q, want %q", code, ref, want)
+				want := map[string]string{"409": "pseudoOrganizationRefusal", "200": "PseudoHostKeyCreated", "201": "PseudoHostKeyCreated"}
+				for _, code := range []string{"400", "403", "404", "422", "500", "503"} {
+					want[code] = "pseudoRefusal"
+				}
+				for code, schema := range want {
+					if ref := responseRef(op, code); ref != "#/components/schemas/"+schema {
+						t.Errorf("%s answers %q, want %s", code, ref, schema)
 					}
 				}
 			}

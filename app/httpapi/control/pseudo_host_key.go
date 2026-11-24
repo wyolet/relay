@@ -12,6 +12,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/audit"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
@@ -62,9 +63,10 @@ const (
 	codeOrganizationMismatch = "organization_mismatch"
 )
 
-// pseudoOrganizationRefusal is a key whose organization does not fit its account: the pseudo refusal, with the owner's account that holds the organization.
+// pseudoOrganizationRefusal is a 409 of a pseudo host key: the pseudo refusal, with the owner's account that holds the key's organization.
 type pseudoOrganizationRefusal struct {
-	pseudoRefusal
+	httpapi.APIError
+	Pointer string  `json:"pointer,omitempty" doc:"JSON pointer of the part of the body refused, such as /spec/accountId."`
 	Account *RowRef `json:"account,omitempty" doc:"With organization_taken: the owner's account at the host that holds the key's organization; send its id as accountId."`
 }
 
@@ -86,26 +88,9 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 		Responses:     responses,
 	}, func(ctx context.Context, in *pseudoHostKeyInput) (*pseudoHostKeyOutput, error) {
 		body := in.Body
-		if err := settleHostKeyOwner(ctx, &body.Metadata.Owner); err != nil {
-			return nil, refusal(huma.Error400BadRequest(err.Error()), "/metadata/owner")
-		}
-		h, err := d.pseudoHost(ctx, body.Spec.HostID)
+		check, err := d.checkHostKeyForm(ctx, &body)
 		if err != nil {
-			return nil, err
-		}
-		if err := pseudo.CheckHostKey(body.Spec, h.Meta.Name, h.Spec.NoAuth); err != nil {
-			return nil, d.pseudoError(ctx, err)
-		}
-		var check *keyCheck
-		if v := body.Spec.Value; v != "" {
-			c := checkKeyValue(ctx, d.Catalog.Current(), d.Adapters, h.Meta.ID, v)
-			if c.Outcome == keyRefused {
-				return nil, refusal(&httpapi.APIError{
-					Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeProviderRefusedKey, Message: c.Reason + " to the key: the provider does not accept it; nothing was written"},
-					HTTPStatus: http.StatusUnprocessableEntity,
-				}, "/spec/value")
-			}
-			check = &c
+			return nil, d.refusePseudo(ctx, err, in.DryRun)
 		}
 		keyID := ids.New()
 		var outside []pseudo.Outside
@@ -136,6 +121,46 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 		r := item.Post.Responses["422"]
 		r.Description = "provider_refused_key: the host answered 401 or 403 to spec.value; nothing was written. " + r.Description
 	}
+}
+
+// checkHostKeyForm runs what is checked before anything is written: the body's own rules, its owner settled as POST /host-keys settles it, the host, the value against the host, then the value against the provider, whose refusal of the key refuses the request. It returns what the host said of the value, nil when there was none to check.
+func (d Deps) checkHostKeyForm(ctx context.Context, body *pseudo.HostKeyForm) (*keyCheck, error) {
+	if err := pseudo.CheckHostKey(*body); err != nil {
+		return nil, err
+	}
+	if err := settleHostKeyOwner(ctx, &body.Metadata.Owner); err != nil {
+		return nil, refusal(huma.Error400BadRequest(err.Error()), "/metadata/owner")
+	}
+	h, err := d.pseudoHost(ctx, body.Spec.HostID)
+	if err != nil {
+		return nil, err
+	}
+	if err := pseudo.CheckHostKeyValue(body.Spec, h.Meta.Name, h.Spec.NoAuth); err != nil {
+		return nil, err
+	}
+	v := body.Spec.Value
+	if v == "" {
+		return nil, nil
+	}
+	c := checkKeyValue(ctx, d.Catalog.Current(), d.Adapters, h.Meta.ID, v)
+	if c.Outcome == keyRefused {
+		return nil, refusal(&httpapi.APIError{
+			Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: codeProviderRefusedKey, Message: c.Reason + " to the key: the provider does not accept it; nothing was written"},
+			HTTPStatus: http.StatusUnprocessableEntity,
+		}, "/spec/value")
+	}
+	return &c, nil
+}
+
+// refusePseudo answers and audits a pseudo request refused before its write, as runPseudo answers and audits one refused during it.
+func (d Deps) refusePseudo(ctx context.Context, err error, dryRun bool) error {
+	err = d.pseudoError(ctx, err)
+	if dryRun {
+		audit.Discard(ctx)
+	} else {
+		audit.RecordEach(ctx, []audit.Row{refusedRow(ctx, err)})
+	}
+	return err
 }
 
 // settleHostKeyOwner settles an owner as POST /host-keys does, before anything is written under it: the value is sealed under the scope of the owner the row ends up with.
@@ -329,8 +354,10 @@ func organizationRefusal(e *pseudo.OrganizationError) error {
 		ref := rowRef(&e.Holder.Meta)
 		holder = &ref
 	}
-	r := refusal(&httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: code, Message: e.Message}, HTTPStatus: http.StatusConflict}, e.Pointer)
-	return &pseudoOrganizationRefusal{pseudoRefusal: *r, Account: holder}
+	return &pseudoOrganizationRefusal{
+		APIError: httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: code, Message: e.Message}, HTTPStatus: http.StatusConflict},
+		Pointer:  e.Pointer, Account: holder,
+	}
 }
 
 // hostKeyCreated answers what the rows are, by role, with each receiver's share and what the host said of the value.
