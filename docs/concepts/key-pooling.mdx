@@ -167,6 +167,8 @@ Relay also reads the same header on live responses and remembers, per pod, the o
 
 A host key can hold a service-account key file instead of an API key. Relay signs an assertion with the file's private key, exchanges it at the file's token URL for a short-lived access token (the OAuth 2.0 JWT-bearer grant, RFC 7523), and sends that token in place of an API key.
 
+Use such a key only on bindings whose adapter authenticates with `Authorization: Bearer`: `openai`, `openai_responses` and `openai_embeddings`. The `anthropic` and `gemini` adapters send the key in an API-key header (`x-api-key`, `x-goog-api-key`), where an access token is not accepted.
+
 Add a `scopes` array to the key file, then send the whole file as the value of an `oauth` key. `valueFrom.provider` is required but is only a label here:
 
 ```bash
@@ -190,13 +192,17 @@ spec:
 
 Relay reads `client_email` (the assertion's issuer), `private_key` (an RSA key in PEM, PKCS#8 or PKCS#1), `private_key_id`, `token_uri` (must be `https`) and `scopes`, and stores only those. To set an assertion `subject` or an `audience` other than the token URL, send `{"jwtBearer": {…}}` as the value instead, with the fields `issuer`, `privateKey`, `privateKeyId`, `tokenUrl`, `scopes`, `subject` and `audience`.
 
+The token URL comes from the key, so Relay calls it only at a public address: it refuses a URL whose host resolves to a loopback, private, link-local (including the cloud metadata address `169.254.169.254`), unspecified or multicast address, checked on the address it connects to. It follows no redirect from the token endpoint and does not use `HTTP_PROXY`/`HTTPS_PROXY` for it. A refused URL fails the write with `400`; met on a renewal, it marks the key revoked.
+
+The token endpoint must answer with `expires_in` of at least 5 minutes. A token without one, or with a shorter one, fails the write; on a renewal Relay keeps the current token and tries again on the next sweep.
+
 The write exchanges the key once, for up to 10 seconds. A value that does not parse, a key file missing a field, and a key the token endpoint rejects answer `400` with the reason (for a rejection, the endpoint's status and its `error` and `error_description`); the value is never echoed. An endpoint that answers success with a JSON object holding no access token, as some do for a scope the account is not granted, refuses the write too: check the scopes. A token endpoint that cannot be reached leaves the key stored without a token, and Relay gets one the next time it loads the key. Replace the key file with `POST /api/host-keys/by-id/<id>/rotate` and the new file, with its `scopes`, as `value`.
 
 Reads never return the key file or the access token. Lists of an account's or pool's keys show part of the current access token as `prefix`, which changes with each renewal. Relay renews the token about 10 minutes before it expires and records the outcome in the key's `status.credential`:
 
 - `state: ok` with `expiresAt` and `renewedAt` after a renewal.
 - `state: revoked` with `lastError` when the token endpoint rejects the key (an `invalid_grant`, `invalid_client` or `unauthorized_client` error, or a `4xx` other than `408` and `429`). Renewal stops; the key serves until its current token expires. Writing a new value clears the status and renewal resumes.
-- A timeout, `408`, `429`, `5xx`, network error or success without an access token is retried every minute and changes no status. A key whose token expires meanwhile shows `status.unresolved` and leaves routing until the endpoint answers again; it rejoins within about a minute after that.
+- A timeout, `408`, `429`, `5xx`, network error or success without an access token is retried every minute and changes no status. A key whose token expires meanwhile shows `status.unresolved` and leaves routing until the endpoint answers again. While a key has no valid token, loading it calls the token endpoint for at most 5 seconds, and after a failure answers that failure without calling again for 30 seconds, doubling up to 10 minutes; a new value starts over. The key rejoins within about a minute of the first call that succeeds, so up to 10 minutes after a long outage ends.
 
 ## Inspecting and recovering keys
 
