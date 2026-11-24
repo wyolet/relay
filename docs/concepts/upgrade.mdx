@@ -37,7 +37,7 @@ Each migration waits at most `RELAY_MIGRATE_LOCK_TIMEOUT_S` seconds (default `10
 `relay migrate down` is destructive: it drops the tables and columns its down-migrations remove, with the rows in them. Take the backup before the upgrade, not after.
 </Warning>
 
-`relay migrate down` and `relay migrate force` read and write relay's version table, `schema_migrations`. The auth module's migrations, which boot and `relay migrate up` run after relay's, record their version in `auth_schema_migrations`. `relay migrate force` never changes it; `relay migrate down` to a version below 26 first steps the auth module back to its version 1, because relay's down-migrations below 26 drop tables the module's later migrations extend. The next upgrade reapplies them: accounts keep their primary sign-in identity, and further identities and external ids are gone.
+`relay migrate down` and `relay migrate force` read and write relay's version table, `schema_migrations`. The auth module's migrations, which boot and `relay migrate up` run after relay's, record their version in `auth_schema_migrations`. `relay migrate force` never changes it; `relay migrate down` to a version below 26 runs relay's down-migrations to 26, then steps the auth module back to its version 1, because relay's down-migrations below 26 drop tables the module's later migrations extend. A down-migration above 26 that refuses stops the rollback there: the auth module stays where it was, and relay's version stays clean at the refusing migration, so the next boot applies the ones above it again. After a full rollback the next upgrade reapplies the module's migrations: accounts keep their primary sign-in identity, and further identities and external ids are gone.
 
 ### Rolling back the auth module
 
