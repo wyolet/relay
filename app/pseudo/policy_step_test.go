@@ -73,6 +73,21 @@ func TestChangePolicy_None(t *testing.T) {
 	}
 }
 
+// A binding holding the account whose policy is gone is none only when the caller may change that binding.
+func TestPolicyReads_CaseOfAMissingPolicy(t *testing.T) {
+	for _, changeable := range []bool{true, false} {
+		in := stepReads(stepTargets()["project"])
+		in.Held, in.HeldChangeable = heldBy("gone", "proj-acct"), changeable
+		want := CaseNone
+		if !changeable {
+			want = CaseAbove
+		}
+		if got := in.Case(); got != want {
+			t.Errorf("changeable %v: case %s, want %s", changeable, got, want)
+		}
+	}
+}
+
 // own: the policy is updated in place at the version read, and nothing is written when the change leaves it as it is.
 func TestChangePolicy_Own(t *testing.T) {
 	for kind, acc := range stepTargets() {
@@ -208,6 +223,9 @@ func TestChangePolicy_Above(t *testing.T) {
 			{"a policy of the organization", func(in *PolicyReads) { in.Above = &Scope{Kind: "organization"} }, Scope{Kind: "organization"}, "the organization"},
 			{"a binding the caller may not change", func(in *PolicyReads) {
 				in.Policy, in.Held, in.HeldScope = &policy.Policy{Meta: meta.Metadata{ID: "secret-policy", Name: "secret-policy", Owner: meta.Global}}, heldBy("secret-policy", acc.Meta.ID), Scope{Kind: "team", Name: "platform"}
+			}, Scope{Kind: "team", Name: "platform"}, `team "platform"`},
+			{"a binding the caller may not change, its policy gone", func(in *PolicyReads) {
+				in.Held, in.HeldScope = heldBy("secret-policy", acc.Meta.ID), Scope{Kind: "team", Name: "platform"}
 			}, Scope{Kind: "team", Name: "platform"}, `team "platform"`},
 		} {
 			t.Run(kind+"/"+tc.name, func(t *testing.T) {

@@ -98,7 +98,11 @@ func (in PolicyReads) Case() PolicyCase {
 	switch {
 	case in.Above != nil:
 		return CaseAbove
-	case in.Held == nil || in.Policy == nil:
+	case in.Held == nil:
+		return CaseNone
+	case in.Policy == nil && !in.HeldChangeable:
+		return CaseAbove
+	case in.Policy == nil:
 		return CaseNone
 	case in.Held.IsEnabled() && in.Alone && in.Policy.Meta.Owner == in.owner() && in.MayUpdate:
 		return CaseOwn
