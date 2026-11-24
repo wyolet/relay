@@ -26,6 +26,8 @@ var providerDataByShape = map[string]ownProviderData{
 	},
 }
 
+func init() { providerDataByShape["gemini-vertex"] = providerDataByShape["gemini"] }
+
 var foreignProviderData = raw(`{"foreign":"blob"}`)
 
 func raw(s string) json.RawMessage { return json.RawMessage(s) }

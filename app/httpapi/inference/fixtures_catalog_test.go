@@ -81,20 +81,29 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 	return cat, f.principal
 }
 
-// hopFixture is one hop of buildHopsDeps: a host serving at url, bound through adapter, sending upstreamName when it is set.
+// hopFixture is one hop of buildHopsDeps: a host serving at url with backend, bound through adapter, sending upstreamName when it is set.
 type hopFixture struct {
 	host, url    string
 	adapter      adapters.Name
 	upstreamName string
+	backend      map[string]string
 }
 
 // buildHopsDeps builds plans with "test-model" bound once per hop, each host reached through its own system credential so the route tries them in order, and a user's key. It returns runnable deps over the same rows and the key's principal.
 func buildHopsDeps(t *testing.T, hops ...hopFixture) (Deps, *Principal) {
 	t.Helper()
+	return buildAliasedHopsDeps(t, nil, hops...)
+}
+
+// buildAliasedHopsDeps is buildHopsDeps with "test-model" declaring aliases.
+func buildAliasedHopsDeps(t *testing.T, aliases []string, hops ...hopFixture) (Deps, *Principal) {
+	t.Helper()
 	var w plantest.World
 	m := w.Model(w.Provider("acme"), "test-model")
+	m.Spec.Aliases = aliases
 	for _, hf := range hops {
 		h := w.Host(hf.host, hf.url)
+		h.Spec.Backend = hf.backend
 		if b := w.Bind(m, h, hf.adapter); hf.upstreamName != "" {
 			b.Spec.UpstreamName, b.Spec.Snapshots = hf.upstreamName, []string{"test-model"}
 		}

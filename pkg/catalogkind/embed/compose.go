@@ -16,6 +16,8 @@ import (
 
 // Compose translates manifest documents to catalog kinds and flattens them to
 // the SDK embed schema. Cross-refs resolve via minted ids (no Postgres).
+// The document is for direct SDK use, so bindings through a relayOnly adapter
+// are left out.
 func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catalog, error) {
 	idx := newResolver()
 	var (
@@ -94,7 +96,8 @@ func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catal
 		bindings = append(bindings, b)
 	}
 
-	return Flatten(NewIndex(provs, hosts, models, pricings, bindings), generatedAt, nil), nil
+	sdkCallable := func(_ *model.Model, b *binding.Binding) bool { return !relayOnly(b.Spec.Adapter) }
+	return Flatten(NewIndex(provs, hosts, models, pricings, bindings), generatedAt, sdkCallable), nil
 }
 
 type embedResolver struct {

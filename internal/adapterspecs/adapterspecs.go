@@ -26,6 +26,7 @@ func Specs() []*adapter.Spec {
 	// The response header naming the credential's organization, per each vendor's API reference; Gemini documents none, so its spec has no probe.
 	openaiOrg := &adapter.OrgProbe{Path: "/v1/models", OrgHeader: "Openai-Organization"}
 	anthropicOrg := &adapter.OrgProbe{Path: "/v1/models", OrgHeader: "Anthropic-Organization-Id"}
+	anthropicParams := map[string]string{"temperature": "temperature", "top_p": "top_p", "top_k": "top_k"}
 	// Gemini encodes the model and the sync/stream choice in the URL path
 	// rather than the request body, so its upstream path is resolved per call.
 	geminiUpstreamPath := func(model string, stream bool) string {
@@ -33,6 +34,19 @@ func Specs() []*adapter.Spec {
 			return "/v1beta/models/" + model + ":streamGenerateContent?alt=sse"
 		}
 		return "/v1beta/models/" + model + ":generateContent"
+	}
+	vertexAnthropicUpstreamPath := func(model string, stream bool) string {
+		if stream {
+			return "/v1/projects/{project}/locations/{location}/publishers/anthropic/models/" + model + ":streamRawPredict"
+		}
+		return "/v1/projects/{project}/locations/{location}/publishers/anthropic/models/" + model + ":rawPredict"
+	}
+	vertexGeminiUpstreamPath := func(model string, stream bool) string {
+		path := "/v1/projects/{project}/locations/{location}/publishers/google/models/" + model
+		if stream {
+			return path + ":streamGenerateContent?alt=sse"
+		}
+		return path + ":generateContent"
 	}
 
 	specs := []*adapter.Spec{
@@ -87,8 +101,24 @@ func Specs() []*adapter.Spec {
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
-			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p", "top_k": "top_k"},
+			ParamPaths:    anthropicParams,
 			Overloaded:    &adapter.ErrorResponse{Status: pkganthropic.StatusOverloaded, Body: pkganthropic.OverloadedError(httpapi.OverloadMessage)},
+		}).Build(),
+		// Shares the anthropic spec's translator value, so a canonical route fails over between the two.
+		(&adapter.Spec{
+			Name:           adapters.VertexAnthropic,
+			Family:         adapters.Anthropic,
+			UpstreamPathFn: vertexAnthropicUpstreamPath,
+			Auth:           adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+			Translator:     pkganthropic.AnthropicTranslator{},
+			ExtractTokens:  pkganthropic.ExtractTokens,
+			ParamPaths:     anthropicParams,
+			// Vertex takes the API version in the body, not the header, and reads only the first anthropic-beta line.
+			Envelope: &adapter.RequestEnvelope{
+				DropMembers:    []string{"model"},
+				DefaultMembers: []adapter.BodyMember{{Key: "anthropic_version", Value: []byte(`"vertex-2023-10-16"`)}},
+				JoinHeaders:    []string{"Anthropic-Beta"},
+			},
 		}).Build(),
 		// Gemini native shape — upstream-only for now (HostBinding.Adapter:
 		// gemini), reachable via the canonical / OpenAI / Anthropic inbound
@@ -100,6 +130,18 @@ func Specs() []*adapter.Spec {
 			UpstreamPathFn: geminiUpstreamPath,
 			Auth:           geminiAuth,
 			Translator:     pkggemini.GeminiTranslator{},
+			ExtractTokens:  pkggemini.ExtractTokens,
+			ParamPaths: map[string]string{
+				"temperature": "generationConfig.temperature",
+				"top_p":       "generationConfig.topP",
+				"top_k":       "generationConfig.topK",
+			},
+		}).Build(),
+		(&adapter.Spec{
+			Name:           adapters.VertexGemini,
+			UpstreamPathFn: vertexGeminiUpstreamPath,
+			Auth:           adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+			Translator:     pkggemini.GeminiTranslator{Vertex: true},
 			ExtractTokens:  pkggemini.ExtractTokens,
 			ParamPaths: map[string]string{
 				"temperature": "generationConfig.temperature",

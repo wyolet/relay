@@ -36,7 +36,7 @@ The catalog describes what can be called. Credentials and policies describe who 
     A catalog entry, owned by the provider that makes it. The `model` field of a request resolves against the catalog by name, optionally pinned to a host as `model@host`.
   </Accordion>
   <Accordion title="Host bindings" icon="link">
-    The join of one model and one host. A binding carries the wire shape Relay speaks to that host for that model (`openai`, `openai_responses`, `anthropic` or `gemini`), the upstream model name, and the pricing. A model is reachable only through an enabled binding, and one model can have bindings on several hosts.
+    The join of one model and one host. A binding carries the wire shape Relay speaks to that host for that model (`openai`, `openai_responses`, `anthropic`, `vertex_anthropic`, `gemini` or `vertex_gemini`), the upstream model name, and the pricing. A model is reachable only through an enabled binding, and one model can have bindings on several hosts.
   </Accordion>
   <Accordion title="Host keys" icon="key">
     Your provider credentials, stored by Relay as an environment-variable reference or as a value encrypted under the master key. Each host key belongs to one host. See [Authentication](/concepts/auth#host-keys).

@@ -27,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/internal/adapterspecs"
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/kv"
@@ -469,6 +470,33 @@ func runFamilyRoute(t *testing.T, inbound adapters.Name) {
 	}
 	if d := cmp.Diff([]sent{{"/base/generate", "Bearer sk-base", itemBody}}, base.sent()); d != "" {
 		t.Errorf("base hop (-want +got):\n%s", d)
+	}
+}
+
+// A Messages item runs on a cloud binding of the anthropic family as relay registers it: the model moves into the path and the version into the body.
+func TestRun_CloudMessagesBinding(t *testing.T) {
+	cloud := newUpstream(t, answering(http.StatusOK, `{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+
+	var w plantest.World
+	m := w.Model(w.Provider("vendor"), "test-model")
+	h := w.Host("cloud", cloud.URL)
+	h.Spec.Backend = map[string]string{"project": "p1", "location": "global"}
+	b := w.Bind(m, h, adapters.VertexAnthropic)
+	b.Spec.UpstreamName, b.Spec.Snapshots = "claude-test-1@20250101", []string{"test-model"}
+	w.Credential(h, nil, plantest.System, "sk-cloud")
+	u := w.User()
+	k := w.UserKey(u, "rk-secret")
+	rn, _, _ := runnerOver(t, w.Load(t))
+	rn.Specs = adapter.NewRegistry(adapterspecs.Specs()...)
+
+	attr := Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: u.ID, CredentialKind: inference.CredentialKey, CredentialID: k.Meta.ID}
+	item := `{"model":"test-model","max_tokens":16,"messages":[]}`
+	if status, _, err := rn.Run(context.Background(), "item-1", k.Spec.KeyHash, TokenClaims{}, attr, adapters.Anthropic, []byte(item)); err != nil || status != http.StatusOK {
+		t.Fatalf("Run: status %d, err %v; want 200", status, err)
+	}
+	want := sent{"/v1/projects/p1/locations/global/publishers/anthropic/models/claude-test-1@20250101:rawPredict", "Bearer sk-cloud", `{"max_tokens":16,"messages":[],"anthropic_version":"vertex-2023-10-16"}`}
+	if d := cmp.Diff([]sent{want}, cloud.sent()); d != "" {
+		t.Errorf("cloud hop (-want +got):\n%s", d)
 	}
 }
 

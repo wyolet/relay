@@ -1,0 +1,30 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Describe these."
+        },
+        {
+          "fileData": {
+            "mimeType": "image/webp",
+            "fileUri": "https://example.com/photo"
+          }
+        },
+        {
+          "fileData": {
+            "mimeType": "image/png",
+            "fileUri": "https://example.com/cat.PNG?X-Goog-Signature=abc"
+          }
+        },
+        {
+          "fileData": {
+            "mimeType": "application/pdf",
+            "fileUri": "gs://bucket/report.pdf"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 package adapters_test
 
+import "slices"
+
 // Paths of fullRequest's elements, as flattenRequest names them.
 const (
 	userMsg   = "input[message:What is in these files?]"
@@ -28,6 +30,7 @@ var (
 		paths:  []string{result2 + ".content[input_text].*"},
 		folded: "text parts of a tool result flatten into its output string",
 	}
+	geminiFilenameDrop = annotated("canonical: FilePart.Filename dropped — Gemini API", userMsg+".content[input_file*].filename")
 )
 
 func annotated(text string, paths ...string) allowedDrop {
@@ -90,7 +93,6 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: OutputTextPart.Annotations dropped — Anthropic", assistMsg+".content[output_text].annotations*"),
 		annotated("canonical: Message.ID/Status/ProviderData dropped — Anthropic", "input[message:*].id", "input[message:*].status", "input[message:*].provider_data"),
 		annotated("canonical: ImagePart.Detail dropped — Anthropic", userMsg+".content[input_image].detail"),
-		annotated("canonical: FilePart.MediaType dropped for URL documents", userMsg+".content[input_file].media_type"),
 		carriable("SerializeRequest writes no document title, the wire home for FilePart.Filename", userMsg+".content[input_file*].filename"),
 		annotated("canonical: Reasoning.ID/Status/Summary dropped — a thinking block", reasoning+".id", reasoning+".status", reasoning+".summary*"),
 		annotated("canonical: Format.Name/Description/Strict dropped — output_config.format", opts+".output.format.name", opts+".output.format.description", opts+".output.format.strict"),
@@ -118,8 +120,8 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: OutputTextPart.Annotations dropped — a Gemini", assistMsg+".content[output_text].annotations*"),
 		annotated("canonical: Message.ID/Status dropped — Gemini", "input[message:*].id", "input[message:*].status", userMsg+".provider_data"),
 		annotated("canonical: ImagePart.Detail dropped — per-part mediaResolution", userMsg+".content[input_image].detail"),
-		annotated("canonical: FilePart.Filename dropped — Gemini API", userMsg+".content[input_file*].filename"),
-		carriable("SerializeRequest sends an image URL as fileData with no mimeType, so ParseRequest reads it back as a file",
+		geminiFilenameDrop,
+		carriable("SerializeRequest sends an image URL as fileData, which ParseRequest reads back as a file",
 			userMsg+".content[*"),
 		annotated("canonical: Reasoning.ID/Status dropped — a thought part", reasoning+".id", reasoning+".status"),
 		annotated("canonical: Reasoning.Summary dropped when Content is set", reasoning+".summary*"),
@@ -131,6 +133,14 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: FunctionTool.ProviderData dropped — it holds another", tool+".provider_data"),
 		annotated("canonical: Tools.Parallel dropped — Gemini", "tools.parallel"),
 	},
+}
+
+// The Vertex variant loses what the Gemini API form loses, except that its wire has a home for FilePart.Filename (displayName) it does not fill yet.
+func init() {
+	drops := slices.Clone(allowedDrops["gemini"])
+	drops[slices.IndexFunc(drops, func(d allowedDrop) bool { return d.annotation == geminiFilenameDrop.annotation })] =
+		carriable("Vertex parts take a displayName on inlineData and fileData, which the Vertex variant does not send yet", geminiFilenameDrop.paths...)
+	allowedDrops["gemini-vertex"] = drops
 }
 
 // silentFeatureDrops are rejectedFeatures a shape serializes without an

@@ -170,7 +170,7 @@ func editHopBody(body []byte, renames []host.ParamRename, model string, env *ada
 	return obj.assemble(edits), superseded
 }
 
-// envelopeMembers appends to edits the removal of each member env drops, then each default env sets for a key the body, as edited, lacks.
+// envelopeMembers appends to edits the removal of each member env drops, then each default env sets for a key the body, as edited, lacks or holds as null.
 func (o *jsonObject) envelopeMembers(edits []memberEdit, env *adapter.RequestEnvelope) []memberEdit {
 	for _, key := range env.DropMembers {
 		switch at := editIndex(edits, key); {
@@ -181,10 +181,10 @@ func (o *jsonObject) envelopeMembers(edits []memberEdit, env *adapter.RequestEnv
 		}
 	}
 	for _, m := range env.DefaultMembers {
-		switch at := editIndex(edits, m.Key); {
+		switch at, i := editIndex(edits, m.Key), o.lastIndex(m.Key); {
 		case at >= 0 && edits[at].value == nil:
 			edits[at].value = m.Value
-		case at < 0 && o.lastIndex(m.Key) < 0:
+		case at < 0 && (i < 0 || string(o.b[o.members[i].valStart:o.members[i].valEnd]) == "null"):
 			edits = append(edits, memberEdit{key: m.Key, value: m.Value})
 		}
 	}

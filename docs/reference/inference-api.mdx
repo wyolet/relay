@@ -36,7 +36,9 @@ Each vendor wire shape has its own path prefix. The bare `/v1` namespace belongs
 | `POST` | `/v1/generate` | Relay canonical. See [Canonical shape](#canonical-shape). |
 | `GET` | `/v1/ws` | WebSocket carrying canonical requests. See [WebSocket](#websocket). |
 
-Gemini is an upstream shape only: bindings with `adapter: gemini` are reachable from any inbound shape above, but there is no inbound Gemini route.
+Gemini is an upstream shape only: bindings with `adapter: gemini` or `adapter: vertex_gemini` are reachable from any inbound shape above, but there is no inbound Gemini route. Host setup for `vertex_gemini`: [Gemini on Vertex AI](/concepts/catalog#gemini-on-vertex-ai).
+
+`vertex_anthropic` (Claude on Google Cloud Vertex AI) is upstream-only too. An `/anthropic/v1/messages` request reaches it as sent, except that `model` moves into the URL and `anthropic_version` is added to the body when the request has none, and a route fails over between its `anthropic` and `vertex_anthropic` bindings. Other inbound shapes are translated. Host setup: [Claude on Google Cloud Vertex AI](/concepts/catalog#claude-on-google-cloud-vertex-ai).
 
 ### Coding-agent clients
 
