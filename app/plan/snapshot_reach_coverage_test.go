@@ -2,6 +2,7 @@ package plan_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -20,8 +21,8 @@ import (
 // coverageWorld serves models of acme at host-a, host-b, host-c (disabled) and host-d:
 //   - m1 (m1, m1-remote): host-a serves m1-remote, host-b m1
 //   - m3: host-a lists only a name m3 does not have
-//   - m4 (m4, m4-x, m4-y): host-a serves m4 and m4-x, host-b m4-x and m4-y, host-c m4-y, and a disabled binding at host-d m4
-//   - m5 (m5, m5-x), aliases m5-latest and m1 (shadowed by m1's snapshot name): host-a and host-d serve all
+//   - m4 (m4, m4-x, m4-y), alias m4@20250514: host-a serves m4 and m4-x, host-b m4-x and m4-y, host-c m4-y, and a disabled binding at host-d m4
+//   - m5 (m5, m5-x), aliases m5-latest, m1 (shadowed by m1's snapshot name, but m1 has no binding at host-d) and m1-host-b (which reads like m1's pin at host-b): host-a and host-d serve all
 //
 // with two pools at host-a and one at each other host, each pool holding a system credential of its own.
 type coverageWorld struct {
@@ -30,6 +31,8 @@ type coverageWorld struct {
 	pd                 *pool.Pool
 	proj               *project.Project
 	hostNames, snapRef []string
+	// owner is each snapshot name's model.
+	owner map[string]string
 }
 
 func newCoverageWorld() *coverageWorld {
@@ -42,27 +45,39 @@ func newCoverageWorld() *coverageWorld {
 	w.Bind(m1, hb, adapters.OpenAI, "m1")
 	w.Bind(w.Model(acme, "m3"), ha, adapters.OpenAI, "m3-retired")
 	m4 := w.Model(acme, "m4", "m4-x", "m4-y")
+	m4.Spec.Aliases = []string{"m4@20250514"}
 	w.Bind(m4, ha, adapters.OpenAI, "m4", "m4-x")
 	w.Bind(m4, hb, adapters.OpenAI, "m4-x", "m4-y")
 	w.Bind(m4, hc, adapters.OpenAI, "m4-y")
 	w.Bind(m4, hd, adapters.OpenAI, "m4").Spec.Enabled = off()
 	m5 := w.Model(acme, "m5", "m5-x")
-	m5.Spec.Aliases = []string{"m5-latest", "m1"}
+	m5.Spec.Aliases = []string{"m5-latest", "m1", "m1-host-b"}
 	w.Bind(m5, ha, adapters.OpenAI)
 	w.Bind(m5, hd, adapters.OpenAI)
 	pool := func(h int) *pool.Pool {
 		return w.Pool(w.Hosts[h], w.Credential(w.Hosts[h], nil, plantest.System, "sk-"+meta.NewID()))
 	}
-	c := &coverageWorld{w: w, pa1: pool(0), pa2: pool(0), pb: pool(1), pc: pool(2), pd: pool(3), proj: w.Project(w.Team())}
+	c := &coverageWorld{w: w, pa1: pool(0), pa2: pool(0), pb: pool(1), pc: pool(2), pd: pool(3), proj: w.Project(w.Team()), owner: map[string]string{}}
 	for _, h := range w.Hosts {
 		c.hostNames = append(c.hostNames, h.Meta.Name)
 	}
 	for _, m := range w.Models {
 		for _, s := range m.Spec.Snapshots {
 			c.snapRef = append(c.snapRef, s.Name)
+			c.owner[s.Name] = m.Meta.Name
 		}
 	}
 	return c
+}
+
+// routedTo names where a request goes: model@hosts, or the refusal code.
+func routedTo(cp *plan.CallerPlan, ref string) string {
+	r := cp.Routes.Get(ref)
+	if r.Refused != nil {
+		return r.Refused.Code
+	}
+	a := routeAnswers(cp, ref)[ref]
+	return r.Model.Meta.Name + "@" + strings.Join(a.Hosts, ",")
 }
 
 func (c *coverageWorld) lane(pools ...*pool.Pool) snapshotLane {
@@ -70,7 +85,7 @@ func (c *coverageWorld) lane(pools ...*pool.Pool) snapshotLane {
 	return s.lane(nil, pools...)
 }
 
-// For every snapshot name, the preview's hosts are exactly the hosts a pinned request routes to, in either name form, and the unpinned name gets the preview's answer; a declared alias gets its snapshot's answer. Checked for lanes linking every pool, two pools at one host, one host, and no pool (reach by ownership).
+// For every snapshot name, the preview's hosts are exactly the hosts a pinned request routes to the name's model at, in either name form, and the unpinned name gets the preview's answer; a pinned name that reaches another model does so only through that model's alias, where the name's own model has no binding. A declared alias gets its snapshot's answer. Checked for lanes linking every pool, two pools at one host, one host, and no pool (reach by ownership).
 func TestReach_PinnedNamesRouteExactlyWherePreviewSays(t *testing.T) {
 	c := newCoverageWorld()
 	lanes := map[string]snapshotLane{
@@ -80,6 +95,18 @@ func TestReach_PinnedNamesRouteExactlyWherePreviewSays(t *testing.T) {
 		"ownership, no pool": c.lane(),
 	}
 	plans := c.w.Load(t)
+	boundHosts := map[string][]string{}
+	for _, b := range c.w.Bindings {
+		if b.IsEnabled() {
+			for _, m := range c.w.Models {
+				for _, h := range c.w.Hosts {
+					if m.Meta.ID == b.Spec.ModelID && h.Meta.ID == b.Spec.HostID {
+						boundHosts[m.Meta.Name] = append(boundHosts[m.Meta.Name], h.Meta.Name)
+					}
+				}
+			}
+		}
+	}
 	for name, l := range lanes {
 		t.Run(name, func(t *testing.T) {
 			r := plan.ReachOf(plans.Engine.View(), l.acct.Meta.ID, nil)
@@ -100,6 +127,12 @@ func TestReach_PinnedNamesRouteExactlyWherePreviewSays(t *testing.T) {
 				}
 				for _, h := range c.hostNames {
 					for _, form := range []string{n + "@" + h, "acme/" + n + "@" + h} {
+						if route := cp.Routes.Get(form); route.Model != nil && route.Model.Meta.Name != c.owner[n] {
+							if !strings.HasPrefix(route.ResolvedVia, "alias:") || slices.Contains(boundHosts[c.owner[n]], h) {
+								t.Errorf("%s routes to model %s via %q, though %s is bound at %s: %v", form, route.Model.Meta.Name, route.ResolvedVia, c.owner[n], h, boundHosts[c.owner[n]])
+							}
+							continue
+						}
 						got := routeAnswers(cp, form)[form]
 						if routed, previewed := len(got.Hosts) > 0, slices.Contains(want.Hosts, h); routed != previewed || routed && !slices.Equal(got.Hosts, []string{h}) {
 							t.Errorf("%s routes to %v (refused %q); preview hosts for %s are %v", form, got.Hosts, got.Refused, n, want.Hosts)
@@ -138,8 +171,25 @@ func TestReach_PinnedNamesRouteExactlyWherePreviewSays(t *testing.T) {
 			}
 		}
 	}
-	if diff := cmp.Diff(map[string][]string{"m5": {"m5-latest"}}, aliases); diff != "" {
+	if diff := cmp.Diff(map[string][]string{"m4": {"m4@20250514"}, "m5": {"m5-latest"}}, aliases); diff != "" {
 		t.Errorf("aliases by snapshot (-want +got):\n%s", diff)
+	}
+
+	cp := keyCaller(t, plans, lanes["every pool"].key)
+	routes := map[string]string{}
+	for _, ref := range []string{"m1@host-a", "m1@host-d", "acme/m1@host-d", "m4@20250514", "m1-host-b", "m1-host-b@host-a", "acme/m1-host-b@host-a"} {
+		routes[ref] = routedTo(cp, ref)
+	}
+	if diff := cmp.Diff(map[string]string{
+		"m1@host-a":             plan.CodeModelNotFound,
+		"m1@host-d":             "m5@host-d",
+		"acme/m1@host-d":        "m5@host-d",
+		"m4@20250514":           "m4@host-a",
+		"m1-host-b":             "m1@host-b",
+		"m1-host-b@host-a":      "m5@host-a",
+		"acme/m1-host-b@host-a": "m5@host-a",
+	}, routes); diff != "" {
+		t.Errorf("alias pins (-want +got):\n%s", diff)
 	}
 
 	r := plan.ReachOf(plans.Engine.View(), lanes["two pools at a"].acct.Meta.ID, nil)

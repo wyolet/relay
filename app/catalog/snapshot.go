@@ -81,6 +81,13 @@ type Snapshot struct {
 	// a synthesized alias.
 	snapshotAliases map[string]snapshotRef
 
+	// unservedPins holds the host-pinned keys of snapshotAliases' form that a
+	// snapshot does not get because the host's enabled binding does not serve
+	// it. Resolution answers such a key with nothing rather than falling
+	// through to declared aliases, so dropping the pin never hands the name to
+	// another model's alias.
+	unservedPins map[string]snapshotRef
+
 	// aliasExact indexes declared model aliases (model.Spec.Aliases) by
 	// every slug-normalized exact form (bare, provider-qualified,
 	// host-pinned). Checked only after snapshotsByName + snapshotAliases

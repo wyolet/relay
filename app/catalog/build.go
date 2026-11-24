@@ -128,6 +128,7 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		modelsByName:         map[string][]*model.Model{},
 		snapshotsByName:      map[string]snapshotRef{},
 		snapshotAliases:      map[string]snapshotRef{},
+		unservedPins:         map[string]snapshotRef{},
 		aliasExact:           map[string]AliasRef{},
 		overlaysByTarget:     map[string]*overlay.Overlay{},
 		modelTemplates:       map[string]*model.Model{},

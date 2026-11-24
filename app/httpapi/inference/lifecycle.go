@@ -3,7 +3,6 @@ package inference
 import (
 	"context"
 	"net/http"
-	"strings"
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -11,10 +10,12 @@ import (
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/reqid"
+	"github.com/wyolet/relay/pkg/slug"
 )
 
 // mintLifecycle creates the per-request lifecycle Context at the inference
@@ -216,19 +217,19 @@ func (d Deps) refusalCatalog(ctx context.Context) *appcatalog.Snapshot {
 	return nil
 }
 
-// stampRefusedModel names on lc the catalog model a refused request asked for, as routing would have on success, so its row says which model was refused. A host pin that resolves to nothing, as a snapshot pinned where its model is not served does, names the model its unpinned name resolves to. A name no model answers keeps only the requested string; an alias naming several takes the first, the one routing tries first.
+// stampRefusedModel names on lc the catalog model a refused request asked for, as routing would have on success, so its row says which model was refused. A snapshot pinned at a host whose binding does not serve it resolves to nothing but names that snapshot's model. A name no model answers keeps only the requested string; an alias naming several takes the first, the one routing tries first.
 func stampRefusedModel(lc *lifecycle.Context, snap *appcatalog.Snapshot) {
 	if snap == nil || lc.RequestedModel == "" || lc.ModelID != "" {
 		return
 	}
-	res := snap.ResolveModelRef(lc.RequestedModel)
-	if name, _, pinned := strings.Cut(lc.RequestedModel, "@"); len(res.Models) == 0 && pinned {
-		res = snap.ResolveModelRef(name)
-	}
-	if len(res.Models) == 0 {
+	var m *model.Model
+	if res := snap.ResolveModelRef(lc.RequestedModel); len(res.Models) > 0 {
+		m = res.Models[0]
+	} else if pinned, ok := snap.UnservedPin(slug.From(lc.RequestedModel)); ok {
+		m = pinned
+	} else {
 		return
 	}
-	m := res.Models[0]
 	lc.ModelID, lc.ModelName = m.Meta.ID, m.Meta.Name
 	if prov, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
 		lc.ProviderName = prov

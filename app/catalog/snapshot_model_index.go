@@ -30,17 +30,21 @@ func (s *Snapshot) indexModelSnapshots(m *model.Model) {
 			s.snapshotAliases[slug.From(provSlug+"/"+snap.Name)] = base
 		}
 		for _, hb := range s.BindingsForModel(m.Meta.ID) {
-			if !hb.IsEnabled() || !hb.Serves(snap.Name) {
+			if !hb.IsEnabled() {
 				continue
 			}
 			h, ok := s.hostsByID[hb.Spec.HostID]
 			if !ok {
 				continue
 			}
+			pins := s.snapshotAliases
+			if !hb.Serves(snap.Name) {
+				pins = s.unservedPins
+			}
 			pinned := snapshotRef{Model: m, Snapshot: snap, HostID: hb.Spec.HostID}
-			s.snapshotAliases[slug.From(snap.Name+"@"+h.Meta.Name)] = pinned
+			pins[slug.From(snap.Name+"@"+h.Meta.Name)] = pinned
 			if provSlug != "" {
-				s.snapshotAliases[slug.From(provSlug+"/"+snap.Name+"@"+h.Meta.Name)] = pinned
+				pins[slug.From(provSlug+"/"+snap.Name+"@"+h.Meta.Name)] = pinned
 			}
 		}
 	}
@@ -58,9 +62,11 @@ func (s *Snapshot) deindexModelSnapshots(m *model.Model) {
 			delete(s.snapshotsByName, snap.Name)
 		}
 	}
-	for k, ref := range s.snapshotAliases {
-		if ref.Model.Meta.ID == m.Meta.ID {
-			delete(s.snapshotAliases, k)
+	for _, pins := range [2]map[string]snapshotRef{s.snapshotAliases, s.unservedPins} {
+		for k, ref := range pins {
+			if ref.Model.Meta.ID == m.Meta.ID {
+				delete(pins, k)
+			}
 		}
 	}
 	s.deindexModelAliases(m)
@@ -85,4 +91,10 @@ func (s *Snapshot) ResolveSnapshot(key string) (*model.Model, *model.Snapshot, s
 		return r.Model, r.Snapshot, r.HostID, true
 	}
 	return nil, nil, "", false
+}
+
+// UnservedPin reports whether a slug-normalized key is a host-pinned snapshot name ("snapshot@host", optionally provider-qualified) whose host's enabled binding does not serve the snapshot, and returns that snapshot's model. Such a key resolves to nothing: it is never answered by a declared alias. The caller normalizes the key with slug.From.
+func (s *Snapshot) UnservedPin(key string) (*model.Model, bool) {
+	r, ok := s.unservedPins[key]
+	return r.Model, ok
 }

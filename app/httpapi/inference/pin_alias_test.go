@@ -23,7 +23,7 @@ type refusedRow struct {
 	Model, Provider string
 }
 
-// A pin of a snapshot name at a host its model is not served at answers model_not_found, whether written as "@host" or sent as X-WR-Upstream-Host, and never routes to another model that declares the snapshot name as an alias; the row still names the snapshot's model.
+// A pin of a snapshot name at a host its model is not served at answers model_not_found, whether written as "@host" or sent as X-WR-Upstream-Host, and never routes to another model that declares the snapshot name as an alias; the row still names the snapshot's model. A pin at a host the model has no binding at was never a snapshot pin, and its row names no model.
 func TestDispatch_UnservedPinNeverRoutesThroughAnotherModelsAlias(t *testing.T) {
 	upURL, calls := hopUpstream(t, http.StatusOK, `{"answer":true}`)
 	var w plantest.World
@@ -52,12 +52,15 @@ func TestDispatch_UnservedPinNeverRoutesThroughAnotherModelsAlias(t *testing.T) 
 	}})
 	d.Lifecycle = reg
 
+	named := refusedRow{Status: http.StatusNotFound, Kind: "model_not_found", Model: "m1", Provider: "acme"}
 	for name, tc := range map[string]struct {
 		model  string
 		header string
+		want   refusedRow
 	}{
-		"pinned in the model": {model: "m1@host-a"},
-		"pinned by header":    {model: "m1", header: "host-a"},
+		"pinned in the model": {model: "m1@host-a", want: named},
+		"pinned by header":    {model: "m1", header: "host-a", want: named},
+		"pinned at no host":   {model: "m1@nowhere", want: refusedRow{Status: http.StatusNotFound, Kind: "model_not_found"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := withNormalContext(httptest.NewRequest(http.MethodPost, "/", nil), pr)
@@ -72,7 +75,7 @@ func TestDispatch_UnservedPinNeverRoutesThroughAnotherModelsAlias(t *testing.T) 
 			case <-time.After(5 * time.Second):
 				t.Fatal("no usage row")
 			}
-			if diff := cmp.Diff(refusedRow{Status: http.StatusNotFound, Kind: "model_not_found", Model: "m1", Provider: "acme"}, got); diff != "" {
+			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("row (-want +got):\n%s\nresponse %d %s", diff, rec.Code, rec.Body)
 			}
 			if rec.Code != http.StatusNotFound {

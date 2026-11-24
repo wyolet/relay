@@ -38,7 +38,7 @@ The `model` field of an inference request resolves against the catalog. These fo
 
 Names are normalized before lookup, so dotted and hyphenated forms match (`gpt-5.5` and `gpt-5-5` are the same name). A dated snapshot name the model lists (for example `gpt-4o-2024-08-06`) selects that snapshot.
 
-A binding whose `snapshots` lists some of the model's snapshots serves only those, so a name routes only to hosts whose binding serves the snapshot it selects. A `@host` form exists only where that host's binding serves the snapshot; elsewhere the name answers `model_not_found`.
+A binding whose `snapshots` lists some of the model's snapshots serves only those, so a name routes only to hosts whose binding serves the snapshot it selects. At a host whose binding does not serve the snapshot, its `@host` form answers `model_not_found`.
 
 When a model has bindings on several hosts and you don't pin one, Relay tries the pools your caller policy links in their order (without one, the host keys your scopes own), keeping those at a host that serves the model, so that order decides the host order and later pools are the failover. See [Failover](/concepts/key-pooling#failover). Pin a host with `@host` in the model name, or send `X-WR-Upstream-Host: <host>`; Relay appends the header's host to the model name unless the name already contains `@`. A pin limits routing to that host; it does not grant access the policies don't give, and a host none of your pools is at is refused with `host_not_reachable`. See [Policies](/concepts/policies) for how grants are written.
 
