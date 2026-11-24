@@ -193,9 +193,9 @@ func TestChangePolicy_CopyUncarried(t *testing.T) {
 	if strings.Contains(err.Error(), "org-") {
 		t.Errorf("message names a link: %q", err)
 	}
-	dropAll := func(s *policy.Spec) { s.PoolIDs, s.Budgets = nil, nil }
+	dropAll := func(s *policy.Spec) { s.PoolIDs, s.Budgets = []string{"made-by-the-request"}, nil }
 	if c, err := ChangePolicy(in, dropAll, "/spec/access"); err != nil || c.Case != CaseCopy {
-		t.Errorf("a change removing them: %+v %v", c, err)
+		t.Errorf("a change removing them and linking a pool of its own: %+v %v", c, err)
 	}
 }
 

@@ -181,7 +181,7 @@ func ChangePolicy(in PolicyReads, change func(*policy.Spec), pointer string) (Po
 	p.Meta.Name = in.Names.Mint("policy", p.Meta.DisplayName, "policy")
 	change(&p.Spec)
 	if c.Case == CaseCopy {
-		if counts := in.Uncarried(p); len(counts) > 0 {
+		if counts := in.Uncarried(carried(in.Policy, p)); len(counts) > 0 {
 			return c, &UncarriedError{Counts: counts}
 		}
 	}
@@ -197,6 +197,18 @@ func ChangePolicy(in PolicyReads, change func(*policy.Spec), pointer string) (Po
 	add("policy-binding", OpCreate, &b.Meta, b)
 	c.Policy = p
 	return c, nil
+}
+
+// carried is cp with only the links it carries over from src: the pools, rate limits and budgets the change left, not those it added.
+func carried(src, cp *policy.Policy) *policy.Policy {
+	out := *cp
+	out.Spec = cloneSpec(cp.Spec)
+	out.Spec.PoolIDs = slices.DeleteFunc(out.Spec.PoolIDs, func(id string) bool { return !slices.Contains(src.Spec.PoolIDs, id) })
+	out.Spec.RateLimits = slices.DeleteFunc(out.Spec.RateLimits, func(l policy.RateLimitLink) bool {
+		return !slices.ContainsFunc(src.Spec.RateLimits, func(s policy.RateLimitLink) bool { return s.RateLimitID == l.RateLimitID })
+	})
+	out.Spec.Budgets = slices.DeleteFunc(out.Spec.Budgets, func(l policy.BudgetLink) bool { return !slices.Contains(src.BudgetIDs(), l.BudgetID) })
+	return &out
 }
 
 // cloneSpec is s with every list its own, so a change to the copy leaves s as it is.
