@@ -141,8 +141,6 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		keysByPrincipal:      make(map[string][]*key.Key, nRks),
 		subjectsByKey:        make(map[string][]string, nRks),
 		hashesByUser:         map[string][]string{},
-		serviceAccountIDsByOwner: map[meta.Owner][]string{},
-		serviceAccountOwners:     map[string]meta.Owner{},
 		tokenVersionByUser:   map[string]int{},
 		pricingsByID:         make(map[string]*pricing.Pricing, nPricings),
 		pricingByModelHost:   map[string]*pricing.Pricing{},

@@ -108,6 +108,9 @@ func (s *Snapshot) indexServiceAccountOwner(sa *serviceaccount.ServiceAccount) {
 		}
 		s.dropServiceAccountOwner(id)
 	}
+	if s.serviceAccountOwners == nil {
+		s.serviceAccountIDsByOwner, s.serviceAccountOwners = map[meta.Owner][]string{}, map[string]meta.Owner{}
+	}
 	have := s.serviceAccountIDsByOwner[owner]
 	at, _ := slices.BinarySearch(have, id)
 	s.serviceAccountIDsByOwner[owner] = slices.Insert(slices.Clone(have), at, id)
