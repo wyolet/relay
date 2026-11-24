@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/settings"
@@ -162,7 +163,12 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	// does not expect; the spec's UpstreamPath is the un-prefixed target
 	// (e.g. /v1/messages). Falls back to the raw path when no spec maps it.
 	spec := d.Specs.Spec(adapterKind)
-	upstreamPath := proxyUpstreamPath(r.URL.Path, spec, host)
+	upstreamPath, err := proxyUpstreamPath(r.URL.Path, spec, host)
+	if err != nil {
+		d.fireUsageFailure(ctx, plan.CodeHostMisconfigured, err.Error())
+		mapPipelineErr(w, err)
+		return
+	}
 
 	var pricing *pricing.Pricing
 	if lc != nil {
@@ -257,8 +263,8 @@ func proxyPinAllowed(p *Principal, h *apphost.Host) bool {
 	return p != nil && p.Caller != nil && p.Caller.Refused == nil && p.Caller.ReachesHost(h.Meta.ID)
 }
 
-func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Host) string {
-	// The host's own path wins verbatim (explicit "" = baseURL is the whole
+func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Host) (string, error) {
+	// The host's own path wins, placeholders filled (explicit "" = baseURL is the whole
 	// endpoint), mirroring the pipeline flow's Host.Spec.Path semantics.
 	if host != nil {
 		var shape adapters.Name
@@ -266,13 +272,17 @@ func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Hos
 			shape = spec.Name
 		}
 		if p := host.Spec.PathFor(shape); p != nil {
-			return *p
+			path, err := adapter.FillPath(*p, host.Spec.Backend)
+			if unfilled, ok := errors.AsType[*pipeline.PathPlaceholderError](err); ok {
+				unfilled.Host = host.Meta.Name
+			}
+			return path, err
 		}
 	}
 	if spec != nil && spec.DefaultPath != "" {
-		return spec.DefaultPath
+		return spec.DefaultPath, nil
 	}
-	return inboundPath
+	return inboundPath, nil
 }
 
 // extractorFor returns the per-shape token extractor used by proxy

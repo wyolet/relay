@@ -53,7 +53,7 @@ func (a *specAdapter) Call(ctx context.Context, up pipeline.Upstream, apiKey str
 	if up.Path != nil {
 		path = *up.Path
 	}
-	path, err := fillPath(path, up.Backend)
+	path, err := FillPath(path, up.Backend)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +82,8 @@ func pathSegment(model string) string {
 	return url.PathEscape(model)
 }
 
-// fillPath replaces each {key} in path with backend[key] as one path segment. A placeholder the backend leaves unset or empty, or a { that opens no well-formed placeholder, is a *pipeline.PathPlaceholderError: the request must not go out to a malformed URL.
-func fillPath(path string, backend map[string]string) (string, error) {
+// FillPath replaces each {key} in path with backend[key] as one path segment. A placeholder the backend leaves unset or empty, or a { that opens no well-formed placeholder, is a *pipeline.PathPlaceholderError: the request must not go out to a malformed URL.
+func FillPath(path string, backend map[string]string) (string, error) {
 	open := strings.IndexByte(path, '{')
 	if open < 0 {
 		return path, nil

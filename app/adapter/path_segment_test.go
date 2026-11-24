@@ -47,10 +47,10 @@ func TestFillPath(t *testing.T) {
 		{name: "nested brace", path: "/v1/{{project}}/chat", errKey: "-"},
 		{name: "trailing brace", path: "/v1/{", errKey: "-"},
 	} {
-		got, err := fillPath(tc.path, backend)
+		got, err := FillPath(tc.path, backend)
 		if tc.errKey == "" {
 			if err != nil || got != tc.want {
-				t.Errorf("%s: fillPath(%q) = %q, %v; want %q", tc.name, tc.path, got, err, tc.want)
+				t.Errorf("%s: FillPath(%q) = %q, %v; want %q", tc.name, tc.path, got, err, tc.want)
 			}
 			continue
 		}
@@ -60,14 +60,14 @@ func TestFillPath(t *testing.T) {
 			wantKey = ""
 		}
 		if !ok || got != "" || perr.Key != wantKey || perr.Path != tc.path {
-			t.Errorf("%s: fillPath(%q) = %q, %v; want a *pipeline.PathPlaceholderError for key %q", tc.name, tc.path, got, err, wantKey)
+			t.Errorf("%s: FillPath(%q) = %q, %v; want a *pipeline.PathPlaceholderError for key %q", tc.name, tc.path, got, err, wantKey)
 		}
 	}
 }
 
 func TestFillPath_NoPlaceholderAllocatesNothing(t *testing.T) {
 	backend := map[string]string{"project": "p1"}
-	if n := testing.AllocsPerRun(100, func() { _, _ = fillPath("/v1/chat/completions", backend) }); n != 0 {
-		t.Errorf("fillPath without a placeholder: %v allocs, want 0", n)
+	if n := testing.AllocsPerRun(100, func() { _, _ = FillPath("/v1/chat/completions", backend) }); n != 0 {
+		t.Errorf("FillPath without a placeholder: %v allocs, want 0", n)
 	}
 }

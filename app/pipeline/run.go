@@ -252,7 +252,8 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 			return actStop, out
 		}
 		// Every credential of the hop would build the same path, and the host was never dialled.
-		if _, ok := errors.AsType[*PathPlaceholderError](err); ok {
+		if unfilled, ok := errors.AsType[*PathPlaceholderError](err); ok {
+			unfilled.Host = hop.Host.Meta.Name
 			call.release()
 			out.err = err
 			return actNextHop, out

@@ -392,6 +392,14 @@ func TestAnswerOf(t *testing.T) {
 		{"no credentials", pipeline.ErrNoKeys, plan.Answer{
 			Status: 503, Type: "server_error", Code: "no_keys", Kind: plan.RefusalHostNotReachable, Message: "no host keys",
 		}, true},
+		{"unfilled path placeholder", &pipeline.PathPlaceholderError{Host: "h", Path: "/v1/{project}", Key: "project"}, plan.Answer{
+			Status: 502, Type: "server_error", Code: "host_misconfigured", Kind: plan.RefusalHostNotReachable,
+			Message: `upstream host "h" is misconfigured: its backend sets no value for the path placeholder {project}`,
+		}, true},
+		{"malformed path placeholder", &pipeline.PathPlaceholderError{Host: "h", Path: "/v1/{pro-ject}"}, plan.Answer{
+			Status: 502, Type: "server_error", Code: "host_misconfigured", Kind: plan.RefusalHostNotReachable,
+			Message: `upstream host "h" is misconfigured: its upstream path has a malformed placeholder`,
+		}, true},
 		{"upstream answered", &pipeline.UpstreamFailureError{Status: 500, Cause: pipeline.ErrAllKeysExhausted}, plan.Answer{}, false},
 		{"caller gone", context.Canceled, plan.Answer{}, false},
 		{"nil", nil, plan.Answer{}, false},
@@ -467,7 +475,13 @@ func TestRun_UnfilledPathMovesToTheNextHop(t *testing.T) {
 			health := make(hostHealthLog, 4)
 			p := newPipeline()
 			p.KeyAgent, p.HostHealth = agent, health
-			res, err := p.Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: tc.hops})
+			events := make(chan failureEvent, 2)
+			p.Lifecycle = lifecycle.New()
+			p.Lifecycle.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+				events <- failureEvent{ev.ErrorKind, ev.Status, ev.Refusal, ev.ErrorMessage}
+				return nil, nil
+			}})
+			res, err := p.Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: tc.hops, Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now())})
 			if len(tc.hops) > 1 {
 				if err != nil {
 					t.Fatalf("Run: %v", err)
@@ -476,8 +490,14 @@ func TestRun_UnfilledPathMovesToTheNextHop(t *testing.T) {
 				if got := <-health; got != "reachable:served" {
 					t.Errorf("reachability write = %q, want reachable:served", got)
 				}
-			} else if _, ok := errors.AsType[*pipeline.PathPlaceholderError](err); !ok {
-				t.Fatalf("err = %v, want *pipeline.PathPlaceholderError", err)
+			} else {
+				if _, ok := errors.AsType[*pipeline.PathPlaceholderError](err); !ok {
+					t.Fatalf("err = %v, want *pipeline.PathPlaceholderError", err)
+				}
+				want := failureEvent{"host_misconfigured", 502, "host_not_reachable", `upstream host "unfilled" is misconfigured: its backend sets no value for the path placeholder {project}`}
+				if got := <-events; got != want {
+					t.Errorf("failure event = %+v, want %+v", got, want)
+				}
 			}
 			if d := cmp.Diff(tc.wantCalls, adp.calls); d != "" {
 				t.Errorf("credentials called (-want +got):\n%s", d)

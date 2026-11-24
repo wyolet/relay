@@ -40,8 +40,8 @@ func TestProxyUpstreamPath(t *testing.T) {
 		{"unknown shape", nil, &apphost.Host{}, "/openai/v1/responses"},
 		{"shape without a native path", &adapter.Spec{}, nil, "/openai/v1/responses"},
 	} {
-		if got := proxyUpstreamPath("/openai/v1/responses", tc.spec, tc.host); got != tc.want {
-			t.Errorf("%s: path %q, want %q", tc.name, got, tc.want)
+		if got, err := proxyUpstreamPath("/openai/v1/responses", tc.spec, tc.host); got != tc.want || err != nil {
+			t.Errorf("%s: path %q, %v; want %q", tc.name, got, err, tc.want)
 		}
 	}
 }
