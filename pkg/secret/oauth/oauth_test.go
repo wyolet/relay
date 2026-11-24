@@ -417,6 +417,22 @@ func TestPrepareValue_SuccessWithoutAccessTokenFailsTheWrite(t *testing.T) {
 	}
 }
 
+// A token that never expires would never be renewed, and one about to would be renewed on every sweep: a save refuses both.
+func TestPrepareValue_RefusesTokenWithoutUsableLifetime(t *testing.T) {
+	for _, body := range []string{
+		`{"access_token":"minted","token_type":"Bearer"}`,
+		`{"access_token":"minted","token_type":"Bearer","expires_in":60}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			srv, allow, _ := tokenServer(t, http.StatusOK, body)
+			_, err := prepare(keyFile(srv.URL), allow)
+			if err == nil || !strings.Contains(err.Error(), "under 5 minutes") || pkgoauth.IsPermanent(err) {
+				t.Fatalf("err = %v, want the lifetime refusal, not permanent", err)
+			}
+		})
+	}
+}
+
 func TestPrepareValue_TransientFailureStoresGrantWithoutToken(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string

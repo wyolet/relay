@@ -245,6 +245,9 @@ func (r *Resolver) refreshTok(ctx context.Context, ref secret.Ref, cur *sdkoauth
 			}
 			return nil, false, fmt.Errorf("secret/oauth: token exchange %q: %w", ref.ID, err)
 		}
+		if r.shortLived(nt) {
+			return nil, false, fmt.Errorf("secret/oauth: token exchange %q: %w", ref.ID, errShortLifetime)
+		}
 	} else {
 		cfg, ok := r.cfg(ref.Provider)
 		if !ok {
@@ -392,6 +395,18 @@ func (e rejectedError) Error() string {
 
 func (e rejectedError) Unwrap() error { return e.err }
 
+// minTokenLifetime is the shortest token lifetime a JWT-bearer exchange may
+// return: a token without an expiry would never be renewed, and the refresher
+// renews 10 minutes ahead once a minute.
+const minTokenLifetime = 5 * time.Minute
+
+// errShortLifetime refuses a new credential on save; a renewal retries it and keeps the current token.
+var errShortLifetime = errors.New("the token endpoint returned a token with no expiry (expires_in) or one valid for under 5 minutes")
+
+func (r *Resolver) shortLived(tok *sdkoauth.Token) bool {
+	return tok.Expiry.IsZero() || tok.Expiry.Before(r.now().Add(minTokenLifetime))
+}
+
 // prepareWait bounds the token exchange a write runs to check a new credential.
 const prepareWait = 10 * time.Second
 
@@ -415,6 +430,8 @@ func (r *Resolver) PrepareValue(ctx context.Context, raw []byte) ([]byte, error)
 	next := sdkoauth.Credential{JWTBearer: cred.JWTBearer}
 	tok, err := r.exchange(ctx, cred.JWTBearer)
 	switch {
+	case err == nil && r.shortLived(tok):
+		return nil, errShortLifetime
 	case err == nil:
 		next.Token = *tok
 	case IsPermanent(err), errors.Is(err, sdkoauth.ErrNoAccessToken):

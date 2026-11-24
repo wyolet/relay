@@ -205,6 +205,28 @@ func TestRefresher_RefusedTokenURLRevokes(t *testing.T) {
 	}
 }
 
+// A renewal answered with a token without an expiry keeps the current token and retries on the next sweep.
+func TestRefresher_TokenWithoutExpiryRetries(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"forever","token_type":"Bearer"}`))
+	}))
+	defer srv.Close()
+
+	f, vault, notified := testRefresher(t, "http://unused", allowLocal(srv))
+	storeDueGrant(t, vault, "k1", srv.URL)
+	before := string(vault.blobs["k1"])
+
+	f.sweep(context.Background())
+	f.sweep(context.Background())
+
+	if hits != 2 || len(*notified) != 0 || string(vault.blobs["k1"]) != before {
+		t.Fatalf("hits = %d, events = %v, blob changed %v; want 2 hits, no event, the old token kept", hits, *notified, string(vault.blobs["k1"]) != before)
+	}
+}
+
 // A renewal answered with success but no access token is retried, never reported revoked.
 func TestRefresher_SuccessWithoutAccessTokenRetries(t *testing.T) {
 	hits := 0

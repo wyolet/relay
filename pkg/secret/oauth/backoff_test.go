@@ -23,7 +23,8 @@ func TestResolve_FailedExchangeBacksOff(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = w.Write([]byte(`{"access_token":"minted","token_type":"Bearer","expires_in":3600}`))
+		// A day, so the token outlives the fake clock's advance.
+		_, _ = w.Write([]byte(`{"access_token":"minted","token_type":"Bearer","expires_in":86400}`))
 	}))
 	defer srv.Close()
 
