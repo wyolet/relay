@@ -96,7 +96,14 @@ func newReachFixture(t *testing.T) *reachFixture {
 	a, b := reachRef(accA.Meta), reachRef(accB.Meta)
 	viaA, viaB := ReachVia{Pool: ptr(reachRef(f.pa.Meta)), Account: &a}, ReachVia{Pool: ptr(reachRef(f.pb.Meta)), Account: &b}
 	model := func(m meta.Metadata, hosts []ReachRef, via []ReachVia, upstream ...ReachRef) ReachedModel {
-		out := ReachedModel{Provider: reachRef(prov.Meta), Model: ReachModelRef{ReachRef: reachRef(m)}, Hosts: hosts, Via: via}
+		out := ReachedModel{Provider: reachRef(prov.Meta), Model: ReachModelRef{ReachRef: reachRef(m)}, Snapshots: []ReachSnapshot{{Name: m.Name}}}
+		for _, h := range hosts {
+			out.Hosts = append(out.Hosts, ReachHost{ReachRef: h, Snapshots: []string{m.Name}})
+		}
+		for _, v := range via {
+			v.Snapshots = []string{m.Name}
+			out.Via = append(out.Via, v)
+		}
 		for _, acc := range upstream {
 			out.Upstream = append(out.Upstream, ReachUpstream{Account: acc, Allowed: true})
 		}
@@ -152,6 +159,49 @@ func TestReachable_Refusals(t *testing.T) {
 	}
 }
 
+// Each reached host and pool names the snapshots whose requests it serves, so a host serving one snapshot of a model is told apart from one serving another; each snapshot lists the aliases resolving to it and, when it reaches nothing, the refusal a request naming it gets.
+func TestReachable_HostsNameTheSnapshotsTheyServe(t *testing.T) {
+	w := &plantest.World{}
+	prov := w.Provider("acme")
+	ha, hb := w.Host("host-a", "http://a.example"), w.Host("host-b", "http://b.example")
+	m := w.Model(prov, "m1", "m1-remote")
+	m.Spec.Aliases = []string{"m1-latest", "m1-preview[*]"}
+	w.Bind(m, ha, adapters.OpenAI, "m1-remote")
+	w.Bind(m, hb, adapters.OpenAI, "m1")
+	tm := w.Team()
+	accA, accB := w.Account(ha), w.Account(hb)
+	pa := w.Pool(ha, w.Credential(ha, accA, plantest.System, "sk-a"))
+	pb := w.Pool(hb, w.Credential(hb, accB, plantest.System, "sk-b"))
+	pol := w.Policy("team-default", policy.Spec{PoolIDs: []string{pa.Meta.ID, pb.Meta.ID}})
+	pol.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}
+	w.BindPolicy(pol, w.TeamAccount(tm))
+	teamAcct := reachRef(w.TeamAccount(tm).Meta)
+	h := reachHarness(t, w, authz.AlwaysAllowAuthenticated{})
+
+	a, b := reachRef(accA.Meta), reachRef(accB.Meta)
+	wantReach(t, h, "/accounts/"+teamAcct.ID+"/reachable", Reachable{Account: &teamAcct, Models: []ReachedModel{{
+		Provider: reachRef(prov.Meta), Model: ReachModelRef{ReachRef: reachRef(m.Meta)},
+		Hosts: []ReachHost{{ReachRef: reachRef(ha.Meta), Snapshots: []string{"m1-remote"}}, {ReachRef: reachRef(hb.Meta), Snapshots: []string{"m1"}}},
+		Via: []ReachVia{
+			{Pool: ptr(reachRef(pa.Meta)), Account: &a, Snapshots: []string{"m1-remote"}},
+			{Pool: ptr(reachRef(pb.Meta)), Account: &b, Snapshots: []string{"m1"}},
+		},
+		Snapshots: []ReachSnapshot{{Name: "m1", Aliases: []string{"m1-latest"}}, {Name: "m1-remote"}},
+		Upstream:  []ReachUpstream{{Account: a, Allowed: true}, {Account: b, Allowed: true}},
+	}}})
+
+	wantReach(t, h, "/catalog/reachable?owner=team:"+tm.Meta.ID+"&pool="+pa.Meta.ID, Reachable{Account: &teamAcct, Models: []ReachedModel{{
+		Provider: reachRef(prov.Meta), Model: ReachModelRef{ReachRef: reachRef(m.Meta)},
+		Hosts: []ReachHost{{ReachRef: reachRef(ha.Meta), Snapshots: []string{"m1-remote"}}},
+		Via:   []ReachVia{{Pool: ptr(reachRef(pa.Meta)), Account: &a, Snapshots: []string{"m1-remote"}}},
+		Snapshots: []ReachSnapshot{
+			{Name: "m1", Aliases: []string{"m1-latest"}, Refused: &ReachRefusal{Code: "no_credentials", Reason: "no reachable pool serves m1", Rung: "team"}},
+			{Name: "m1-remote"},
+		},
+		Upstream: []ReachUpstream{{Account: a, Allowed: true}},
+	}}})
+}
+
 // A pool the caller cannot read is left out of the draft with everything only it brings, and is dropped by id alone.
 func TestReachable_OmitsUnreadablePools(t *testing.T) {
 	f := newReachFixture(t)
@@ -188,9 +238,10 @@ func TestReachable_ShareHeldForAServiceAccount(t *testing.T) {
 
 	projAcct, saAcct, shared := reachRef(w.ProjectAccount(p).Meta), reachRef(w.ServiceAccountAccount(sa).Meta), reachRef(share.Meta)
 	reached := ReachedModel{
-		Provider: reachRef(prov.Meta), Model: ReachModelRef{ReachRef: reachRef(m.Meta)}, Hosts: []ReachRef{reachRef(h.Meta)},
-		Via:      []ReachVia{{Pool: ptr(reachRef(pl.Meta)), Account: &shared}},
-		Upstream: []ReachUpstream{{Account: reachRef(real.Meta), SharedAs: &shared, Allowed: true}},
+		Provider: reachRef(prov.Meta), Model: ReachModelRef{ReachRef: reachRef(m.Meta)}, Hosts: []ReachHost{{ReachRef: reachRef(h.Meta), Snapshots: []string{m.Meta.Name}}},
+		Via:       []ReachVia{{Pool: ptr(reachRef(pl.Meta)), Account: &shared, Snapshots: []string{m.Meta.Name}}},
+		Snapshots: []ReachSnapshot{{Name: m.Meta.Name}},
+		Upstream:  []ReachUpstream{{Account: reachRef(real.Meta), SharedAs: &shared, Allowed: true}},
 	}
 	draft := "/catalog/reachable?owner=project:" + p.Meta.ID + "&pool=" + pl.Meta.ID
 	// Read in the project's account the share serves nothing, and dropped says why and what to pass.

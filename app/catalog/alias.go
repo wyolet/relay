@@ -80,7 +80,7 @@ func (s *Snapshot) eachExactAlias(m *model.Model, provSlug string, fn func(key s
 			fn(slug.From(provSlug+"/"+a), base)
 		}
 		for _, hb := range s.BindingsForModel(m.Meta.ID) {
-			if !hb.IsEnabled() {
+			if !hb.IsEnabled() || !hb.Serves(tgt.Name) {
 				continue
 			}
 			h, ok := s.hostsByID[hb.Spec.HostID]
