@@ -63,6 +63,7 @@ func (d denyAction) Unwrap() authz.Authorizer { return d.Inner }
 type pseudoAgentWorld struct {
 	*sharesWorld
 	plans                                           *engine.Engine
+	holder                                          *plan.Holder
 	extraAccounts                                   []*account.Account
 	denied                                          *string
 	hidden                                          map[string]bool
@@ -155,7 +156,8 @@ func newPseudoAgentWorld(t *testing.T, opts ...func(*Deps)) *pseudoAgentWorld {
 func (w *pseudoAgentWorld) loadPlans(t *testing.T) {
 	t.Helper()
 	cells := cell.NewRegistry(cell.Options{})
-	w.plans = engine.New(engine.Options{Cells: cells})
+	w.holder = &plan.Holder{}
+	w.plans = engine.New(engine.Options{Cells: cells, Hooks: engine.Hooks{OnPublish: w.holder.OnPublish}})
 	s := w.stores
 	var accounts engine.Source[account.Account] = s.Account
 	if len(w.extraAccounts) > 0 {
@@ -192,7 +194,11 @@ func (w *pseudoAgentWorld) post(t *testing.T, who string, body map[string]any, d
 	}
 	rec := w.send(who, http.MethodPost, path, string(raw))
 	var out PseudoAgentCreated
-	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if rec.Code < 300 {
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Errorf("decode %s: %v", rec.Body, err)
+		}
+	}
 	return rec, out
 }
 
@@ -280,6 +286,12 @@ func TestPseudoAgent_PolicyAndKey(t *testing.T) {
 	must(t, "key", err)
 	if k == nil || k.Spec.Principal != (key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID}) || k.Spec.AccountID != lane.Meta.ID || out.Key.Plaintext == "" || apikey.Hash(out.Key.Plaintext) != k.Spec.KeyHash {
 		t.Fatalf("key = %+v, plaintext %q", k, out.Key.Plaintext)
+	}
+	// Once the plans hold what was written, the plaintext authenticates as the service account, in its account, with nothing refused.
+	w.loadPlans(t)
+	kp := w.holder.Load().Keys.Lookup(apikey.Hash(out.Key.Plaintext), time.Now())
+	if kp == nil || kp.Principal != k.Spec.Principal || kp.Caller == nil || kp.Caller.Lane.Meta.ID != lane.Meta.ID || kp.Caller.Refused != nil {
+		t.Fatalf("the plaintext authenticates as %+v", kp)
 	}
 
 	var actions []string
@@ -686,39 +698,57 @@ func TestPseudoAgent_BreaksAnExistingRow(t *testing.T) {
 	}
 }
 
-// Concurrent identical requests each land whole or answer 409; every service account made has its lane, binding and key.
+// Concurrent requests run one at a time: those that take no common name are all written, those that give the same name are written once and the rest answer 409 with nothing written.
 func TestPseudoAgent_Concurrent(t *testing.T) {
-	w := newPseudoAgentWorld(t)
-	w.loadPlans(t)
-	before := w.rowCounts(t)
 	const calls = 6
-	codes := make([]int, calls)
-	var wg sync.WaitGroup
-	for i := range calls {
-		wg.Go(func() {
-			rec, _ := w.post(t, "bob", w.agentBody(map[string]any{"policyId": w.projPolicy.Meta.ID, "key": map[string]any{}}), false)
-			codes[i] = rec.Code
-		})
+	run := func(t *testing.T, w *pseudoAgentWorld, name string) []int {
+		codes := make([]int, calls)
+		var wg sync.WaitGroup
+		for i := range calls {
+			wg.Go(func() {
+				body := w.agentBody(map[string]any{"policyId": w.projPolicy.Meta.ID, "key": map[string]any{}})
+				if name != "" {
+					body["metadata"].(map[string]any)["name"] = name
+				}
+				rec, _ := w.post(t, "bob", body, false)
+				codes[i] = rec.Code
+			})
+		}
+		wg.Wait()
+		slices.Sort(codes)
+		return codes
 	}
-	wg.Wait()
-	t.Logf("codes: %v", codes)
-	made := 0
-	for _, c := range codes {
-		switch c {
-		case http.StatusCreated:
-			made++
-		case http.StatusConflict:
-		default:
-			t.Fatalf("codes = %v, want only 201 and 409", codes)
+	grew := func(t *testing.T, w *pseudoAgentWorld, before map[string]int, n int) {
+		t.Helper()
+		after := w.rowCounts(t)
+		for _, kind := range []string{"service-account", "account", "policy-binding", "key"} {
+			if after[kind]-before[kind] != n {
+				t.Errorf("%d new %s rows, want %d", after[kind]-before[kind], kind, n)
+			}
 		}
 	}
-	if made == 0 {
-		t.Fatalf("codes = %v, want at least one through", codes)
-	}
-	after := w.rowCounts(t)
-	for _, kind := range []string{"service-account", "account", "policy-binding", "key"} {
-		if after[kind]-before[kind] != made {
-			t.Errorf("%d new %s rows for %d requests through", after[kind]-before[kind], kind, made)
+
+	// Requests that take no common name are each written in turn.
+	t.Run("apart", func(t *testing.T) {
+		w := newPseudoAgentWorld(t)
+		w.loadPlans(t)
+		before := w.rowCounts(t)
+		want := slices.Repeat([]int{http.StatusCreated}, calls)
+		if diff := cmp.Diff(want, run(t, w, "")); diff != "" {
+			t.Fatalf("codes (-want +got):\n%s", diff)
 		}
-	}
+		grew(t, w, before, calls)
+	})
+
+	// Requests that give the same name: one is written, the others answer 409 having written nothing.
+	t.Run("colliding", func(t *testing.T) {
+		w := newPseudoAgentWorld(t)
+		w.loadPlans(t)
+		before := w.rowCounts(t)
+		want := append([]int{http.StatusCreated}, slices.Repeat([]int{http.StatusConflict}, calls-1)...)
+		if diff := cmp.Diff(want, run(t, w, "ci-fixed")); diff != "" {
+			t.Fatalf("codes (-want +got):\n%s", diff)
+		}
+		grew(t, w, before, 1)
+	})
 }
