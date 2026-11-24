@@ -138,6 +138,9 @@ func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create C
 			} else {
 				changed[r.Meta.ID] = true
 			}
+			if rb, ok := r.Value.(*AccountRebinding); ok && rb.Held != nil {
+				changed[rb.Held.Meta.ID] = true
+			}
 		}
 		found, err := w.Check.Find(ctx, live, read.except(created, changed), proposal(rows))
 		if err != nil {
@@ -170,24 +173,53 @@ func (w Writer) RunWithWarnings(ctx context.Context, expand ExpandFunc, create C
 	return rows, warnings, nil
 }
 
-// Values is the rows' values as the plans see them, in order: an AccountRebinding is the binding it made.
+// Values is the rows' values as the plans see them, in order: an AccountRebinding is the binding it made, a PolicyCopy the copy.
 func Values(rows []Row) []any {
 	out := make([]any, len(rows))
 	for i, r := range rows {
 		out[i] = r.Value
-		if rb, ok := r.Value.(*AccountRebinding); ok {
-			out[i] = &rb.Binding
+		switch v := r.Value.(type) {
+		case *AccountRebinding:
+			out[i] = &v.Binding
+		case *PolicyCopy:
+			out[i] = v.Policy
 		}
 	}
 	return out
 }
 
-// proposal is what the steps propose to the plan check: each created or updated row, and each deleted one as a plan.Deleted.
+// proposal is what the steps propose to the plan check: each created or updated row, each deleted one as a plan.Deleted, and for a rebinding also the binding it took the account out of, as left.
 func proposal(rows []Row) []any {
 	out := Values(rows)
 	for i, r := range rows {
 		if r.Op == OpDelete {
 			out[i] = plan.Deleted{Row: r.Value}
+		}
+		rb, ok := r.Value.(*AccountRebinding)
+		if !ok {
+			continue
+		}
+		switch held, op := rb.heldRow(); op {
+		case OpUpdate:
+			out = append(out, held)
+		case OpDelete:
+			out = append(out, plan.Deleted{Row: held})
+		}
+	}
+	return out
+}
+
+// Changed lists the rows the steps that do op write, in write order, each as its kind and metadata: a rebinding's binding is made, and the binding it took the account out of is updated or deleted.
+func Changed(rows []Row, op Op) []Row {
+	var out []Row
+	for _, r := range rows {
+		if r.Op == op {
+			out = append(out, r)
+		}
+		if rb, ok := r.Value.(*AccountRebinding); ok {
+			if held, hop := rb.heldRow(); held != nil && hop == op {
+				out = append(out, Row{Kind: r.Kind, Pointer: r.Pointer, Meta: &held.Meta, Value: held, Op: op})
+			}
 		}
 	}
 	return out

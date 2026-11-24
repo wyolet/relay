@@ -54,12 +54,20 @@ func (d Deps) accessReads(ctx context.Context, body pseudo.Access) (in pseudo.Ac
 		if err != nil {
 			return in, nil, err
 		}
-		if p != nil {
-			pseudo.Record(ctx, id, p)
-			poolNames[id] = p.Meta.Name
-			upstreamAccounts = append(upstreamAccounts, p.Spec.AccountIDs...)
-			upstreamKeys = append(upstreamKeys, p.Spec.CredentialIDs...)
+		if p == nil {
+			continue
 		}
+		pseudo.Record(ctx, id, p)
+		if !visibleTo(ctx, d.Authz, "pool", p.Meta.ID, p.Meta.Owner) {
+			if in.HiddenPools == nil {
+				in.HiddenPools = map[string]bool{}
+			}
+			in.HiddenPools[id] = true
+		} else {
+			poolNames[id] = p.Meta.Name
+		}
+		upstreamAccounts = append(upstreamAccounts, p.Spec.AccountIDs...)
+		upstreamKeys = append(upstreamKeys, p.Spec.CredentialIDs...)
 	}
 	return in, poolNames, d.recordUpstream(ctx, upstreamAccounts, upstreamKeys)
 }

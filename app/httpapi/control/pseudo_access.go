@@ -21,16 +21,17 @@ type pseudoAccessInput struct {
 
 // PseudoAccessAnswer is what POST /pseudo-access wrote, or would write on a dry run.
 type PseudoAccessAnswer struct {
-	Case      pseudo.PolicyCase `json:"case"                enum:"none,own,copy" doc:"What the policy step did: none made a policy for an account in no binding, own changed the account's own policy in place, copy copied a policy shared or owned elsewhere into the target's scope and bound the account to the copy alone."`
-	Current   *PolicyCurrent    `json:"current,omitempty"   doc:"With spec.access omitted on a dry run: the policy the account is under now, absent for none. Nothing else is answered then."`
-	Unchanged bool              `json:"unchanged,omitempty" doc:"True when nothing needed writing: the account is in no binding and access is everyCredential without models, which is what it has already."`
-	Policy    *RowRef           `json:"policy,omitempty"    doc:"The policy the account is under once written."`
-	Pools     []RowRef          `json:"pools,omitempty"     doc:"The pools that policy links, in order."`
-	Shares    []RowRef          `json:"shares,omitempty"    doc:"The shares made of accounts the target's scope did not reach."`
-	Created   []CreatedRow      `json:"created,omitempty"   doc:"Every row made, in write order."`
-	Updated   []CreatedRow      `json:"updated,omitempty"   doc:"Every row updated, in write order."`
-	Deleted   []CreatedRow      `json:"deleted,omitempty"   doc:"Every row deleted, in write order."`
-	Warnings  []PseudoIssue     `json:"warnings"            doc:"Plan warnings the rows written would raise that are not there now, on those rows (as the row carrying the warning, or the row it names). They refuse nothing; [] when none, and on the dry run without access. A row the caller may not see keeps its code and kind only."`
+	Case            pseudo.PolicyCase `json:"case"                enum:"none,own,copy" doc:"What the policy step did: none made a policy for an account in no binding, own changed the account's own policy in place, copy copied a policy shared or owned elsewhere into the target's scope and bound the account to the copy alone."`
+	Current         *PolicyCurrent    `json:"current,omitempty"   doc:"With spec.access omitted on a dry run: the policy the account is under now, absent for none. Nothing else is answered then."`
+	Unchanged       bool              `json:"unchanged,omitempty" doc:"True when nothing needed writing: the account is in no binding and access is everyCredential without models, which is what it has already."`
+	Policy          *RowRef           `json:"policy,omitempty"    doc:"The policy the account is under once written."`
+	Pools           []RowRef          `json:"pools,omitempty"     doc:"The pools that policy links that the caller may see, in order."`
+	HiddenPoolsKept int               `json:"hiddenPoolsKept,omitempty" doc:"Pool links the caller may not see that the policy keeps, in their place in its order, as an update of the policy keeps them; current.hiddenPools counts them before the request. Absent when none."`
+	Shares          []RowRef          `json:"shares,omitempty"    doc:"The shares made of accounts the target's scope did not reach."`
+	Created         []CreatedRow      `json:"created,omitempty"   doc:"Every row made, in write order."`
+	Updated         []CreatedRow      `json:"updated,omitempty"   doc:"Every row updated, in write order."`
+	Deleted         []CreatedRow      `json:"deleted,omitempty"   doc:"Every row deleted, in write order."`
+	Warnings        []PseudoIssue     `json:"warnings"            doc:"Plan warnings the rows written would raise that are not there now, on those rows (as the row carrying the warning, or the row it names). They refuse nothing; [] when none, and on the dry run without access. A row the caller may not see keeps its code and kind only."`
 }
 
 type pseudoAccessOutput struct {
@@ -94,9 +95,9 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 	documentPlanIssue(api, "/pseudo-access")
 }
 
-// accessAnswer answers what rows did, by role.
+// accessAnswer answers what rows did, by role; poolNames hold no pool the caller may not see, so pools leaves those out.
 func accessAnswer(c pseudo.AccessChange, rows []pseudo.Row, poolNames map[string]string) PseudoAccessAnswer {
-	out := PseudoAccessAnswer{Case: c.Case, Unchanged: c.Unchanged, Created: stepRows(rows, pseudo.OpCreate), Updated: stepRows(rows, pseudo.OpUpdate), Deleted: stepRows(rows, pseudo.OpDelete), Pools: []RowRef{}, Shares: []RowRef{}}
+	out := PseudoAccessAnswer{Case: c.Case, Unchanged: c.Unchanged, HiddenPoolsKept: c.HiddenPoolsKept, Created: stepRows(rows, pseudo.OpCreate), Updated: stepRows(rows, pseudo.OpUpdate), Deleted: stepRows(rows, pseudo.OpDelete), Pools: []RowRef{}, Shares: []RowRef{}}
 	for _, r := range rows {
 		if a, ok := r.Value.(*account.Account); ok && r.Op == pseudo.OpCreate && a.IsShared() {
 			out.Shares = append(out.Shares, rowRef(r.Meta))
@@ -109,7 +110,9 @@ func accessAnswer(c pseudo.AccessChange, rows []pseudo.Row, poolNames map[string
 		ref := rowRef(&p.Meta)
 		out.Policy = &ref
 		for _, id := range p.Spec.PoolIDs {
-			out.Pools = append(out.Pools, RowRef{ID: id, Name: poolNames[id]})
+			if name, ok := poolNames[id]; ok {
+				out.Pools = append(out.Pools, RowRef{ID: id, Name: name})
+			}
 		}
 	}
 	return out

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -35,6 +34,7 @@ type PseudoHostKeyCreated struct {
 	Shares    []PseudoHostKeyShare  `json:"shares"              doc:"The account's share with each shareWith receiver, in order."`
 	Detection string                `json:"detection,omitempty" enum:"detected,unsupported,unreachable" doc:"What the host did when asked which organization spec.value belongs to: named it (detected), names none (unsupported), or gave no answer or another status (unreachable). Absent when no value was checked: valueFrom, or a host that takes no key."`
 	Detected  *DetectedOrganization `json:"detected,omitempty"  doc:"The organization the host named. A new account takes it as its orgId."`
+	Warnings  []PseudoIssue         `json:"warnings"            doc:"Plan warnings the rows written would raise that are not there now, on those rows (as the row carrying the warning, or the row it names). They refuse nothing; [] when none. A row the caller may not see keeps its code and kind only."`
 }
 
 // PseudoHostKeyShare is the account's share with one shareWith receiver.
@@ -106,11 +106,12 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 			reads.HostKeyID = keyID
 			return pseudo.ExpandHostKey(body, reads)
 		}
-		_, rows, err := d.runPseudo(ctx, expand, in.DryRun, outside...)
+		w, rows, err := d.runPseudo(ctx, expand, in.DryRun, outside...)
 		if err != nil {
 			return nil, err
 		}
 		out := &pseudoHostKeyOutput{Status: http.StatusCreated, Body: hostKeyCreated(rows, body.Spec, reads, check)}
+		out.Body.Warnings = w.warnings
 		if in.DryRun {
 			out.Status = http.StatusOK
 		}
@@ -322,11 +323,14 @@ func (d Deps) createPseudoHostKey(ctx context.Context, k *hostkey.HostKey) error
 	return nil
 }
 
-// rebindAccount binds v's account through the code PUT /accounts/{ref}/policy runs, with its checks, and keeps its audit rows. The binding it makes becomes v's; the binding it took the account out of is recorded for the plan check as it is left.
+// rebindAccount binds v's account through the code PUT /accounts/{ref}/policy runs, with its checks, and keeps its audit rows. The binding it makes becomes v's; the binding it took the account out of becomes v's Held as read before and Left as written, for the plan check.
 func (w *pseudoWrite) rebindAccount(ctx context.Context, d Deps, v *pseudo.AccountRebinding) error {
 	held, err := d.Stores.PolicyBinding.Holding(ctx, v.Account.Meta.ID)
 	if err != nil {
 		return err
+	}
+	if held != nil {
+		pseudo.Record(ctx, held.Meta.ID, held)
 	}
 	out, rows, err := d.applyAccountPolicy(ctx, v.Account, &v.PolicyID)
 	if err != nil {
@@ -335,11 +339,11 @@ func (w *pseudoWrite) rebindAccount(ctx context.Context, d Deps, v *pseudo.Accou
 	if out.Binding == nil || len(rows) == 0 {
 		return fmt.Errorf("account %q: binding it to policy %s wrote nothing", v.Account.Meta.Name, v.PolicyID)
 	}
-	v.Binding = *out.Binding
-	if held != nil {
-		left := *held
-		left.Spec.AccountIDs = slices.DeleteFunc(slices.Clone(held.Spec.AccountIDs), func(id string) bool { return id == v.Account.Meta.ID })
-		pseudo.Record(ctx, held.Meta.ID, &left)
+	v.Binding, v.Held = *out.Binding, held
+	if held != nil && !out.PreviousBindingDeleted {
+		if v.Left, err = d.Stores.PolicyBinding.Get(ctx, held.Meta.ID); err != nil {
+			return err
+		}
 	}
 	w.audit = append(w.audit, rows...)
 	return nil

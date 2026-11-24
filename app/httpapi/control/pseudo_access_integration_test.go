@@ -5,6 +5,7 @@ package control
 import (
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
@@ -204,30 +206,64 @@ func TestPseudoAccess_SharedPolicyLeavesTheOtherAccount(t *testing.T) {
 	}
 }
 
-// A copy refuses to carry a link its scope may not link (here a pool the caller may not see), naming the count and kind only; an access that drops it goes through.
+// A copy refuses to carry a link its scope may not link (here a budget of another team), naming the count and kind only; the access kind, which keeps a policy's budgets, refuses it too.
 func TestPseudoAccess_UncarriedLinks(t *testing.T) {
 	w := newPolicyStepWorld(t)
-	hidden := w.hiddenPool(t)
-	shared := w.policy(t, "two-shared", w.two, policy.Spec{PoolIDs: []string{w.twoPool.Meta.ID, hidden.Meta.ID}})
+	other := &budget.Budget{Meta: meta.Metadata{ID: ids.New(), Name: "one-budget", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: w.teamOne.Meta.ID}}, Spec: budget.Spec{AmountUSD: "10"}}
+	other.Default()
+	must(t, "budget", w.stores.Budget.Upsert(t.Context(), other))
+	shared := w.policy(t, "two-shared", w.two, policy.Spec{PoolIDs: []string{w.twoPool.Meta.ID}, Budgets: []policy.BudgetLink{{BudgetID: other.Meta.ID}}})
 	w.bind(t, shared, w.two, w.teamTwoOwn, w.projTwoOwn)
 	w.loadPlans(t)
 	before := w.rowCounts(t)
 	tgt := target("project", w.projTwo.Meta.ID)
 
-	rec, _ := w.limits(t, "bob", tgt, map[string]any{"budget": map[string]any{"amountUsd": "100"}}, false)
-	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != codeLinksNotCarried || !strings.Contains(rec.Body.String(), "1 pool") {
-		t.Fatalf("limits: %d %s, want 400 links_not_carried naming 1 pool", rec.Code, rec.Body)
-	}
-	if strings.Contains(rec.Body.String(), hidden.Meta.ID) || strings.Contains(rec.Body.String(), hidden.Meta.Name) {
-		t.Errorf("the refusal names the hidden pool: %s", rec.Body)
+	for name, send := range map[string]func() *httptest.ResponseRecorder{
+		"limits": func() *httptest.ResponseRecorder { rec, _ := w.limits(t, "bob", tgt, aBudget, false); return rec },
+		"access": func() *httptest.ResponseRecorder {
+			rec, _ := w.access(t, "bob", tgt, map[string]any{"poolIds": []string{w.twoPool.Meta.ID}}, false)
+			return rec
+		},
+	} {
+		rec := send()
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != codeLinksNotCarried || !strings.Contains(rec.Body.String(), "1 budget") {
+			t.Errorf("%s: %d %s, want 400 links_not_carried naming 1 budget", name, rec.Code, rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), other.Meta.ID) || strings.Contains(rec.Body.String(), other.Meta.Name) {
+			t.Errorf("%s: the refusal names the budget: %s", name, rec.Body)
+		}
 	}
 	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
 		t.Errorf("a refused request wrote rows (-before +after):\n%s", diff)
 	}
-	rec, out := w.access(t, "bob", tgt, map[string]any{"poolIds": []string{w.twoPool.Meta.ID}}, false)
-	wantStatus(t, rec, http.StatusCreated)
-	if out.Case != pseudo.CaseCopy {
-		t.Errorf("case %s, want copy", out.Case)
+}
+
+// A pool link the caller may not see is kept at its place, in place and in a copy, and the answer counts it without naming it; a limit on a copy carries it too.
+func TestPseudoAccess_KeepsHiddenPools(t *testing.T) {
+	for _, c := range []pseudo.PolicyCase{pseudo.CaseOwn, pseudo.CaseCopy} {
+		t.Run(string(c), func(t *testing.T) {
+			w := newPolicyStepWorld(t)
+			hidden := w.hiddenPool(t)
+			links := policy.Spec{PoolIDs: []string{hidden.Meta.ID, w.twoPool.Meta.ID}}
+			if c == pseudo.CaseOwn {
+				w.bind(t, w.policy(t, "two-app-own", w.owner, links), w.owner, w.projTwoOwn)
+			} else {
+				w.bind(t, w.policy(t, "two-shared", w.two, links), w.two, w.teamTwoOwn, w.projTwoOwn)
+			}
+			w.loadPlans(t)
+			rec, out := w.access(t, "bob", target("project", w.projTwo.Meta.ID), map[string]any{"accountIds": []string{w.secondHostAcct.Meta.ID}}, false)
+			wantStatus(t, rec, http.StatusCreated)
+			if out.Case != c || out.HiddenPoolsKept != 1 || len(out.Pools) != 1 {
+				t.Fatalf("answer = %+v, want %s keeping 1 hidden pool and naming the one made", out, c)
+			}
+			if strings.Contains(rec.Body.String(), hidden.Meta.ID) || strings.Contains(rec.Body.String(), hidden.Meta.Name) {
+				t.Errorf("the answer names the hidden pool: %s", rec.Body)
+			}
+			got := w.heldPolicy(t, w.projTwoOwn.Meta.ID)
+			if diff := cmp.Diff([]string{hidden.Meta.ID, out.Pools[0].ID}, got.Spec.PoolIDs); diff != "" {
+				t.Errorf("policy pools (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

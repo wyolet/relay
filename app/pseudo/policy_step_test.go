@@ -42,9 +42,10 @@ func heldBy(policyID string, accountIDs ...string) *policybinding.PolicyBinding 
 	return &policybinding.PolicyBinding{Meta: meta.Metadata{ID: "held", Name: "held", Owner: meta.Global, ResourceVersion: "7"}, Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: accountIDs}}
 }
 
-func newBinding(id, name, policyID string, acc *account.Account, pointer string) Row {
-	b := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: id, Name: name, Owner: acc.Meta.Owner}, Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{acc.Meta.ID}}}
-	return Row{Kind: "policy-binding", Pointer: pointer, Meta: &b.Meta, Value: b}
+// rebinding is the step binding acc alone to policyID, as PUT /accounts/{ref}/policy does.
+func rebinding(policyID string, acc *account.Account, pointer string) Row {
+	rb := &AccountRebinding{Account: acc, PolicyID: policyID}
+	return Row{Kind: "policy-binding", Pointer: pointer, Meta: &rb.Binding.Meta, Value: rb}
 }
 
 // none: a policy of the change alone, owned by the account's scope, bound to the account alone; an account not made yet is made first.
@@ -63,7 +64,7 @@ func TestChangePolicy_None(t *testing.T) {
 				if fresh {
 					want = append(want, Row{Kind: "account", Pointer: "/spec/access", Meta: &acc.Meta, Value: acc})
 				}
-				want = append(want, Row{Kind: "policy", Pointer: "/spec/access", Meta: &p.Meta, Value: p}, newBinding("id-2", "research-"+acc.Meta.Name, "id-1", acc, "/spec/access"))
+				want = append(want, Row{Kind: "policy", Pointer: "/spec/access", Meta: &p.Meta, Value: p}, rebinding("id-1", acc, "/spec/access"))
 				if diff := cmp.Diff(PolicyChange{Case: CaseNone, Rows: want, Policy: p}, got); diff != "" {
 					t.Errorf("(-want +got):\n%s", diff)
 				}
@@ -100,7 +101,7 @@ func TestChangePolicy_Own(t *testing.T) {
 	}
 }
 
-// copy: whatever makes it a copy (shared, owned elsewhere, the caller may not update it, a disabled binding), the copy carries models, links, description and labels, takes the change, and the account moves to it alone: its old binding shrinks, or goes when it held only the account.
+// copy: whatever makes it a copy (shared, owned elsewhere, the caller may not update it, a disabled binding), the copy carries models, links, description and labels, takes the change, and the account moves to it alone through the rebinding PUT /accounts/{ref}/policy makes.
 func TestChangePolicy_Copy(t *testing.T) {
 	no := false
 	src := func(owner meta.Owner) *policy.Policy {
@@ -116,7 +117,6 @@ func TestChangePolicy_Copy(t *testing.T) {
 		}{
 			{"bound to another account too", func(in *PolicyReads) {
 				in.Policy, in.Held, in.MayUpdate = src(acc.Meta.Owner), heldBy("gold", acc.Meta.ID, "other"), true
-				in.HeldAfter = heldBy("gold", "other")
 			}},
 			{"bound alone, another binding uses it", func(in *PolicyReads) {
 				in.Policy, in.Held, in.MayUpdate = src(acc.Meta.Owner), heldBy("gold", acc.Meta.ID), true
@@ -143,13 +143,9 @@ func TestChangePolicy_Copy(t *testing.T) {
 				cp := src(acc.Meta.Owner)
 				cp.Meta = meta.Metadata{ID: "id-1", Name: "gold-for-research", DisplayName: "Gold for Research", Description: "the gold tier", Labels: map[string]string{"tier": "gold"}, Owner: acc.Meta.Owner}
 				cp.Spec.Models = []string{"acme/m1", "acme/m2"}
-				rebind := Row{Kind: "policy-binding", Pointer: "/spec/budget", Meta: &in.Held.Meta, Value: in.Held, Op: OpDelete}
-				if in.HeldAfter != nil {
-					rebind = Row{Kind: "policy-binding", Pointer: "/spec/budget", Meta: &in.HeldAfter.Meta, Value: in.HeldAfter, Op: OpUpdate}
-				}
 				want := PolicyChange{Case: CaseCopy, Policy: cp, Rows: []Row{
-					{Kind: "policy", Pointer: "/spec/budget", Meta: &cp.Meta, Value: cp}, rebind,
-					newBinding("id-2", "gold-for-research-"+acc.Meta.Name, "id-1", acc, "/spec/budget"),
+					{Kind: "policy", Pointer: "/spec/budget", Meta: &cp.Meta, Value: &PolicyCopy{Policy: cp, Source: in.Policy}},
+					rebinding("id-1", acc, "/spec/budget"),
 				}}
 				if diff := cmp.Diff(want, got); diff != "" {
 					t.Errorf("(-want +got):\n%s", diff)

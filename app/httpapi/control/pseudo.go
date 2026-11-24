@@ -27,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pseudo"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/internal/storage"
@@ -277,6 +278,10 @@ func (w *pseudoWrite) create(ctx context.Context, tx *appcatalog.Stores, r pseud
 	case *policy.Policy:
 		if err = checkCreate(ctx, policyChecks(d), "", &v.Meta, v); err == nil {
 			err = insertRow(ctx, d.Stores.Policy, v)
+		}
+	case *pseudo.PolicyCopy:
+		if err = checkCreate(ctx, policyChecksCopying(d, refcheck.PolicyLinks(v.Source)), "", &v.Policy.Meta, v.Policy); err == nil {
+			err = insertRow(ctx, d.Stores.Policy, v.Policy)
 		}
 	case *policybinding.PolicyBinding:
 		_, _, err = d.createBinding(ctx, v)

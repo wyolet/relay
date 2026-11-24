@@ -41,6 +41,8 @@ type AccessReads struct {
 	// Labelled are the pools labelled AccessLabel=<target account id> the caller may see; LinkedBy are the ids of the policies linking each, by pool id.
 	Labelled []*pool.Pool
 	LinkedBy map[string][]string
+	// HiddenPools are the pools the policy links that the caller may not see, by id.
+	HiddenPools map[string]bool
 }
 
 // AccessChange is what an access body expands to.
@@ -48,9 +50,11 @@ type AccessChange struct {
 	PolicyChange
 	// Unchanged is set when nothing needed writing: an account in no binding already uses every credential and every model.
 	Unchanged bool
+	// HiddenPoolsKept counts the pool links the caller may not see that the policy keeps.
+	HiddenPoolsKept int
 }
 
-// ExpandAccess returns the steps that set the target's access: the shares access.accountIds needs, one pool per host (the labelled pool for that host updated in place when only the policy changed in place links it, else a new one labelled AccessLabel), the policy step setting the policy's pools to poolIds then those pools (none with everyCredential) and its models to access.models, then the delete of each labelled pool the policy no longer links that nothing else links.
+// ExpandAccess returns the steps that set the target's access: the shares access.accountIds needs, one pool per host (the labelled pool for that host updated in place when only the policy changed in place links it, else a new one labelled AccessLabel), the policy step setting the policy's pools to poolIds then those pools (none with everyCredential) and its models to access.models, then the delete of each labelled pool the policy no longer links that nothing else links. A pool link the caller may not see is kept where it was in the policy's order, in place and in a copy, as an update of the policy keeps the links it holds.
 func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
 	if err := CheckAccess(body); err != nil {
 		return AccessChange{}, err
@@ -79,6 +83,10 @@ func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
 		}
 		poolIDs = append(slices.Clone(a.PoolIDs), made...)
 	}
+	kept := 0
+	if p := in.Policy.Policy; p != nil {
+		poolIDs, kept = keepHidden(p.Spec.PoolIDs, poolIDs, in.HiddenPools)
+	}
 	models := slices.Clone(a.Models)
 	c, err := ChangePolicy(in.Policy, func(s *policy.Spec) { s.PoolIDs, s.Models = poolIDs, models }, "/spec/access")
 	if err != nil {
@@ -91,7 +99,21 @@ func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
 		}
 	}
 	c.Rows = rows
-	return AccessChange{PolicyChange: c}, nil
+	return AccessChange{PolicyChange: c, HiddenPoolsKept: kept}, nil
+}
+
+// keepHidden is named with each pool of current that hidden holds put back at its index in current (or last, past the end), and how many it put back.
+func keepHidden(current, named []string, hidden map[string]bool) ([]string, int) {
+	out := slices.Clone(named)
+	kept := 0
+	for i, id := range current {
+		if !hidden[id] || slices.Contains(out, id) {
+			continue
+		}
+		out = slices.Insert(out, min(i, len(out)), id)
+		kept++
+	}
+	return out, kept
 }
 
 // CheckAccess refuses a body whose target or access is malformed, access left out included, or names a row by anything but its id; it needs no read, so a caller runs it before reading what the body names. ExpandAccess runs it too.

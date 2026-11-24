@@ -140,6 +140,37 @@ func TestExpandAccess_Own(t *testing.T) {
 	}
 }
 
+// A pool link the caller may not see is kept at its place in the order, in place and in a copy, whatever access names; access cannot name it.
+func TestExpandAccess_KeepsHiddenPools(t *testing.T) {
+	const hiddenID = "01a20b40-0000-7000-8000-0000000000a9"
+	for _, c := range []PolicyCase{CaseOwn, CaseCopy} {
+		for _, tc := range []struct {
+			name   string
+			access AgentAccess
+			want   []string
+		}{
+			{"one pool named", AgentAccess{PoolIDs: []string{plainID}}, []string{plainID, hiddenID}},
+			{"pools reordered", AgentAccess{PoolIDs: []string{labelledBID, plainID, labelledAID}}, []string{labelledBID, hiddenID, plainID, labelledAID}},
+			{"every credential", AgentAccess{EveryCredential: true}, []string{hiddenID}},
+		} {
+			t.Run(string(c)+"/"+tc.name, func(t *testing.T) {
+				w := newAccessWorld()
+				w.own.Spec.PoolIDs = []string{plainID, hiddenID, labelledAID, labelledBID}
+				in := w.reads()
+				in.HiddenPools = map[string]bool{hiddenID: true}
+				in.Policy.Alone = c == CaseOwn
+				got, err := ExpandAccess(accessBody(&tc.access), in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if diff := cmp.Diff(tc.want, got.Policy.Spec.PoolIDs); diff != "" || got.Case != c || got.HiddenPoolsKept != 1 {
+					t.Errorf("case %s, kept %d, pools (-want +got):\n%s", got.Case, got.HiddenPoolsKept, diff)
+				}
+			})
+		}
+	}
+}
+
 // A labelled pool another policy links too is never updated or deleted: the host gets a new pool.
 func TestExpandAccess_LabelledPoolLinkedElsewhere(t *testing.T) {
 	w := newAccessWorld()
@@ -176,7 +207,7 @@ func TestExpandAccess_Copy(t *testing.T) {
 	for _, r := range got.Rows {
 		kinds = append(kinds, string(r.Op)+" "+r.Kind+" "+r.Meta.ID)
 	}
-	want := []string{" pool id-1", " policy id-2", "delete policy-binding held", " policy-binding id-3"}
+	want := []string{" pool id-1", " policy id-2", " policy-binding "}
 	if diff := cmp.Diff(want, kinds); diff != "" {
 		t.Errorf("rows (-want +got):\n%s", diff)
 	}

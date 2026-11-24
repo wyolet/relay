@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pseudo"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
@@ -56,7 +57,6 @@ func (d Deps) policyReads(ctx context.Context, t pseudo.Target) (pseudo.PolicyRe
 	in.Held, in.HeldScope = held, d.scopeOf(ctx, held.Meta.Owner)
 	moved := ""
 	c := planPolicyChange(held, in.Account.Meta.ID, &moved)
-	in.HeldAfter = c.shrunk
 	if in.HeldChangeable, err = d.mayTakeOut(ctx, held, c); err != nil {
 		return in, err
 	}
@@ -194,9 +194,10 @@ func (d Deps) boundAlone(ctx context.Context, held *policybinding.PolicyBinding,
 	return true, nil
 }
 
-// uncarriedLinks counts, by kind, the links of p that a policy of p's owner may not link, as POST /policies of p would refuse them.
+// uncarriedLinks counts, by kind, the links p carries over from the policy it copies that a policy of p's owner may not link, as the copy's create (POST /policies/{ref}/duplicate's checks) would refuse them: a link the caller may not see is held, as the source's own was, and only the owner rules apply.
 func (d Deps) uncarriedLinks(ctx context.Context, p *policy.Policy) map[string]int {
 	c := refs(d)
+	c.Held = refcheck.PolicyLinks(p)
 	out := map[string]int{}
 	for _, id := range p.Spec.PoolIDs {
 		if c.PoolRefs(ctx, []string{id}, p.Meta.Owner) != nil {

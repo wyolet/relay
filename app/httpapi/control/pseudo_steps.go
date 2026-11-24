@@ -11,7 +11,6 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
@@ -38,17 +37,6 @@ func (w *pseudoWrite) update(ctx context.Context, tx *appcatalog.Stores, r pseud
 		fields, err = updateStep(ctx, d.Stores.Policy, policyChecks(d), func(p *policy.Policy) *meta.Metadata { return &p.Meta }, v)
 	case *pool.Pool:
 		fields, err = updateStep(ctx, d.Stores.Pool, poolChecks(d), poolMeta, v)
-	case *policybinding.PolicyBinding:
-		var held *policybinding.PolicyBinding
-		if held, err = storedRow(ctx, d.Stores.PolicyBinding, bindingMeta, r); err != nil {
-			return err
-		}
-		row, err := d.shrinkHeldBinding(ctx, held, v)
-		if err != nil {
-			return err
-		}
-		w.audit = append(w.audit, row)
-		return nil
 	default:
 		err = fmt.Errorf("no update for a %T row", r.Value)
 	}
@@ -79,23 +67,11 @@ func (w *pseudoWrite) remove(ctx context.Context, tx *appcatalog.Stores, r pseud
 			w.audit = append(w.audit, dropped.rows...)
 		}
 		return nil
-	case *policybinding.PolicyBinding:
-		held, err := storedRow(ctx, d.Stores.PolicyBinding, bindingMeta, r)
-		if err != nil {
-			return err
-		}
-		row, err := d.deleteHeldBinding(ctx, held)
-		if err != nil {
-			return err
-		}
-		w.audit = append(w.audit, row)
-		return nil
 	}
 	return fmt.Errorf("no delete for a %T row", r.Value)
 }
 
-func poolMeta(p *pool.Pool) *meta.Metadata                      { return &p.Meta }
-func bindingMeta(b *policybinding.PolicyBinding) *meta.Metadata { return &b.Meta }
+func poolMeta(p *pool.Pool) *meta.Metadata { return &p.Meta }
 
 // storedRow reads the stored row r's step changes, at the version r was read at: one written since answers meta.ErrStaleResourceVersion.
 func storedRow[T any](ctx context.Context, store entityStore[T], metaOf func(*T) *meta.Metadata, r pseudo.Row) (*T, error) {
@@ -130,13 +106,11 @@ func updateStep[T any](ctx context.Context, store entityStore[T], checks kindChe
 	return fields, updateRow(ctx, store, m, v)
 }
 
-// stepRows lists the rows of the steps that do op, in write order.
+// stepRows lists the rows the steps that do op write, in write order (pseudo.Changed).
 func stepRows(rows []pseudo.Row, op pseudo.Op) []CreatedRow {
 	out := []CreatedRow{}
-	for _, r := range rows {
-		if r.Op == op {
-			out = append(out, CreatedRow{Kind: r.Kind, ID: r.Meta.ID, Name: r.Meta.Name})
-		}
+	for _, r := range pseudo.Changed(rows, op) {
+		out = append(out, CreatedRow{Kind: r.Kind, ID: r.Meta.ID, Name: r.Meta.Name})
 	}
 	return out
 }

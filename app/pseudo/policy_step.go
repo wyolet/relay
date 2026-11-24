@@ -77,9 +77,7 @@ type PolicyReads struct {
 	// Held is the binding holding Account, nil for none; Policy is its policy, nil when it names none that exists.
 	Held   *policybinding.PolicyBinding
 	Policy *policy.Policy
-	// HeldAfter is Held without Account, as PUT /accounts/{ref}/policy leaves it when it binds Account elsewhere; nil when Held held only Account and is deleted.
-	HeldAfter *policybinding.PolicyBinding
-	// HeldChangeable reports whether the caller may take Account out of Held: HeldAfter's update, or Held's delete, passes; HeldScope is Held's owner.
+	// HeldChangeable reports whether the caller may take Account out of Held as PUT /accounts/{ref}/policy would: Held's update to it without Account, or its delete when Account was its only one, passes; HeldScope is Held's owner.
 	HeldChangeable bool
 	HeldScope      Scope
 	// Alone reports whether Held holds only Account and no other binding uses Policy.
@@ -137,6 +135,12 @@ func (e *UncarriedError) Error() string {
 	return "this account's policy is shared or owned elsewhere, so it is copied into the account's scope, but it links " + strings.Join(parts, " and ") + " that scope may not link; the copy cannot carry them. Remove them in the request, or ask an admin of the policy's scope"
 }
 
+// PolicyCopy is Policy made as a copy of Source, with the checks POST /policies/{ref}/duplicate runs: a link taken over from Source passes as Source's own did, so a link the caller may not see is kept, while the owner rules still apply. The plan check sees Policy.
+type PolicyCopy struct {
+	Policy *policy.Policy
+	Source *policy.Policy
+}
+
 // PolicyChange is what the step does: the case, the steps in write order, and the policy the account is under once they are written.
 type PolicyChange struct {
 	Case   PolicyCase
@@ -144,7 +148,7 @@ type PolicyChange struct {
 	Policy *policy.Policy
 }
 
-// ChangePolicy returns the steps that put change over the policy of in.Account: none makes the account first when it is new, then a policy of change applied to an empty spec, owned by the account's scope, and binds it alone; own updates the policy in place, or writes nothing when change leaves it as it is; copy makes a copy owned by the account's scope (models, links, description and labels), applies change, refuses with *UncarriedError links the copy would still carry that the scope may not link, then takes the account out of its binding and binds it to the copy alone, as PUT /accounts/{ref}/policy does. above is an *AboveError. pointer is the part of the body the steps come from.
+// ChangePolicy returns the steps that put change over the policy of in.Account: none makes the account first when it is new, then a policy of change applied to an empty spec, owned by the account's scope, and binds it alone (an AccountRebinding, the write PUT /accounts/{ref}/policy makes, as every binding the step writes is); own updates the policy in place, or writes nothing when change leaves it as it is; copy makes a copy owned by the account's scope (models, links, description and labels), applies change, refuses with *UncarriedError links the copy would still carry that the scope may not link, then takes the account out of its binding and binds it to the copy alone, as PUT /accounts/{ref}/policy does. above is an *AboveError. pointer is the part of the body the steps come from.
 func ChangePolicy(in PolicyReads, change func(*policy.Spec), pointer string) (PolicyChange, error) {
 	c := PolicyChange{Case: in.Case()}
 	add := func(kind string, op Op, m *meta.Metadata, v any) {
@@ -185,16 +189,13 @@ func ChangePolicy(in PolicyReads, change func(*policy.Spec), pointer string) (Po
 			return c, &UncarriedError{Counts: counts}
 		}
 	}
-	add("policy", OpCreate, &p.Meta, p)
-	if in.Held != nil {
-		if in.HeldAfter == nil {
-			add("policy-binding", OpDelete, &in.Held.Meta, in.Held)
-		} else {
-			add("policy-binding", OpUpdate, &in.HeldAfter.Meta, in.HeldAfter)
-		}
+	if c.Case == CaseCopy {
+		add("policy", OpCreate, &p.Meta, &PolicyCopy{Policy: p, Source: in.Policy})
+	} else {
+		add("policy", OpCreate, &p.Meta, p)
 	}
-	b := bindingAlone(in.Names, in.NewID, p.Meta.ID, p.Meta.Name, in.Account)
-	add("policy-binding", OpCreate, &b.Meta, b)
+	rb := &AccountRebinding{Account: in.Account, PolicyID: p.Meta.ID}
+	add("policy-binding", OpCreate, &rb.Binding.Meta, rb)
 	c.Policy = p
 	return c, nil
 }
