@@ -32,6 +32,9 @@ import (
 	"github.com/wyolet/relay/secret"
 )
 
+// ErrNoSecretBackend is a stored or oauth value written while no secret backend (master key) is configured.
+var ErrNoSecretBackend = errors.New("hostkey.Upsert: stored/oauth mode requires a secret backend (master key)")
+
 // Store is the HostKey data-access type. resolver resolves env + stored
 // refs to plaintext; stored writes stored-mode values (nil for env-only
 // deployments — stored-mode operations then error loudly).
@@ -156,7 +159,7 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 		// the row records value_kind='stored'. The oauth semantics + provider
 		// live in the spec JSON (ValueFrom.Kind/Provider), recovered in fromRow.
 		if s.stored == nil {
-			return errors.New("hostkey.Upsert: stored/oauth mode requires a secret backend (master key)")
+			return ErrNoSecretBackend
 		}
 		// Without a new value this is a metadata-only update: the stored
 		// value is kept, only moved to the owner's scope if the owner changed.

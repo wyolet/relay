@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
@@ -43,6 +44,24 @@ func TestPseudoHostKey_HiddenHoldingBinding(t *testing.T) {
 	want := `account "alice-other" is held by a policy binding you may not see`
 	if diff := cmp.Diff([]string{want, want}, answers); diff != "" {
 		t.Errorf("answers (-want +got):\n%s", diff)
+	}
+}
+
+// Without a secret backend a value cannot be stored: the request answers what POST /host-keys answers then, 500 with the store's message, before the host is asked anything.
+func TestPseudoHostKey_NoSecretBackend(t *testing.T) {
+	w := newHostKeyFormWorld(t, func(d *Deps) {
+		s := *d.Stores
+		s.Stored = nil
+		d.Stores = &s
+	})
+	for _, dry := range []bool{false, true} {
+		rec, _ := w.post(t, "alice", w.body("alice", map[string]any{"value": keyOrgC, "account": map[string]any{"displayName": "Work"}}), dry)
+		if r := refusalOf(t, rec); rec.Code != http.StatusInternalServerError || r.Err.Message != hostkey.ErrNoSecretBackend.Error() {
+			t.Errorf("dry run %v: %d %s, want 500 %q", dry, rec.Code, rec.Body, hostkey.ErrNoSecretBackend)
+		}
+	}
+	if n := w.probes.Load(); n != 0 {
+		t.Errorf("the provider got %d requests", n)
 	}
 }
 

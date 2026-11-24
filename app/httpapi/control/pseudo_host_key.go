@@ -4,7 +4,6 @@ package control
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -150,6 +149,9 @@ func (d Deps) checkHostKeyForm(ctx context.Context, body *pseudo.HostKeyForm) (*
 	if v == "" {
 		return nil, nil
 	}
+	if d.Stores.Stored == nil {
+		return nil, refusal(mapWriteErr("host-key", "", hostkey.ErrNoSecretBackend), "/spec/value")
+	}
 	c := checkKeyValue(ctx, d.Catalog.Current(), d.Adapters, h.Meta.ID, v)
 	if c.Outcome == keyRefused {
 		return &c, refusal(&httpapi.APIError{
@@ -200,7 +202,7 @@ func (d Deps) sealHostKeyValue(id string, owner meta.Owner, value string) pseudo
 		What: fmt.Sprintf("the sealed value of host key %s", id),
 		Write: func(ctx context.Context) error {
 			if d.Stores.Stored == nil {
-				return errors.New("a stored value needs the secret backend")
+				return hostkey.ErrNoSecretBackend
 			}
 			_, err := d.Stores.Stored.CreateScoped(ctx, hostkey.SecretScope(owner), id, []byte(value))
 			return err
