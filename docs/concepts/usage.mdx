@@ -61,7 +61,7 @@ The control API serves the events and aggregates over them. All paths are on the
 | `GET /api/logs` | The request log: full events, newest first, with the same filters and paging. `count=true` adds `total` (capped at 10,000) and `total_capped`. |
 | `GET /api/logs/{request_id}` | One event, with its captured bodies when [payload logging](/concepts/payload-logging#reading-captured-payloads) recorded them. |
 
-A caller whose role grants `usage.read` (or `logs.read`) at the global scope reads every event. Under `RELAY_AUTHZ=rbac`, anyone else reads only the events of projects they can see, plus their own requests. A request id outside that set answers `404`.
+A caller whose role grants `usage.read` (or `logs.read`) at the global scope reads every event. Under `RELAY_AUTHZ=rbac`, anyone else reads only the events of projects they can see, of service accounts owned directly by teams they can see, and of service accounts they own, plus their own requests. A request id outside that set answers `404`.
 
 ### Filters
 
