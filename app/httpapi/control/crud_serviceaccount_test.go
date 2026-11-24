@@ -109,6 +109,34 @@ func TestCreateServiceAccountForEitherOwner(t *testing.T) {
 	}
 }
 
+// A create may leave spec out when metadata.owner names the owner; with neither, the answer says what is missing. An update still needs spec, so it cannot reset a disabled service account.
+func TestCreateServiceAccountWithoutSpec(t *testing.T) {
+	projectID := meta.NewID()
+	h, _ := serviceAccountHarness(t)
+	for _, tc := range []struct {
+		body  string
+		owner meta.Owner
+	}{
+		{`{"metadata":{"name":"alice-bot","owner":{"kind":"user"}}}`, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}},
+		{`{"metadata":{"name":"ci","owner":{"kind":"project","id":"` + projectID + `"}}}`, meta.Owner{Kind: meta.OwnerProject, ID: projectID}},
+	} {
+		w := scopeReq(t, h, "alice", http.MethodPost, "/service-accounts", tc.body)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("%s = %d %s, want 201", tc.body, w.Code, w.Body)
+		}
+		if got := decodeServiceAccount(t, w.Body.Bytes()); got.Meta.Owner != tc.owner || !got.IsEnabled() {
+			t.Errorf("%s: owner %+v enabled %v, want %+v enabled", tc.body, got.Meta.Owner, got.IsEnabled(), tc.owner)
+		}
+	}
+	wantAPIError(t, scopeReq(t, h, "alice", http.MethodPost, "/service-accounts", `{"metadata":{"name":"y"}}`), http.StatusBadRequest, "",
+		`serviceaccount "y": a project owner needs metadata.owner.id or spec.projectId`)
+	w := scopeReq(t, h, "alice", http.MethodGet, "/service-accounts/alice-bot", "")
+	id := decodeServiceAccount(t, w.Body.Bytes()).Meta.ID
+	if w := scopeReq(t, h, "alice", http.MethodPut, "/service-accounts/by-id/"+id, `{"metadata":{"name":"alice-bot"}}`); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("update without spec = %d %s, want 422", w.Code, w.Body)
+	}
+}
+
 // A user creates a service account they own, their personal bot; the admin token may create one for any user, a user only for themselves.
 func TestCreateUserServiceAccount(t *testing.T) {
 	h, _ := serviceAccountHarness(t)

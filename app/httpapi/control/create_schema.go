@@ -12,8 +12,8 @@ import (
 // createMetadataSchema names Metadata with name optional, shared by every create body.
 const createMetadataSchema = "MetadataCreate"
 
-// specOptionalOnCreate are the kinds whose every spec field is optional, so a create may omit spec. Update keeps spec required: an omitted spec there would reset the stored row, re-enabling a disabled one.
-var specOptionalOnCreate = map[string]bool{"team": true, "group": true}
+// specOptionalOnCreate are the kinds whose every spec field is optional, so a create may omit spec. A service account needs spec.projectId only when metadata.owner is not given, which its Validate answers with 400. Update keeps spec required: an omitted spec there would reset the stored row, re-enabling a disabled one.
+var specOptionalOnCreate = map[string]bool{"team": true, "group": true, "service-account": true}
 
 // createRequestBody is the create body for T: a named component, <T>Create,
 // with T's shape but metadata.name optional, since create derives the slug
