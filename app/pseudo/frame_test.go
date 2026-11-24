@@ -9,10 +9,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
+	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/meta"
 )
@@ -108,6 +110,38 @@ func TestWriter_PlanIssues(t *testing.T) {
 	want := []engine.Issue{{Severity: engine.SeverityError, Code: plan.IssueRefMissing, Source: engine.Ref{Kind: plan.KindKey, ID: fw.bad.Meta.ID}, Target: engine.Ref{Kind: plan.KindAccount, ID: fw.bad.Value.(*key.Key).Spec.AccountID}, Field: "spec.accountId"}}
 	if diff := cmp.Diff(want, ie.Issues, cmpopts.IgnoreFields(engine.Issue{}, "Message")); diff != "" || tx.committed() {
 		t.Errorf("issues (-want +got):\n%s; committed %v", diff, tx.committed())
+	}
+}
+
+// Rows expand and create record are laid over the live view: a key in a service account and lane the view has not seen yet passes, and fails without them. Recording outside a run does nothing.
+func TestWriter_LaysRecordedReads(t *testing.T) {
+	w := &plantest.World{}
+	proj := w.Project(w.Team())
+	plans := w.Load(t)
+	owner := meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}
+	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "fresh", Owner: owner}, Spec: serviceaccount.Spec{ProjectID: proj.Meta.ID}}
+	lane := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", proj.Meta.ID)
+	lane.Meta.ID = meta.NewID()
+	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "fresh-key"}, Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID}, AccountID: lane.Meta.ID, KeyHash: meta.NewID()}}
+	row := Row{Kind: "key", Pointer: "/spec/key", Meta: &k.Meta, Value: k}
+	Record(t.Context(), sa.Meta.ID, sa)
+	writer := Writer{Stores: &fakeTx{}, Check: plan.NewCheck(false, time.Minute), View: plans.Engine.View}
+
+	expand := func(record bool) ExpandFunc {
+		return func(ctx context.Context, _ *appcatalog.Stores) ([]Row, error) {
+			if record {
+				Record(ctx, sa.Meta.ID, sa)
+				Record(ctx, lane.Meta.ID, lane)
+			}
+			return []Row{row}, nil
+		}
+	}
+	if _, err := writer.Run(t.Context(), expand(true), createAll, false); err != nil {
+		t.Fatalf("with the reads recorded: %v", err)
+	}
+	var ie *IssuesError
+	if _, err := writer.Run(t.Context(), expand(false), createAll, false); !errors.As(err, &ie) {
+		t.Fatalf("without them: %v, want plan issues", err)
 	}
 }
 

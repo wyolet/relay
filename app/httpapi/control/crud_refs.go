@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/pkg/meta"
@@ -175,12 +176,14 @@ func authorizeAsUser(ctx context.Context, d Deps, userID, action, kind string, s
 	return false, nil
 }
 
+// getOrNil reads a referenced row, nil when absent or unreadable; inside a pseudo write the row is recorded for its plan check (pseudo.Record).
 func getOrNil[T any](get func(context.Context, string) (*T, error)) func(context.Context, string) *T {
 	return func(ctx context.Context, id string) *T {
 		v, err := get(ctx, id)
 		if err != nil {
 			return nil
 		}
+		pseudo.Record(ctx, id, v)
 		return v
 	}
 }

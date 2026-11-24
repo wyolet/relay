@@ -294,7 +294,7 @@ func (w *pseudoAgentWorld) holdingOf(t *testing.T, accountID string) *policybind
 	return b
 }
 
-// Listed accounts: one the project reaches is pooled as it is, a share the project already holds is pooled as it is, and the caller's own account is shared with the project first. Listed again once the plans hold that share, the share is reused.
+// Listed accounts: one the project reaches is pooled as it is, a share the project already holds is pooled as it is, and the caller's own account is shared with the project first. Listed again at once, before the plans have seen that share, the share is reused and the request accepted.
 func TestPseudoAgent_SharesOnlyWhenNeeded(t *testing.T) {
 	w := newPseudoAgentWorld(t)
 	rec := w.share("alice", w.alicesAcct, account.ReceiverProject, w.projTwo.Meta.ID)
@@ -328,7 +328,6 @@ func TestPseudoAgent_SharesOnlyWhenNeeded(t *testing.T) {
 		t.Fatalf("lane held by %+v", held)
 	}
 
-	w.loadPlans(t)
 	rec, again := w.post(t, "bob", w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.bobAcct.Meta.ID}}}), false)
 	wantStatus(t, rec, http.StatusCreated)
 	if len(again.Shares) != 0 {
@@ -469,6 +468,45 @@ func TestPseudoAgent_PlanIssue(t *testing.T) {
 	want := []PseudoIssue{{Code: plan.IssuePoolsServeNothing, Kind: string(plan.KindPolicy), Name: "ci-bot", Field: "spec.poolIds", Pointer: "/spec/access"}}
 	if diff := cmp.Diff(want, onPolicy); diff != "" {
 		t.Errorf("issues (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
+		t.Errorf("a refused request wrote rows (-before +after):\n%s", diff)
+	}
+}
+
+// A host key written after the plans loaded counts: its account, keyless in the plans, serves the pool made from it.
+func TestPseudoAgent_KeyWrittenAfterThePlans(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	w.loadPlans(t)
+	must(t, "late key", w.stores.HostKey.Upsert(t.Context(), &hostkey.HostKey{
+		Meta: meta.Metadata{ID: ids.New(), Name: "two-empty-key", Owner: w.emptyAcct.Meta.Owner},
+		Spec: hostkey.Spec{HostID: w.host.Meta.ID, AccountID: w.emptyAcct.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "PSEUDO_AGENT_TEST_KEY"}},
+	}))
+	rec, _ := w.post(t, "bob", w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.emptyAcct.Meta.ID}}}), false)
+	wantStatus(t, rec, http.StatusCreated)
+}
+
+// A row read fresh that is really broken still refuses the rows it breaks, and what it breaks among existing rows is not laid on the request: a host disabled after the plans loaded.
+func TestPseudoAgent_FreshRowBroken(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	w.loadPlans(t)
+	off := false
+	disabled := *w.host
+	disabled.Spec.Enabled = &off
+	must(t, "disable host", w.stores.Host.Upsert(t.Context(), &disabled))
+	before := w.rowCounts(t)
+	rec, _ := w.post(t, "bob", w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.teamTwoAcct.Meta.ID}}}), false)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d %s, want 422", rec.Code, rec.Body)
+	}
+	issues := refusalOf(t, rec).Issues
+	if len(issues) == 0 {
+		t.Fatal("no issues listed")
+	}
+	for _, i := range issues {
+		if i.Pointer == "" {
+			t.Errorf("an issue on a row the request did not make: %+v", i)
+		}
 	}
 	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
 		t.Errorf("a refused request wrote rows (-before +after):\n%s", diff)

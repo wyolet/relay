@@ -1,4 +1,4 @@
-// Checking a set of rows before it is written: the rows are laid over a published view's input rows, a scratch engine runs every plan controller on the result, and the issues the result has that the view does not are returned. The scratch engine has its own cell registry and no hooks, and is closed before the answer, so nothing the request path reads changes.
+// Checking a set of rows before it is written: the rows are laid over a published view's input rows, with the rows the writer read from the database in between, a scratch engine runs every plan controller on the result, and the issues the result has that the baseline does not are returned. The scratch engine has its own cell registry and no hooks, and is closed before the answer, so nothing the request path reads changes.
 //
 // Out of scope: reading storage, and deciding what a caller is shown of an issue.
 
@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/wyolet/relay/app/account"
@@ -52,16 +53,22 @@ func NewCheck(rbac bool, timeout time.Duration) *Check {
 	return &Check{rbac: rbac, timeout: timeout, slot: make(chan struct{}, 1)}
 }
 
-// NewIssues lays proposed over live's input rows (each a pointer to an input row such as *account.Account; one with an id live holds replaces that row), runs every controller on the result, and returns the issues of the result that live does not have, warnings left out. Two issues are the same when their severity, code, source, target and field are. Past the timeout, the wait for an earlier check included, it returns ErrCheckTimeout.
-func (c *Check) NewIssues(ctx context.Context, live *engine.View, proposed []any) ([]engine.Issue, error) {
+// NewIssues lays read, then proposed, over live's input rows (each a pointer to an input row such as *account.Account; a later row with an id already laid replaces it), runs every controller on the result, and returns the issues of the result that the baseline does not have, warnings left out. read is what the database holds now of rows the caller read, which live may not have seen yet; a read row of no input kind is left out. The baseline is live's issues when every read row is the one live holds, else the issues of live with read laid over it, built the same way, so a row live has not seen yet neither hides nor causes an issue. Two issues are the same when their severity, code, source, target and field are. Past the timeout, the wait for an earlier check included, it returns ErrCheckTimeout.
+func (c *Check) NewIssues(ctx context.Context, live *engine.View, read, proposed []any) ([]engine.Issue, error) {
 	if live == nil {
 		return nil, errors.New("plan: no published view to check against")
 	}
-	src, err := layered(live, proposed)
+	full, stale, err := layered(live, read, proposed)
 	if err != nil {
 		return nil, err
 	}
-	src.RBAC = c.rbac
+	full.RBAC = c.rbac
+	var base *Sources
+	if stale {
+		b, _, _ := layered(live, read, nil)
+		b.RBAC = c.rbac
+		base = &b
+	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	select {
@@ -70,21 +77,36 @@ func (c *Check) NewIssues(ctx context.Context, live *engine.View, proposed []any
 		return nil, checkStopped(ctx)
 	}
 	type built struct {
-		v   *engine.View
-		err error
+		before, after []engine.Issue
+		err           error
 	}
 	done := make(chan built, 1)
 	go func() {
 		defer func() { <-c.slot }()
-		v, err := scratchView(src)
-		done <- built{v, err}
+		var b built
+		b.before = live.AllIssues()
+		if base != nil {
+			v, err := scratchView(*base)
+			if err != nil {
+				done <- built{err: err}
+				return
+			}
+			b.before = v.AllIssues()
+		}
+		v, err := scratchView(full)
+		if err != nil {
+			done <- built{err: err}
+			return
+		}
+		b.after = v.AllIssues()
+		done <- b
 	}()
 	select {
 	case b := <-done:
 		if b.err != nil {
 			return nil, b.err
 		}
-		return newIssues(live.AllIssues(), b.v.AllIssues()), nil
+		return newIssues(b.before, b.after), nil
 	case <-ctx.Done():
 		return nil, checkStopped(ctx)
 	}
@@ -138,58 +160,78 @@ func newIssues(before, after []engine.Issue) []engine.Issue {
 	return out
 }
 
-// layered is a Sources serving live's input rows with proposed laid over them; a proposed row of no input kind is an error.
-func layered(live *engine.View, proposed []any) (Sources, error) {
-	used := 0
-	byMeta := func(md meta.Metadata) string { return md.ID }
-	src := Sources{
-		Providers:       layer(live, proposed, &used, func(r *provider.Provider) string { return byMeta(r.Meta) }),
-		Hosts:           layer(live, proposed, &used, func(r *host.Host) string { return byMeta(r.Meta) }),
-		Models:          layer(live, proposed, &used, func(r *model.Model) string { return byMeta(r.Meta) }),
-		Bindings:        layer(live, proposed, &used, func(r *binding.Binding) string { return byMeta(r.Meta) }),
-		Pricings:        layer(live, proposed, &used, func(r *pricing.Pricing) string { return byMeta(r.Meta) }),
-		Overlays:        layer(live, proposed, &used, func(r *overlay.Overlay) string { return OverlayID(r.Kind, r.ResourceID) }),
-		Policies:        layer(live, proposed, &used, func(r *policy.Policy) string { return byMeta(r.Meta) }),
-		PolicyBindings:  layer(live, proposed, &used, func(r *policybinding.PolicyBinding) string { return byMeta(r.Meta) }),
-		RateLimits:      layer(live, proposed, &used, func(r *ratelimit.RateLimit) string { return byMeta(r.Meta) }),
-		Budgets:         layer(live, proposed, &used, func(r *budget.Budget) string { return byMeta(r.Meta) }),
-		Pools:           layer(live, proposed, &used, func(r *pool.Pool) string { return byMeta(r.Meta) }),
-		Accounts:        layer(live, proposed, &used, func(r *account.Account) string { return byMeta(r.Meta) }),
-		Credentials:     layer(live, proposed, &used, func(r *hostkey.HostKey) string { return byMeta(r.Meta) }),
-		Teams:           layer(live, proposed, &used, func(r *team.Team) string { return byMeta(r.Meta) }),
-		Projects:        layer(live, proposed, &used, func(r *project.Project) string { return byMeta(r.Meta) }),
-		ServiceAccounts: layer(live, proposed, &used, func(r *serviceaccount.ServiceAccount) string { return byMeta(r.Meta) }),
-		Users:           layer(live, proposed, &used, func(r *user.User) string { return r.ID }),
-		Keys:            layer(live, proposed, &used, func(r *key.Key) string { return byMeta(r.Meta) }),
-		Roles:           layer(live, proposed, &used, func(r *role.Role) string { return byMeta(r.Meta) }),
-		RoleBindings:    layer(live, proposed, &used, func(r *rolebinding.RoleBinding) string { return byMeta(r.Meta) }),
-		Groups:          layer(live, proposed, &used, func(r *group.Group) string { return byMeta(r.Meta) }),
-		AccountsSetting: layer(live, proposed, &used, func(*settings.Accounts) string { return settings.SectionAccounts }),
-	}
-	if used != len(proposed) {
-		return Sources{}, fmt.Errorf("plan: check: %d of %d proposed rows are of no input kind", len(proposed)-used, len(proposed))
-	}
-	return src, nil
+// layering lays read, then proposed, over live's rows, one kind at a time.
+type layering struct {
+	live           *engine.View
+	read, proposed []any
+	// used counts the proposed rows some kind took; stale is set by a read row live does not hold as it is.
+	used  int
+	stale bool
 }
 
-// layer is live's rows of kind T with the proposed rows of that kind laid over them, counting the proposed rows it took in used.
-func layer[T any](live *engine.View, proposed []any, used *int, id func(*T) string) rowList[T] {
-	var mine []*T
-	replaced := map[string]bool{}
-	for _, p := range proposed {
-		if r, ok := p.(*T); ok && r != nil {
-			mine = append(mine, r)
-			replaced[id(r)] = true
-			*used++
-		}
+// layered is a Sources serving live's input rows with read, then proposed, laid over them, and whether a read row differs from live's; a proposed row of no input kind is an error.
+func layered(live *engine.View, read, proposed []any) (Sources, bool, error) {
+	l := &layering{live: live, read: read, proposed: proposed}
+	byMeta := func(md meta.Metadata) string { return md.ID }
+	src := Sources{
+		Providers:       layer(l, func(r *provider.Provider) string { return byMeta(r.Meta) }),
+		Hosts:           layer(l, func(r *host.Host) string { return byMeta(r.Meta) }),
+		Models:          layer(l, func(r *model.Model) string { return byMeta(r.Meta) }),
+		Bindings:        layer(l, func(r *binding.Binding) string { return byMeta(r.Meta) }),
+		Pricings:        layer(l, func(r *pricing.Pricing) string { return byMeta(r.Meta) }),
+		Overlays:        layer(l, func(r *overlay.Overlay) string { return OverlayID(r.Kind, r.ResourceID) }),
+		Policies:        layer(l, func(r *policy.Policy) string { return byMeta(r.Meta) }),
+		PolicyBindings:  layer(l, func(r *policybinding.PolicyBinding) string { return byMeta(r.Meta) }),
+		RateLimits:      layer(l, func(r *ratelimit.RateLimit) string { return byMeta(r.Meta) }),
+		Budgets:         layer(l, func(r *budget.Budget) string { return byMeta(r.Meta) }),
+		Pools:           layer(l, func(r *pool.Pool) string { return byMeta(r.Meta) }),
+		Accounts:        layer(l, func(r *account.Account) string { return byMeta(r.Meta) }),
+		Credentials:     layer(l, func(r *hostkey.HostKey) string { return byMeta(r.Meta) }),
+		Teams:           layer(l, func(r *team.Team) string { return byMeta(r.Meta) }),
+		Projects:        layer(l, func(r *project.Project) string { return byMeta(r.Meta) }),
+		ServiceAccounts: layer(l, func(r *serviceaccount.ServiceAccount) string { return byMeta(r.Meta) }),
+		Users:           layer(l, func(r *user.User) string { return r.ID }),
+		Keys:            layer(l, func(r *key.Key) string { return byMeta(r.Meta) }),
+		Roles:           layer(l, func(r *role.Role) string { return byMeta(r.Meta) }),
+		RoleBindings:    layer(l, func(r *rolebinding.RoleBinding) string { return byMeta(r.Meta) }),
+		Groups:          layer(l, func(r *group.Group) string { return byMeta(r.Meta) }),
+		AccountsSetting: layer(l, func(*settings.Accounts) string { return settings.SectionAccounts }),
 	}
+	if l.used != len(proposed) {
+		return Sources{}, false, fmt.Errorf("plan: check: %d of %d proposed rows are of no input kind", len(proposed)-l.used, len(proposed))
+	}
+	return src, l.stale, nil
+}
+
+// layer is live's rows of kind T with l's read rows, then its proposed rows, of that kind laid over them; a later row with an id already laid replaces it in place.
+func layer[T any](l *layering, id func(*T) string) rowList[T] {
 	out := rowList[T]{id: id}
-	for r := range engine.All[T](live) {
-		if !replaced[id(r)] {
-			out.rows = append(out.rows, r)
+	at := map[string]int{}
+	put := func(r *T) {
+		if i, ok := at[id(r)]; ok {
+			out.rows[i] = r
+			return
+		}
+		at[id(r)] = len(out.rows)
+		out.rows = append(out.rows, r)
+	}
+	for r := range engine.All[T](l.live) {
+		put(r)
+	}
+	for _, x := range l.read {
+		if r, ok := x.(*T); ok && r != nil {
+			if held := engine.Get[T](l.live, id(r)); held == nil || !reflect.DeepEqual(held, r) {
+				l.stale = true
+			}
+			put(r)
 		}
 	}
-	out.rows = append(out.rows, mine...)
+	for _, x := range l.proposed {
+		if r, ok := x.(*T); ok && r != nil {
+			l.used++
+			put(r)
+		}
+	}
 	return out
 }
 

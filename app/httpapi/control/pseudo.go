@@ -154,6 +154,42 @@ func (d Deps) namesTaken(kind string) func(string) bool {
 	return func(string) bool { return false }
 }
 
+// recordUpstream records, for the plan check, what serves through the accounts and host keys named: each account, the real account behind a share, and every host key of those accounts. A kind calls it for the accounts and keys its rows draw on, so keys written a moment ago count.
+func (d Deps) recordUpstream(ctx context.Context, accountIDs, credentialIDs []string) error {
+	var held []string
+	for _, id := range accountIDs {
+		a, err := d.Stores.Account.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		if a == nil {
+			continue
+		}
+		pseudo.Record(ctx, id, a)
+		held = append(held, id)
+		if src := a.Spec.SourceAccountID; src != "" {
+			s, err := d.Stores.Account.Get(ctx, src)
+			if err != nil {
+				return err
+			}
+			pseudo.Record(ctx, src, s)
+			held = append(held, src)
+		}
+	}
+	keys, err := d.Stores.HostKey.IDsInAccounts(ctx, held)
+	if err != nil {
+		return err
+	}
+	for _, id := range append(keys, credentialIDs...) {
+		k, err := d.Stores.HostKey.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		pseudo.Record(ctx, id, k)
+	}
+	return nil
+}
+
 // pseudoWrite is one pseudo object's write: it creates each row as the row's own create route would, and keeps the audit rows and key plaintexts of what it made.
 type pseudoWrite struct {
 	d          Deps
@@ -236,6 +272,7 @@ func (d Deps) createPseudoShare(ctx context.Context, share *account.Account) err
 	if src == nil || !visibleTo(ctx, d.Authz, "account", src.Meta.ID, src.Meta.Owner) {
 		return huma.Error404NotFound(fmt.Sprintf("account %q not found", share.Spec.SourceAccountID))
 	}
+	pseudo.Record(ctx, src.Meta.ID, src)
 	if !src.IsProvider() {
 		return huma.Error400BadRequest(fmt.Sprintf("account %q is a %s account; only a provider account is shared", src.Meta.Name, src.Spec.Kind))
 	}

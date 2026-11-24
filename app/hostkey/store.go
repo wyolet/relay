@@ -70,6 +70,31 @@ func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 	return out, nil
 }
 
+// IDsInAccounts returns the ids of the host keys that name one of accountIDs, resolving no value.
+func (s *Store) IDsInAccounts(ctx context.Context, accountIDs []string) ([]string, error) {
+	want := make(map[string]bool, len(accountIDs))
+	for _, id := range accountIDs {
+		want[id] = true
+	}
+	rows, err := s.q.ListSecrets(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("hostkey.IDsInAccounts: %w", err)
+	}
+	var out []string
+	for _, r := range rows {
+		var spec struct {
+			AccountID string `json:"accountId"`
+		}
+		if err := json.Unmarshal(r.Spec, &spec); err != nil {
+			return nil, fmt.Errorf("hostkey %s: spec: %w", r.Name, err)
+		}
+		if want[spec.AccountID] {
+			out = append(out, r.ID)
+		}
+	}
+	return out, nil
+}
+
 // Upsert writes k. env rows store the var name; stored rows encrypt the
 // cleartext into secret_values (via the stored resolver) and persist a
 // ciphertext-free secrets row. Cleartext Spec.Value never reaches the

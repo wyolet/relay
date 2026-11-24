@@ -226,7 +226,7 @@ func BenchmarkCheck(b *testing.B) {
 
 	c := NewCheck(false, time.Minute)
 	for b.Loop() {
-		if _, err := c.NewIssues(b.Context(), h.e.View(), rows); err != nil {
+		if _, err := c.NewIssues(b.Context(), h.e.View(), nil, rows); err != nil {
 			b.Fatal(err)
 		}
 	}

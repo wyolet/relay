@@ -78,7 +78,7 @@ type Writer struct {
 	View func() *engine.View
 }
 
-// Run expands, creates each row in order, checks the rows against the plans and commits; a dry run does all of it but the commit. It returns the rows as created, also on a dry run. A refused row is a *RowError, a body that expands to nothing a *BodyError, rows the plans refuse an *IssuesError; nothing is written on any error.
+// Run expands, creates each row in order, checks the rows against the plans and commits; a dry run does all of it but the commit. It returns the rows as created, also on a dry run. A refused row is a *RowError, a body that expands to nothing a *BodyError, rows the plans refuse an *IssuesError; nothing is written on any error. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created.
 func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, error) {
 	if w.Check == nil || w.View == nil {
 		return nil, ErrNoPlans
@@ -87,6 +87,7 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 	if live == nil || live.Gen() == 0 {
 		return nil, ErrNoPlans
 	}
+	ctx, read := withReads(ctx)
 	var rows []Row
 	err := w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
 		var err error
@@ -98,7 +99,11 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 				return &RowError{Row: r, Err: err}
 			}
 		}
-		issues, err := w.Check.NewIssues(ctx, live, Values(rows))
+		ours := make(map[string]bool, len(rows))
+		for _, r := range rows {
+			ours[r.Meta.ID] = true
+		}
+		issues, err := w.Check.NewIssues(ctx, live, read.except(ours), Values(rows))
 		if err != nil {
 			return err
 		}

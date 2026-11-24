@@ -88,7 +88,7 @@ func registerPseudoAgent(api huma.API, d Deps, protect huma.Middlewares) {
 	documentPlanIssue(api, "/pseudo-agents")
 }
 
-// agentReads reads what expanding body needs, refusing a listed pool a policy of the owner may not link, or an account the caller may not see, with its pointer: the listed accounts, their hosts' names and which take no key, the owner's shares, the owner's name, the bound policy's name, and the names taken.
+// agentReads reads what expanding body needs, refusing a listed pool a policy of the owner may not link, or an account the caller may not see, with its pointer: the listed accounts, their hosts' names and which take no key, the owner's shares, the owner's name, the bound policy's name, and the names taken. It records for the plan check what the agent will draw on: those accounts and hosts, the listed or bound policy's pools, and their accounts and host keys.
 func (d Deps) agentReads(ctx context.Context, body pseudo.Agent) (pseudo.AgentReads, error) {
 	owner := body.Metadata.Owner
 	c := refs(d)
@@ -101,12 +101,14 @@ func (d Deps) agentReads(ctx context.Context, body pseudo.Agent) (pseudo.AgentRe
 		Names:        d.pseudoNamer(),
 		NewID:        ids.New,
 	}
+	var upstreamAccounts, upstreamKeys, pools []string
 	if a := body.Spec.Access; a != nil {
 		for i, id := range a.PoolIDs {
 			if err := c.PoolRefs(ctx, []string{id}, owner); err != nil {
 				return in, refusal(refErr(err), fmt.Sprintf("/spec/access/poolIds/%d", i))
 			}
 		}
+		pools = a.PoolIDs
 	}
 	if a := body.Spec.Access; a != nil && len(a.AccountIDs) > 0 {
 		in.Shares = map[string]*account.Account{}
@@ -126,7 +128,12 @@ func (d Deps) agentReads(ctx context.Context, body pseudo.Agent) (pseudo.AgentRe
 				return in, refusal(err, fmt.Sprintf("/spec/access/accountIds/%d", i))
 			}
 			in.Accounts[id] = acc
+			upstreamAccounts = append(upstreamAccounts, id)
+			if s := in.Shares[id]; s != nil {
+				upstreamAccounts = append(upstreamAccounts, s.Meta.ID)
+			}
 			if h, err := d.Stores.Host.Get(ctx, acc.Spec.HostID); err == nil && h != nil {
+				pseudo.Record(ctx, h.Meta.ID, h)
 				in.HostNames[h.Meta.ID] = h.Meta.Name
 				in.KeylessHosts[h.Meta.ID] = h.Spec.NoAuth
 			}
@@ -135,10 +142,23 @@ func (d Deps) agentReads(ctx context.Context, body pseudo.Agent) (pseudo.AgentRe
 	if id := body.Spec.PolicyID; id != "" {
 		in.PolicyName = "policy"
 		if p, err := d.Stores.Policy.Get(ctx, id); err == nil && p != nil {
+			pseudo.Record(ctx, id, p)
 			in.PolicyName = p.Meta.Name
+			pools = p.Spec.PoolIDs
 		}
 	}
-	return in, nil
+	for _, id := range pools {
+		p, err := d.Stores.Pool.Get(ctx, id)
+		if err != nil {
+			return in, err
+		}
+		if p != nil {
+			pseudo.Record(ctx, id, p)
+			upstreamAccounts = append(upstreamAccounts, p.Spec.AccountIDs...)
+			upstreamKeys = append(upstreamKeys, p.Spec.CredentialIDs...)
+		}
+	}
+	return in, d.recordUpstream(ctx, upstreamAccounts, upstreamKeys)
 }
 
 // agentCreated answers what the rows are, by role.
