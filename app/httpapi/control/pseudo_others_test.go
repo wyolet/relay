@@ -6,12 +6,11 @@ import (
 
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
-	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 )
 
-// The policy step never edits a policy or pool another account uses; if rows ever did, the check after the plan check refuses them: an edit of a policy two accounts share, or the delete of a pool another account's policy links, changes the other account's reach. The same rows with only the target bound pass.
+// Whatever row changes another account's reach, the check after the plan check sees it and refuses: an edit of a policy two accounts share, the delete of a pool another account's policy links, a pool that grows under another account, another account's binding deleted. The same rows with only the target bound pass.
 func TestOthersUnchanged(t *testing.T) {
 	w := &plantest.World{}
 	prov := w.Provider("acme")
@@ -19,45 +18,42 @@ func TestOthersUnchanged(t *testing.T) {
 	m1, m2 := w.Model(prov, "m1"), w.Model(prov, "m2")
 	w.Bind(m1, h, adapters.OpenAI)
 	w.Bind(m2, h, adapters.OpenAI)
-	acct := w.Account(h)
+	acct, acct2 := w.Account(h), w.Account(h)
 	cred := w.Credential(h, acct, plantest.System, "sk-x")
+	cred2 := w.Credential(h, acct2, plantest.System, "sk-y")
 	team := w.Team()
 	a, b := w.ProjectAccount(w.Project(team)), w.ProjectAccount(w.Project(team))
 	pl := w.Pool(h, cred)
 	shared := w.Policy("shared", policy.Spec{PoolIDs: []string{pl.Meta.ID}})
-	w.BindPolicy(shared, a, b)
+	w.BindPolicy(shared, a)
+	other := w.BindPolicy(shared, b)
 	alone := w.Policy("alone", policy.Spec{PoolIDs: []string{pl.Meta.ID}})
 	plans := w.Load(t)
 	live := plans.Engine.View()
 
 	narrowed := *shared
 	narrowed.Spec.Models = []string{"acme/m1"}
-	edit := []pseudo.Row{{Kind: "policy", Meta: &narrowed.Meta, Value: &narrowed, Op: pseudo.OpUpdate}}
-	gone := []pseudo.Row{{Kind: "pool", Meta: &pl.Meta, Value: pl, Op: pseudo.OpDelete}}
+	grown := *pl
+	grown.Spec.CredentialIDs = append(grown.Spec.CredentialIDs, cred2.Meta.ID)
 	soloEdit := *alone
 	soloEdit.Spec.Models = []string{"acme/m1"}
 	for _, tc := range []struct {
-		name    string
-		rows    []pseudo.Row
-		refused bool
+		name     string
+		proposed []any
+		refused  bool
 	}{
-		{"a shared policy edited", edit, true},
-		{"a pool another account's policy links deleted", gone, true},
-		{"a policy no other account is bound to edited", []pseudo.Row{{Kind: "policy", Meta: &soloEdit.Meta, Value: &soloEdit, Op: pseudo.OpUpdate}}, false},
+		{"a shared policy edited", []any{&narrowed}, true},
+		{"a pool another account's policy links deleted", []any{plan.Deleted{Row: pl}}, true},
+		{"a pool another account draws on grown", []any{&grown}, true},
+		{"another account's binding deleted", []any{plan.Deleted{Row: other}}, true},
+		{"a policy no other account is bound to edited", []any{&soloEdit}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proposed := make([]any, len(tc.rows))
-			for i, r := range tc.rows {
-				proposed[i] = r.Value
-				if r.Op == pseudo.OpDelete {
-					proposed[i] = plan.Deleted{Row: r.Value}
-				}
-			}
-			f, err := plan.NewCheck(false, time.Minute).Find(t.Context(), live, nil, proposed)
+			f, err := plan.NewCheck(false, time.Minute).Find(t.Context(), live, nil, tc.proposed)
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = othersUnchanged(tc.rows, a.Meta.ID)(f)
+			err = othersUnchanged(a.Meta.ID)(f)
 			if got := err != nil; got != tc.refused {
 				t.Fatalf("refused = %v (%v), want %v", got, err, tc.refused)
 			}
@@ -70,7 +66,7 @@ func TestOthersUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := othersUnchanged(edit, a.Meta.ID)(unchanged); err != nil {
+	if err := othersUnchanged(a.Meta.ID)(unchanged); err != nil {
 		t.Errorf("unchanged plans refused: %v", err)
 	}
 }

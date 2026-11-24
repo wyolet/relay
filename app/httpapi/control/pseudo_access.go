@@ -64,7 +64,7 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 		var targetID string
 		poolNames := map[string]string{}
 		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
-			return checkPolicyStep(change.Rows, targetID)(f)
+			return checkPolicyStep(targetID)(f)
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
 			if err := pseudo.CheckAccess(in.Body); err != nil {

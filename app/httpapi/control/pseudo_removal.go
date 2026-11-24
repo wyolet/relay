@@ -70,7 +70,7 @@ func registerPseudoAgentRemoval(api huma.API, d Deps, protect huma.Middlewares) 
 		var change pseudo.RemovalChange
 		laneID := ""
 		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
-			return othersUnchanged(append(pseudo.Changed(change.Rows, pseudo.OpUpdate), pseudo.Changed(change.Rows, pseudo.OpDelete)...), laneID)(f)
+			return othersUnchanged(laneID)(f)
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
 			if err := pseudo.CheckAgentRemoval(in.Body); err != nil {

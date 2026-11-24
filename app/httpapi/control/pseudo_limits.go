@@ -65,7 +65,7 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 		var targetID string
 		var unpriced []string
 		ctx = pseudo.AfterCheck(ctx, func(f plan.Findings) error {
-			if err := checkPolicyStep(change.Rows, targetID)(f); err != nil {
+			if err := checkPolicyStep(targetID)(f); err != nil {
 				return err
 			}
 			if s.Budget == nil {
