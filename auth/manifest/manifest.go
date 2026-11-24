@@ -81,9 +81,10 @@ type ProjectSpec struct {
 	Enabled *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
-// ServiceAccountSpec names the project the account lives in.
+// ServiceAccountSpec names the account's owner: exactly one of the project and the team.
 type ServiceAccountSpec struct {
-	Project string `yaml:"project"           json:"project"`
+	Project string `yaml:"project,omitempty" json:"project,omitempty"`
+	Team    string `yaml:"team,omitempty"    json:"team,omitempty"`
 	Enabled *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 

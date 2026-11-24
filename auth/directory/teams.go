@@ -26,7 +26,7 @@ func (d *Directory) UpdateTeam(ctx context.Context, t *Team) error {
 	return d.writeTeam(ctx, t)
 }
 
-// DeleteTeam removes the team; its store takes the team's projects, their service accounts, and every binding scoped to the team or one of its projects with it, so no binding outlives its scope.
+// DeleteTeam removes the team; its store takes the team's projects, their service accounts, and every binding scoped to the team or one of its projects with it, so no binding outlives its scope. It fails with ErrInvalid while the team owns a service account itself.
 func (d *Directory) DeleteTeam(ctx context.Context, id string) error {
 	return deleteRow(ctx, d, d.cfg.Stores.Teams, KindTeam, id)
 }

@@ -83,9 +83,9 @@ func (s *Snapshot) clone() *Snapshot {
 		projectsByName: shallowMap(s.projectsByName),
 		projectsByTeam: copySliceMap(s.projectsByTeam),
 
-		serviceAccountsByID:      shallowMap(s.serviceAccountsByID),
-		serviceAccountsByName:    shallowMap(s.serviceAccountsByName),
-		serviceAccountsByProject: copySliceMap(s.serviceAccountsByProject),
+		serviceAccountsByID:    shallowMap(s.serviceAccountsByID),
+		serviceAccountsByName:  shallowMap(s.serviceAccountsByName),
+		serviceAccountsByOwner: copySliceMap(s.serviceAccountsByOwner),
 
 		groupsByID:   shallowMap(s.groupsByID),
 		groupsByName: shallowMap(s.groupsByName),

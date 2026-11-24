@@ -4,11 +4,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -36,6 +39,40 @@ func TestLane_RungsFollowTheAccountsPlace(t *testing.T) {
 	}
 	if cp := h.keyPlan(teamKey).Caller; cp.Team().ID() != b.team.Meta.ID || cp.Project().ID() != "" {
 		t.Errorf("team member scope = team %q project %q", cp.Team().ID(), cp.Project().ID())
+	}
+}
+
+// A service account a team owns climbs the team's account and its own, with no project rung between them.
+func TestLane_TeamServiceAccountClimbsItsTeam(t *testing.T) {
+	b := newBasic()
+	bot := b.w.teamSA(b.team)
+	k := b.w.saKey(bot)
+	h := b.w.start(t)
+
+	cp := h.keyPlan(k).Caller
+	got := []string{cp.Team().SubjectID, cp.Project().SubjectID, cp.LaneRung().SubjectID, cp.Holder, cp.Team().ID(), cp.Project().ID(), cp.LaneRung().ScopeID}
+	want := []string{"account:" + b.w.teamAccount(b.team).Meta.ID, "", "account:" + b.w.saAccount(bot).Meta.ID, "serviceaccount:" + bot.Meta.ID, b.team.Meta.ID, "", b.team.Meta.ID}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("team, project, lane subject; holder; team, project, lane scope (-want +got):\n%s", diff)
+	}
+}
+
+// A lane whose team is gone files the missing team on the lane's account when the team owns it directly, and on the project between them otherwise.
+func TestLane_MissingTeamIssueNamesWhatPointsAtIt(t *testing.T) {
+	b := newBasic()
+	bot := b.w.teamSA(b.team)
+	h := b.w.start(t)
+	del(h, KindTeam, b.team.Meta.ID)
+
+	botAcct := b.w.saAccount(bot)
+	if i := issueAt(h.issues(KindAccount, botAcct.Meta.ID), IssueRefMissing, "metadata.owner"); i == nil || i.Target != (engine.Ref{Kind: KindTeam, ID: b.team.Meta.ID}) {
+		t.Errorf("team-owned lane issue = %+v, want the deleted team as its owner", i)
+	}
+	if i := issueAt(h.issues(KindProject, b.proj.Meta.ID), IssueRefMissing, "spec.teamId"); i == nil || i.Target != (engine.Ref{Kind: KindTeam, ID: b.team.Meta.ID}) {
+		t.Errorf("project-owned lane issue = %+v, want the deleted team on the project", i)
+	}
+	if is := h.issues(KindProject, b.team.Meta.ID); len(is) != 0 {
+		t.Errorf("issues filed on a project with the team's id: %+v", is)
 	}
 }
 

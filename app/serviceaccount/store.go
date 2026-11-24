@@ -1,4 +1,4 @@
-// Service accounts are stored by the auth module's directory store; project_id is a real column there (FK cascade), so deleting a Project drops its accounts without parsing JSONB.
+// Service accounts are stored by the auth module's directory store; project_id and team_id are real columns there, so deleting a Project drops its accounts (FK cascade) and deleting a Team that owns one is refused (FK restrict) without parsing JSONB.
 
 package serviceaccount
 
@@ -49,7 +49,7 @@ func (s *Store) Get(ctx context.Context, id string) (*ServiceAccount, error) {
 	return FromDirectory(r)
 }
 
-// Upsert expects Meta.ID set by the caller and re-derives Owner from ProjectID.
+// Upsert expects Meta.ID set by the caller and fills the spec field that mirrors the owner.
 func (s *Store) Upsert(ctx context.Context, sa *ServiceAccount) error {
 	sa.StampOwner()
 	r, err := sa.ToDirectory()

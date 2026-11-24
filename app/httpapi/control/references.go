@@ -374,6 +374,15 @@ func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 			out = append(out, referenceItem{Kind: "project", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.teamId", owner: p.Meta.Owner})
 		}
 	}
+	sas, err := d.Stores.ServiceAccount.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list service-accounts: %w", err)
+	}
+	for _, sa := range sas {
+		if ownedBy(sa.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "service-account", ID: sa.Meta.ID, Name: sa.Meta.Name, Via: "metadata.owner.id", owner: sa.Meta.Owner})
+		}
+	}
 	pols, err := d.Stores.Policy.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list policies: %w", err)

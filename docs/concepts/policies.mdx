@@ -12,7 +12,7 @@ Every request runs in one account, its [lane](/concepts/accounts#lanes), and cli
 | Lane | Rungs |
 | --- | --- |
 | Member or service account in project P of team T | T's account → P's account → the lane |
-| Member account in team T | T's account → the lane |
+| Member account in team T, or service account team T owns | T's account → the lane |
 | Personal account | The lane |
 | Provider account used as a lane | None: its own policy applies as the upstream rung of its keys, which are all it reaches |
 
@@ -44,7 +44,7 @@ When no caller rung links pools, the lane reaches the host keys its own scopes o
 | Lane | Host keys reached, in this order |
 | --- | --- |
 | Member or service account in a project | The project's, the team's, then the system's |
-| Member account in a team | The team's, then the system's |
+| Member account in a team, or service account a team owns | The team's, then the system's |
 | Personal account | The user's own, then the system's |
 | Provider account | That account's host keys |
 

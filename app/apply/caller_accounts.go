@@ -47,8 +47,12 @@ func (b *builder) planCallerAccounts(teamDocs []*manifest.TeamDTO, projDocs []*m
 		plan(account.ForProject(b.idx.Projects[d.Metadata.Name], d.Metadata.Name, d.Metadata.DisplayName))
 	}
 	for _, d := range saDocs {
-		if projectID := b.idx.Projects[d.Spec.Project]; projectID != "" {
-			plan(account.ForServiceAccount(b.idx.ServiceAccounts[d.Metadata.Name], d.Metadata.Name, d.Metadata.DisplayName, projectID))
+		owner := manifest.WireOwner{Kind: meta.OwnerProject, Name: d.Spec.Project}
+		if d.Spec.Team != "" {
+			owner = manifest.WireOwner{Kind: meta.OwnerTeam, Name: d.Spec.Team}
+		}
+		if scope, ok := b.scopeOf(owner); ok {
+			plan(account.ForServiceAccount(b.idx.ServiceAccounts[d.Metadata.Name], d.Metadata.Name, d.Metadata.DisplayName, scope.owner))
 		}
 	}
 	for _, d := range userDocs {
@@ -77,7 +81,7 @@ type namedScope struct {
 	name  string
 }
 
-// scopeOf resolves a role binding document's team or project scope; ok is false for any other scope or one that names nothing.
+// scopeOf resolves a role binding document's team or project scope, or a service account document's owner; ok is false for any other scope or one that names nothing.
 func (b *builder) scopeOf(o manifest.WireOwner) (namedScope, bool) {
 	names := map[meta.OwnerKind]map[string]string{meta.OwnerTeam: b.idx.Teams, meta.OwnerProject: b.idx.Projects}[o.Kind]
 	if names == nil {

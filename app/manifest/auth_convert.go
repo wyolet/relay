@@ -33,7 +33,7 @@ func fromAuthDoc(d *authmanifest.Document) (Document, error) {
 			Spec: ProjectSpec{Team: d.Project.Team, Enabled: d.Project.Enabled}}}, nil
 	case authmanifest.KindServiceAccount:
 		return Document{ServiceAccount: &ServiceAccountDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm,
-			Spec: ServiceAccountSpec{Project: d.ServiceAccount.Project, Enabled: d.ServiceAccount.Enabled}}}, nil
+			Spec: ServiceAccountSpec{Project: d.ServiceAccount.Project, Team: d.ServiceAccount.Team, Enabled: d.ServiceAccount.Enabled}}}, nil
 	case authmanifest.KindGroup:
 		return Document{Group: &GroupDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm,
 			Spec: GroupSpec{Members: d.Group.Members, Enabled: d.Group.Enabled}}}, nil
@@ -81,7 +81,7 @@ func projectDoc(d ProjectDTO) *authmanifest.Document {
 
 func serviceAccountDoc(d ServiceAccountDTO) *authmanifest.Document {
 	doc := authDoc(d.APIVersion, authmanifest.KindServiceAccount, d.Metadata)
-	doc.ServiceAccount = &authmanifest.ServiceAccountSpec{Project: d.Spec.Project, Enabled: d.Spec.Enabled}
+	doc.ServiceAccount = &authmanifest.ServiceAccountSpec{Project: d.Spec.Project, Team: d.Spec.Team, Enabled: d.Spec.Enabled}
 	return doc
 }
 

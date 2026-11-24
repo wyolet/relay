@@ -85,11 +85,11 @@ func refuseHostKeyMove(ctx context.Context, d Deps, moved *hostkey.HostKey) erro
 	})
 }
 
-// refuseServiceAccountMove refuses moving a service account to another project: its account, its keys and the bindings on them all sit in the project it was made in.
+// refuseServiceAccountMove refuses moving a service account to another owner, a team or a project: its account, its keys and the bindings on them all sit with the owner it was made under.
 func refuseServiceAccountMove(existing *serviceaccount.ServiceAccount) error {
 	return &httpapi.APIError{
 		Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: "resource_in_use", Message: fmt.Sprintf(
-			"service account %q stays in the project it was made in: its account and keys belong there; create a new service account in the other project", existing.Meta.Name)},
+			"service account %q stays in the %s it was made in: its account and keys belong there; create a new service account in the other team or project", existing.Meta.Name, existing.Meta.Owner.Kind)},
 		HTTPStatus: http.StatusConflict,
 	}
 }

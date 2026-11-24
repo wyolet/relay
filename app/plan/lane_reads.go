@@ -101,10 +101,11 @@ func readHolder[R *engine.Txn | *engine.View](r R, rd *callerReads, acc *account
 	return true
 }
 
-// readScopes reads the team and project the account sits in, and their own accounts; false when the scope is gone.
+// readScopes reads the team and project the account sits in, and their own accounts; false when the scope is gone. An account owned by a team leaves the project rung empty.
 func readScopes[R *engine.Txn | *engine.View](r R, rd *callerReads, lane *account.Account, issue func(engine.Issue)) bool {
 	scope := lane.Meta.Owner
 	teamID := scope.ID
+	teamOf, teamField := engine.Ref{Kind: KindAccount, ID: lane.Meta.ID}, "metadata.owner"
 	if scope.Kind == meta.OwnerProject {
 		p := engine.Get[project.Project](r, scope.ID)
 		if p == nil {
@@ -114,10 +115,11 @@ func readScopes[R *engine.Txn | *engine.View](r R, rd *callerReads, lane *accoun
 		rd.rungs[rungProject] = scopeRung(r, limits.RungProject, "project:"+p.Meta.ID, p.Meta.ID, p.Meta.Name, !p.IsEnabled())
 		rd.in = append(rd.in, p)
 		teamID = p.Spec.TeamID
+		teamOf, teamField = engine.Ref{Kind: KindProject, ID: p.Meta.ID}, "spec.teamId"
 	}
 	t := engine.Get[team.Team](r, teamID)
 	if t == nil {
-		issue(parentMissing(engine.Ref{Kind: KindProject, ID: scope.ID}, "spec.teamId", engine.Ref{Kind: KindTeam, ID: teamID}))
+		issue(parentMissing(teamOf, teamField, engine.Ref{Kind: KindTeam, ID: teamID}))
 		return false
 	}
 	rd.rungs[rungTeam] = scopeRung(r, limits.RungTeam, "team:"+t.Meta.ID, t.Meta.ID, t.Meta.Name, !t.IsEnabled())

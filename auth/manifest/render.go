@@ -51,7 +51,12 @@ func (r *Registry) FromServiceAccount(sa *directory.ServiceAccount, names Namer)
 	if err != nil {
 		return nil, err
 	}
-	d.ServiceAccount = &ServiceAccountSpec{Project: nameOf(names, KindProject, sa.Spec.ProjectID), Enabled: sa.Spec.Enabled}
+	d.ServiceAccount = &ServiceAccountSpec{Enabled: sa.Spec.Enabled}
+	if sa.Spec.TeamID != "" {
+		d.ServiceAccount.Team = nameOf(names, KindTeam, sa.Spec.TeamID)
+	} else {
+		d.ServiceAccount.Project = nameOf(names, KindProject, sa.Spec.ProjectID)
+	}
 	return d, nil
 }
 

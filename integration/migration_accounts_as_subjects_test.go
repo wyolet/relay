@@ -97,7 +97,7 @@ func writeSubjectsAtHead(t *testing.T) *subjectsRoundTrip {
 	}{
 		"on-team":     {system, managed(account.ForTeam(f.team.Meta.ID, f.team.Meta.Name, ""))},
 		"on-project":  {inProject, managed(account.ForProject(f.project.Meta.ID, f.project.Meta.Name, ""))},
-		"on-indexer":  {inProject, managed(account.ForServiceAccount(f.sa.Meta.ID, f.sa.Meta.Name, "", f.project.Meta.ID))},
+		"on-indexer":  {inProject, managed(account.ForServiceAccount(f.sa.Meta.ID, f.sa.Meta.Name, "", inProject))},
 		"on-alice":    {inProject, managed(member)},
 		"on-acme-org": {system, f.provider.Meta.ID},
 	}

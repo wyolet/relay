@@ -54,6 +54,47 @@ spec: {policy: search-default, accounts: [project-search, sa-indexer]}
 	}
 }
 
+// A service account a declared team owns gets its account planned in the team, so a binding in the same bundle can name it.
+func TestApplyBindsTheAccountOfATeamServiceAccount(t *testing.T) {
+	b := &builder{opts: Options{Stores: &Stores{}}, rows: &Rows{}, idx: newIndex(&Rows{}), admin: true}
+	doc := `kind: Team
+metadata: {name: ml}
+spec: {}
+---
+` + docHeader + `kind: ServiceAccount
+metadata: {name: deployer}
+spec: {team: ml}
+---
+` + docHeader + `kind: Policy
+metadata: {name: ml-default, owner: {kind: team, name: ml}}
+spec: {}
+---
+` + docHeader + `kind: PolicyBinding
+metadata: {name: ml-deployer, owner: {kind: team, name: ml}}
+spec: {policy: ml-default, accounts: [sa-deployer]}
+`
+	if err := b.run(context.Background(), userDocs(t, docHeader+doc)); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	var pb *policybinding.PolicyBinding
+	for _, v := range b.declared {
+		if x, ok := v.(*policybinding.PolicyBinding); ok {
+			pb = x
+		}
+	}
+	if pb == nil || len(pb.Spec.AccountIDs) != 1 {
+		t.Fatalf("binding = %+v, want one account", pb)
+	}
+	team := meta.Owner{Kind: meta.OwnerTeam, ID: b.idx.Teams["ml"]}
+	if a := b.callerAccounts[pb.Spec.AccountIDs[0]]; a == nil || a.DerivedKind() != account.KindService || a.Meta.Owner != team {
+		t.Errorf("account = %+v, want the service account's account in the team", a)
+	}
+	sa := entryFor(t, b, "ServiceAccount", "deployer")
+	if sa.Action != ActionCreate || sa.owner != team {
+		t.Errorf("service account entry = %+v, want a create owned by the team", sa)
+	}
+}
+
 // A document creates provider accounts only, and edits a caller account without moving it.
 func TestApplyAccountDocumentsLeaveCallerAccountsToRelay(t *testing.T) {
 	rows := tenancyRows(false)

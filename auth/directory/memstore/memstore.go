@@ -44,7 +44,7 @@ func (s *Store) Stores() directory.Stores {
 	return directory.Stores{
 		Users:  userStore{s},
 		Groups: kindStore[directory.Group]{s: s, t: s.groups, check: s.checkGroup},
-		Teams:  kindStore[directory.Team]{s: s, t: s.teams, onDelete: s.cascadeTeam},
+		Teams:  kindStore[directory.Team]{s: s, t: s.teams, checkDelete: s.checkTeamDelete, onDelete: s.cascadeTeam},
 		Projects: kindStore[directory.Project]{s: s, t: s.projects, check: s.checkProject, onDelete: s.cascadeProject,
 			prepare: (*directory.Project).StampOwner},
 		ServiceAccounts: kindStore[directory.ServiceAccount]{s: s, t: s.serviceAccounts, check: s.checkServiceAccount, onDelete: s.dropServiceAccount,
@@ -86,8 +86,28 @@ func (s *Store) checkProject(p *directory.Project) error {
 }
 
 func (s *Store) checkServiceAccount(sa *directory.ServiceAccount) error {
-	if _, ok := s.projects.rows[sa.Spec.ProjectID]; !ok {
-		return invalid("service account %q: project %q does not exist", sa.Meta.Name, sa.Spec.ProjectID)
+	if (sa.Spec.ProjectID == "") == (sa.Spec.TeamID == "") {
+		return invalid("service account %q: exactly one of project and team is set", sa.Meta.Name)
+	}
+	var found bool
+	switch o := sa.Meta.Owner; o.Kind {
+	case directory.OwnerProject:
+		_, found = s.projects.rows[o.ID]
+	case directory.OwnerTeam:
+		_, found = s.teams.rows[o.ID]
+	}
+	if !found {
+		return invalid("service account %q: %s %q does not exist", sa.Meta.Name, sa.Meta.Owner.Kind, sa.Meta.Owner.ID)
+	}
+	return nil
+}
+
+// checkTeamDelete stands in for the restricting foreign key: a team that owns service accounts is not deleted.
+func (s *Store) checkTeamDelete(id string) error {
+	for _, sa := range s.serviceAccounts.rows {
+		if sa.Spec.TeamID == id {
+			return invalid("team %q still owns service account %q", id, sa.Meta.Name)
+		}
 	}
 	return nil
 }

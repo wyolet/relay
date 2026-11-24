@@ -90,7 +90,7 @@ func (c Checker) receiverVisible(ctx context.Context, r account.Receiver) error 
 	return nil
 }
 
-// receiverExists refuses a share whose receiver names no row; a service account's share must be owned by its project.
+// receiverExists refuses a share whose receiver names no row; a service account's share must be owned by the service account's owner.
 func (c Checker) receiverExists(ctx context.Context, a *account.Account) error {
 	r := a.Receiver()
 	switch r.Kind {
@@ -121,8 +121,8 @@ func (c Checker) receiverExists(ctx context.Context, a *account.Account) error {
 		if sa == nil {
 			return notVisible("service-account", r.ID)
 		}
-		if home := (meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}); a.Meta.Owner != home {
-			return badRequest("a share with %s belongs to its project, %s; leave the owner out or set it to that project", c.rowText(ctx, "service-account", sa.Meta), c.scopeText(ctx, home))
+		if home := sa.Meta.Owner; a.Meta.Owner != home {
+			return badRequest("a share with %s belongs to its owner, %s; leave the owner out or set it to that %s", c.rowText(ctx, "service-account", sa.Meta), c.scopeText(ctx, home), home.Kind)
 		}
 	default:
 		return badRequest("an account is shared with a user, a team, a project or a service account, not a %s", a.Meta.Owner.Kind)
