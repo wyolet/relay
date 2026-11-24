@@ -75,7 +75,7 @@ func TestPseudoKinds_InSequence(t *testing.T) {
 	var limits PseudoLimitsAnswer
 	rec = send("/pseudo-limits", map[string]any{"metadata": map[string]any{"displayName": "CI cap"}, "spec": map[string]any{"target": sa, "budget": map[string]any{"amountUsd": "50"}}}, &limits)
 	wantStatus(t, rec, http.StatusCreated)
-	wantLimits := PseudoLimitsAnswer{Case: pseudo.CaseOwn, Policy: agent.Policy, Budget: &RowRef{ID: limits.Budget.ID, Name: "ci-cap"},
+	wantLimits := PseudoLimitsAnswer{Case: pseudo.CaseOwn, Policy: agent.Policy, Budget: &PseudoLimitRef{ID: limits.Budget.ID, Name: "ci-cap", Link: PseudoLimitLink{Shared: true}},
 		Created: []CreatedRow{{Kind: "budget", ID: limits.Budget.ID, Name: "ci-cap"}}, Updated: []CreatedRow{{Kind: "policy", ID: agent.Policy.ID, Name: agent.Policy.Name}}, Warnings: []PseudoIssue{}}
 	if diff := cmp.Diff(wantLimits, limits); diff != "" {
 		t.Errorf("limits (-want +got):\n%s", diff)

@@ -25,8 +25,8 @@ type PseudoLimitsAnswer struct {
 	Case           pseudo.PolicyCase `json:"case"                     enum:"none,own,copy" doc:"What the policy step did, as POST /pseudo-access answers it."`
 	Current        *PolicyCurrent    `json:"current,omitempty"        doc:"With both limits omitted on a dry run: the policy the account is under now, absent for none. Nothing else is answered then."`
 	Policy         *RowRef           `json:"policy,omitempty"         doc:"The policy the account is under once written, now linking the limit."`
-	Budget         *RowRef           `json:"budget,omitempty"         doc:"The budget made."`
-	RateLimit      *RowRef           `json:"rateLimit,omitempty"      doc:"The rate limit made."`
+	Budget         *PseudoLimitRef   `json:"budget,omitempty"         doc:"The budget made, with its link as stored."`
+	RateLimit      *PseudoLimitRef   `json:"rateLimit,omitempty"      doc:"The rate limit made, with its link as stored."`
 	UnpricedModels []string          `json:"unpricedModels,omitempty" doc:"With a budget: the models the target reaches now that have no pricing, as provider/model; requests for them answer unpriced_under_budget once the budget applies. A warning, not a refusal."`
 	Created        []CreatedRow      `json:"created,omitempty"        doc:"Every row made, in write order."`
 	Updated        []CreatedRow      `json:"updated,omitempty"        doc:"Every row updated, in write order."`
@@ -46,6 +46,7 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 		Path:        "/pseudo-limits",
 		Summary:     "Put a budget or rate limit on a team, project or service account",
 		Description: "In one transaction, makes the budget or rate limit (exactly one of spec.budget and spec.rateLimit, each the spec its own create takes) owned by the target's scope, then links it from the policy over the target's account beside what that policy links already, by the cases POST /pseudo-access describes: none, own, copy, and 403 policy_set_above. A copy that would carry links the target's scope may not link answers 400 links_not_carried. " +
+			"spec.link sets the link's own fields: shared (omitted means true) counts the limit once for everyone under the target, false once per account under it; models, with a rate limit only, scopes it to those models, checked as a policy update checks a rate-limit link's models (400 at /spec/link/models, as is models with a budget). The answer's budget or rateLimit carries the link as stored. " +
 			"Each row passes what its own create, update or delete call passes, with the same answers; then the result is checked against the plans (422 plan_issue) and against what every other account reaches (422 other_accounts_changed). A budget's answer lists unpricedModels, the models the target uses now that the budget would refuse for want of pricing; it does not refuse. dryRun=true answers 200 with the same body and writes nothing; with both limits omitted it answers only case and current.",
 		Tags:          []string{"policies"},
 		Middlewares:   protect,
@@ -86,6 +87,11 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 				return nil, err
 			}
 			targetID = reads.Account.Meta.ID
+			if reads.Case() != pseudo.CaseAbove {
+				if err := d.checkLinkModels(&in.Body, reads.Account.Meta.Owner, reads.Account.Meta.Name); err != nil {
+					return nil, err
+				}
+			}
 			change, err = pseudo.ExpandLimits(in.Body, reads)
 			return change.Rows, policyStepError(err)
 		}
@@ -98,11 +104,10 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 			ref := rowRef(&p.Meta)
 			out.Body.Policy = &ref
 		}
-		limit := rowRef(change.Limit.Meta)
 		if s.Budget != nil {
-			out.Body.Budget = &limit
+			out.Body.Budget = limitRef(change)
 		} else {
-			out.Body.RateLimit = &limit
+			out.Body.RateLimit = limitRef(change)
 		}
 		if !in.DryRun {
 			out.Status = http.StatusCreated

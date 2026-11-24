@@ -3,6 +3,8 @@
 package pseudo
 
 import (
+	"slices"
+
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
@@ -28,6 +30,13 @@ type LimitsSpec struct {
 	Target    Target          `json:"target"              doc:"The team, project or service account whose account the limit applies to."`
 	Budget    *budget.Spec    `json:"budget,omitempty"    doc:"A spend cap, as POST /budgets takes its spec. Exactly one of budget and rateLimit; both omitted, with dryRun=true, answers only case and current."`
 	RateLimit *ratelimit.Spec `json:"rateLimit,omitempty" doc:"A rate limit, as POST /rate-limits takes its spec. Exactly one of budget and rateLimit."`
+	Link      *LimitLink      `json:"link,omitempty"      doc:"How the policy links the limit. Omitted: counted once for everyone under the target, over every model."`
+}
+
+// LimitLink is how the policy links the limit: the fields of its budgets or rateLimits entry.
+type LimitLink struct {
+	Shared *bool    `json:"shared,omitempty" doc:"True or omitted counts the limit once for everyone under the target; false counts it separately for each account under it (each lane its own counter). Stored as the link's shared field."`
+	Models []string `json:"models,omitempty" doc:"With a rate limit only: the models it applies to, in the policy model grammar (provider or provider/model), checked as a policy update checks a rate-limit link's models and stored in their canonical form. Empty or omitted applies it to every model. With a budget, 400: a budget link has no model scope."`
 }
 
 // LimitsReads is what expanding a limits body reads besides it.
@@ -53,19 +62,25 @@ func ExpandLimits(body Limits, in PolicyReads) (LimitsChange, error) {
 		return LimitsChange{PolicyChange: c}, err
 	}
 	m := meta.Metadata{ID: in.NewID(), Name: body.Metadata.Name, DisplayName: body.Metadata.DisplayName, Description: body.Metadata.Description, Labels: body.Metadata.Labels, Owner: in.Account.Meta.Owner}
+	var opts LimitLink
+	if s.Link != nil {
+		opts = *s.Link
+	}
 	var limit Row
 	var link func(*policy.Spec)
 	if s.Budget != nil {
 		b := &budget.Budget{Meta: m, Spec: *s.Budget}
 		name(in.Names, "budget", &b.Meta)
 		limit = Row{Kind: "budget", Pointer: "/spec/budget", Meta: &b.Meta, Value: b}
-		link = func(p *policy.Spec) { p.Budgets = append(p.Budgets, policy.BudgetLink{BudgetID: b.Meta.ID}) }
+		link = func(p *policy.Spec) {
+			p.Budgets = append(p.Budgets, policy.BudgetLink{BudgetID: b.Meta.ID, Shared: opts.Shared})
+		}
 	} else {
 		rl := &ratelimit.RateLimit{Meta: m, Spec: *s.RateLimit}
 		name(in.Names, "rate-limit", &rl.Meta)
 		limit = Row{Kind: "rate-limit", Pointer: "/spec/rateLimit", Meta: &rl.Meta, Value: rl}
 		link = func(p *policy.Spec) {
-			p.RateLimits = append(p.RateLimits, policy.RateLimitLink{RateLimitID: rl.Meta.ID})
+			p.RateLimits = append(p.RateLimits, policy.RateLimitLink{RateLimitID: rl.Meta.ID, Models: slices.Clone(opts.Models), Shared: opts.Shared})
 		}
 	}
 	c, err := ChangePolicy(in, link, limit.Pointer)
@@ -81,8 +96,12 @@ func CheckLimits(body Limits) error {
 	if err := CheckTarget(body.Spec.Target); err != nil {
 		return err
 	}
-	if s := body.Spec; (s.Budget == nil) == (s.RateLimit == nil) {
+	s := body.Spec
+	if (s.Budget == nil) == (s.RateLimit == nil) {
 		return &BodyError{Pointer: "/spec", Message: "exactly one of spec.budget and spec.rateLimit is required"}
+	}
+	if s.Budget != nil && s.Link != nil && len(s.Link.Models) > 0 {
+		return &BodyError{Pointer: "/spec/link/models", Message: "spec.link.models applies to a rate limit only: a budget link counts spend on every model"}
 	}
 	return nil
 }
