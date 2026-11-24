@@ -121,29 +121,37 @@ func refuseOrganizationOwner(ctx context.Context, a authz.Authorizer, singular s
 	return nil
 }
 
-// checkCreate settles a new row's owner and runs the create checks on it, as the generic create route does once the row has its id and name: m is v's metadata, defaultOwnerKind fills an omitted owner kind ("" for none).
-func checkCreate[T any](ctx context.Context, checks kindChecks[T], defaultOwnerKind meta.OwnerKind, m *meta.Metadata, v *T) error {
+// settleCreateOwner settles the owner of a new row of checks' kind as checkCreate does before its guard: the system read as the organization where it names it, defaultOwnerKind for an omitted kind, the owners the kind refuses, and the caller's id stamped.
+func settleCreateOwner[T any](ctx context.Context, checks kindChecks[T], defaultOwnerKind meta.OwnerKind, o *meta.Owner) error {
 	singular := checks.singular
 	// system is reserved for seed paths; where it names the global scope
 	// it is read as the organization.
-	readSystemAsGlobal(singular, &m.Owner, meta.Owner{})
-	if m.Owner.Kind == meta.OwnerSystem {
+	readSystemAsGlobal(singular, o, meta.Owner{})
+	if o.Kind == meta.OwnerSystem {
 		return huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 	}
-	if m.Owner.Kind == "" && defaultOwnerKind != "" {
-		m.Owner.Kind = defaultOwnerKind
+	if o.Kind == "" && defaultOwnerKind != "" {
+		o.Kind = defaultOwnerKind
 	}
-	if err := refuseTenantOwner(singular, m.Owner); err != nil {
+	if err := refuseTenantOwner(singular, *o); err != nil {
 		return err
 	}
-	if err := refuseNonGlobalScopeOwner(singular, m.Owner); err != nil {
+	if err := refuseNonGlobalScopeOwner(singular, *o); err != nil {
 		return err
 	}
-	if err := refuseOrganizationOwner(ctx, checks.authz, singular, m.Owner); err != nil {
+	if err := refuseOrganizationOwner(ctx, checks.authz, singular, *o); err != nil {
 		return err
 	}
-	if err := stampOwnerID(ctx, &m.Owner); err != nil {
+	if err := stampOwnerID(ctx, o); err != nil {
 		return huma.Error400BadRequest(err.Error())
+	}
+	return nil
+}
+
+// checkCreate settles a new row's owner and runs the create checks on it, as the generic create route does once the row has its id and name: m is v's metadata, defaultOwnerKind fills an omitted owner kind ("" for none).
+func checkCreate[T any](ctx context.Context, checks kindChecks[T], defaultOwnerKind meta.OwnerKind, m *meta.Metadata, v *T) error {
+	if err := settleCreateOwner(ctx, checks, defaultOwnerKind, &m.Owner); err != nil {
+		return err
 	}
 	// The guard runs first: on kinds whose owner mirrors a spec field
 	// (Project, ServiceAccount) it is what re-derives

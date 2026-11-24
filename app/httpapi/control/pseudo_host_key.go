@@ -89,6 +89,9 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 	}, func(ctx context.Context, in *pseudoHostKeyInput) (*pseudoHostKeyOutput, error) {
 		body := in.Body
 		check, err := d.checkHostKeyForm(ctx, &body)
+		if err == nil {
+			err = d.mayCreateHostKeyForm(ctx, body)
+		}
 		if err != nil {
 			return nil, d.refusePseudo(ctx, err, in.DryRun)
 		}

@@ -456,7 +456,7 @@ func TestPseudoHostKey_Refusals(t *testing.T) {
 		{name: "another user as owner", who: "carol", spec: map[string]any{"value": keyOrgC, "account": newAcct}, status: 400, pointer: "/metadata/owner"},
 		{name: "the account's grant", who: "alice", deny: "accounts.create", spec: map[string]any{"value": keyOrgC, "account": newAcct}, status: 403, pointer: "/spec/account"},
 		{name: "the tier binding's grant", who: "alice", deny: "policy-bindings.create", spec: map[string]any{"value": keyOrgC, "account": newAcct, "tierPolicyId": w.paid.Meta.ID}, status: 403, pointer: "/spec/tierPolicyId"},
-		{name: "the host key's grant, after its value was sealed", who: "alice", deny: "host-keys.create", spec: map[string]any{"value": keyOrgC, "account": newAcct}, status: 403, pointer: "/metadata"},
+		{name: "the host key's grant, before its value is sealed", who: "alice", deny: "host-keys.create", spec: map[string]any{"value": keyOrgC, "account": newAcct}, status: 403, pointer: "/metadata/owner"},
 		{name: "an env value from a non-admin", who: "alice", spec: map[string]any{"valueFrom": map[string]string{"kind": "env", "env": "HKFORM_ENV_KEY"}, "account": newAcct}, status: 403, pointer: "/metadata"},
 		{name: "a share with a receiver the caller may not see", who: "alice", spec: map[string]any{"value": keyOrgC, "account": newAcct, "shareWith": []any{map[string]string{"kind": "team", "id": w.teamOne.Meta.ID}}}, status: 404, pointer: "/spec/shareWith/0"},
 	} {
