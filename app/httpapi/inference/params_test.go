@@ -38,7 +38,7 @@ func TestRenameBodyParams(t *testing.T) {
 		{"not an object", "openai", `[{"max_tokens":5}]`, `[{"max_tokens":5}]`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, superseded := renameBodyParams([]byte(tc.body), spec.ParamRenames(adapters.Name(tc.shape)))
+			got, superseded := editHopBody([]byte(tc.body), spec.ParamRenames(adapters.Name(tc.shape)), "")
 			if string(got) != tc.want {
 				t.Errorf("body = %s, want %s", got, tc.want)
 			}
@@ -85,6 +85,34 @@ func TestHopBody(t *testing.T) {
 		if n := testing.AllocsPerRun(100, func() { HopBody(h, adapters.OpenAI, body) }); n != 0 && !raceInstrumented {
 			t.Errorf("HopBody for a host without renames for the shape allocates %v times", n)
 		}
+	}
+}
+
+// A hop sending another name than the body's gets it set in the body, after its host's renames; hops all sending the body's name cost nothing.
+func TestHopBodyFor(t *testing.T) {
+	cc := &binding.Binding{Spec: binding.Spec{Adapter: adapters.OpenAI}}
+	renamer := host.Spec{RequestParamRenames: openAIMaxTokens}
+	hops := []plan.RouteHop{
+		{Binding: cc, Host: &host.Host{}, UpstreamModel: "m"},
+		{Binding: cc, Host: &host.Host{Spec: renamer}, ParamRenames: renamer.ParamRenames(adapters.OpenAI), UpstreamModel: "acme/m-v1:0"},
+	}
+	const base = `{"model":"m","max_tokens":5}`
+	body := []byte(base)
+	hopBody := HopBodyFor(hops, "m")
+	for i, want := range []string{base, `{"model":"acme/m-v1:0","max_completion_tokens":5}`} {
+		if got, _ := hopBody(&hops[i], adapters.OpenAI, body); string(got) != want {
+			t.Errorf("hop %d: body = %s, want %s", i, got, want)
+		}
+	}
+	if got, _ := hopBody(&hops[1], adapters.Gemini, []byte(`{"contents":[]}`)); string(got) != `{"contents":[]}` {
+		t.Errorf("body without a model member = %s, want it untouched", got)
+	}
+	if string(body) != base {
+		t.Fatalf("base body modified to %s", body)
+	}
+	same := hops[:1]
+	if n := testing.AllocsPerRun(100, func() { HopBodyFor(same, "m")(&same[0], adapters.OpenAI, body) }); n != 0 && !raceInstrumented {
+		t.Errorf("HopBodyFor over hops sending the body's name allocates %v times", n)
 	}
 }
 

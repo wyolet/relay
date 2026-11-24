@@ -180,6 +180,15 @@ var graphCases = []struct {
 		d[3].HostBinding.Spec.Pricing = "list"
 	}},
 	{name: "binding adapter that is no upstream shape", edit: func(d []manifest.Document) { d[3].HostBinding.Spec.Adapter = "canonical" }},
+	{name: "binding upstream name for a one-snapshot model", edit: func(d []manifest.Document) { d[3].HostBinding.Spec.UpstreamName = "global.openai.gpt-x-v1:0" }},
+	{name: "binding upstream name for several snapshots", edit: func(d []manifest.Document) {
+		d[2].Model.Spec.Snapshots = append(d[2].Model.Spec.Snapshots, model.Snapshot{Name: "gpt-x-2026-01-01"})
+		d[3].HostBinding.Spec.UpstreamName = "global.openai.gpt-x-v1:0"
+	}},
+	{name: "binding upstream name for the one snapshot it lists", edit: func(d []manifest.Document) {
+		d[2].Model.Spec.Snapshots = append(d[2].Model.Spec.Snapshots, model.Snapshot{Name: "gpt-x-2026-01-01"})
+		d[3].HostBinding.Spec.UpstreamName, d[3].HostBinding.Spec.Snapshots = "global.openai.gpt-x-v1:0", []string{"gpt-x"}
+	}},
 
 	// Pricing.
 	{name: "pricing for a missing model at a missing host", add: []manifest.Document{
@@ -371,7 +380,12 @@ var wantReports = map[string][]string{
 	"binding to missing pricing": {
 		"error ref_missing HostBinding/gpt-x-openai-host.spec.pricing → Pricing/ghost-price: pricing \"ghost-price\" not found",
 	},
-	"binding to present pricing": nil,
+	"binding to present pricing":                     nil,
+	"binding upstream name for a one-snapshot model": nil,
+	"binding upstream name for several snapshots": {
+		"warning invariant HostBinding/gpt-x-openai-host.spec.upstreamName: upstreamName \"global.openai.gpt-x-v1:0\" has no effect: the binding serves 2 snapshots of model \"gpt-x\"; list the one it names in spec.snapshots",
+	},
+	"binding upstream name for the one snapshot it lists": nil,
 	"binding: a binding in a missing project": {
 		"error ref_missing PolicyBinding/pb.metadata.owner → Project/ghost: project \"ghost\" not found",
 	},

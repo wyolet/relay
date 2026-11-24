@@ -57,6 +57,7 @@ func checkPricingRefs(g *graph) []Issue {
 //   - spec.pricing → Pricing name must exist when set
 //   - spec.adapter → must be a dispatchable upstream binding when set
 //   - spec.snapshots[] → must be a subset of the referenced model's snapshot names
+//   - spec.upstreamName → warned when the binding serves several snapshots, where it has no effect
 //   - no duplicate (model, host) pairs
 func checkBindingRefs(g *graph) []Issue {
 	var out []Issue
@@ -146,6 +147,19 @@ func checkBindingRefs(g *graph) []Issue {
 							Message: fmt.Sprintf("snapshot %q not declared in model %q spec.snapshots", sn, b.Spec.Model),
 						})
 					}
+				}
+				// Routing sends upstreamName only through a binding serving one snapshot (binding.UpstreamNameFor).
+				served := len(b.Spec.Snapshots)
+				if served == 0 {
+					served = len(m.Spec.Snapshots)
+				}
+				if b.Spec.UpstreamName != "" && served > 1 {
+					out = append(out, Issue{
+						Severity: SeverityWarning,
+						Kind:     KindInvariant,
+						Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.upstreamName"},
+						Message:  fmt.Sprintf("upstreamName %q has no effect: the binding serves %d snapshots of model %q; list the one it names in spec.snapshots", b.Spec.UpstreamName, served, b.Spec.Model),
+					})
 				}
 			}
 		}

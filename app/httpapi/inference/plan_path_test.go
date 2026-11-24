@@ -51,6 +51,39 @@ func listingWorld(t *testing.T) (*plantest.Plans, *Principal) {
 	return plans, principalOf(kp, k.Spec.KeyHash)
 }
 
+// The model listing prices a host by the sheet its requests are costed with, so a disabled sheet lists the host unpriced, also when the binding names it.
+func TestModelEntries_DisabledSheetListsUnpriced(t *testing.T) {
+	var w plantest.World
+	prov := w.Provider("prov")
+	keyed := w.Host("keyed", "http://keyed.invalid")
+	m := w.Model(prov, "listed")
+	b := w.Bind(m, keyed, adapters.OpenAI)
+	sheet := w.Price(m, keyed, 3)
+	off := false
+	sheet.Spec.Enabled = &off
+	b.Spec.PricingID = sheet.Meta.ID
+	w.Credential(keyed, nil, plantest.System, "sk-keyed")
+	u := w.User()
+	k := w.UserKey(u, "listing-secret")
+	w.BindPolicy(w.Policy("grants", policy.Spec{Models: []string{"prov/listed"}}), w.PersonalAccount(u))
+	kp := w.Load(t).Root().Keys.Lookup(k.Spec.KeyHash, time.Now())
+	if kp == nil {
+		t.Fatal("no key plan")
+	}
+	table := kp.Caller.Routes
+	entries := modelEntries(table.Catalog(), table.Listing())
+	if len(entries) == 0 {
+		t.Fatal("the model is not listed")
+	}
+	for _, e := range entries {
+		for _, h := range e.Hosts {
+			if h.Priced || h.InputUSDPerMtok != 0 {
+				t.Errorf("%s at %s listed priced (%v, %v/Mtok), want unpriced", e.ID, h.Name, h.Priced, h.InputUSDPerMtok)
+			}
+		}
+	}
+}
+
 // A keyless host ignores the caller's own upstream key, so listing or pinning one in proxy mode needs a pool at it under a caller that is not refused, as normal routing does. A keyed host is open to anyone bringing a key.
 func TestProxyHostsFor(t *testing.T) {
 	_, p := listingWorld(t)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/engine"
 )
@@ -151,16 +152,19 @@ func (m *reachMerge) reach() *Reach {
 	return out
 }
 
-// mergeModel adds to dst the hosts, ways and upstream verdicts src has that it lacks.
+// mergeModel adds to dst the hosts, ways, snapshot answers and upstream verdicts src has that it lacks; a snapshot either reaches is reached.
 func mergeModel(dst *ModelReach, src ModelReach) {
-	for _, h := range src.Hosts {
-		if !containsHost(dst.Hosts, h) {
-			dst.Hosts = append(dst.Hosts, h)
+	dst.Hosts, dst.Via = mergeHostsVia(dst.Hosts, dst.Via, src.Hosts, src.Via)
+	for _, s := range src.Snapshots {
+		i := slices.IndexFunc(dst.Snapshots, func(d SnapshotReach) bool { return d.Name == s.Name })
+		if i < 0 {
+			dst.Snapshots = append(dst.Snapshots, s)
+			continue
 		}
-	}
-	for _, v := range src.Via {
-		if !containsVia(dst.Via, v) {
-			dst.Via = append(dst.Via, v)
+		d := &dst.Snapshots[i]
+		d.Hosts, d.Via = mergeHostsVia(d.Hosts, d.Via, s.Hosts, s.Via)
+		if s.Refused == nil {
+			d.Refused = nil
 		}
 	}
 	for _, u := range src.Upstream {
@@ -175,6 +179,20 @@ func mergeModel(dst *ModelReach, src ModelReach) {
 			dst.Upstream = append(dst.Upstream, u)
 		}
 	}
+}
+
+func mergeHostsVia(hosts []*host.Host, via []ReachVia, addHosts []*host.Host, addVia []ReachVia) ([]*host.Host, []ReachVia) {
+	for _, h := range addHosts {
+		if !containsHost(hosts, h) {
+			hosts = append(hosts, h)
+		}
+	}
+	for _, v := range addVia {
+		if !containsVia(via, v) {
+			via = append(via, v)
+		}
+	}
+	return hosts, via
 }
 
 func sortByName(ms []ModelReach) {

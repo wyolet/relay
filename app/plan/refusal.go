@@ -55,6 +55,8 @@ const (
 	CodeNoHealthyKeys = "no_healthy_keys"
 	// CodeUpstreamUnreachable is a dial failure; it is a refusal only when no candidate host of the request accepted a connection.
 	CodeUpstreamUnreachable = "upstream_unreachable"
+	// CodeHostMisconfigured is a host whose upstream path has a placeholder its backend does not fill: relay sends it nothing.
+	CodeHostMisconfigured = "host_misconfigured"
 )
 
 // RefusalKind is the class of a refusal a client acts on: use another model, reach another host, or wait.
@@ -71,7 +73,7 @@ func KindOf(code string) RefusalKind {
 	switch code {
 	case CodePolicyDisabled, CodeModelNotAllowed, CodeUnpricedUnderBudget, CodeSubjectDisabled, CodeAccountClosed, CodeAccountNotHeld, CodeDuplicateBinding, CodePersonalAccountOff:
 		return RefusalModelNotAllowed
-	case CodeModelNotFound, CodeModelDisabled, CodeNoBinding, CodeNoCredentials, CodeUpstreamUnreachable:
+	case CodeModelNotFound, CodeModelDisabled, CodeNoBinding, CodeNoCredentials, CodeUpstreamUnreachable, CodeHostMisconfigured:
 		return RefusalHostNotReachable
 	case CodeRateLimitExceeded, CodeBudgetExceeded, CodeUpstreamLimited, CodeNoHealthyKeys:
 		return RefusalNoCapacity
@@ -164,7 +166,7 @@ const (
 	IssueRateLimitScopeOutsideModels = "rate_limit_scope_outside_models"
 	// IssueModelRefBlocked is a policy model entry that a rung above the policy, or an upstream tier, keeps from accounts bound to it.
 	IssueModelRefBlocked = "model_ref_blocked"
-	// IssueModelUnservable is an enabled model with bindings, none of them enabled at an enabled host.
+	// IssueModelUnservable is an enabled model with bindings, none of them enabled at an enabled host and serving one of its snapshots.
 	IssueModelUnservable = "model_unservable"
 )
 

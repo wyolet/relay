@@ -47,7 +47,7 @@ func TestUsageEvent_CarriesTheRefusal(t *testing.T) {
 		if w.Code == http.StatusOK && time.Now().Before(deadline) {
 			continue
 		}
-		if ev.ErrorKind != "rate_limited" || ev.Refusal != string(plan.RefusalNoCapacity) {
+		if ev.ErrorKind != plan.CodeBudgetExceeded || ev.Refusal != string(plan.RefusalNoCapacity) {
 			t.Fatalf("spent budget: %d, event error_kind %q refusal %q", w.Code, ev.ErrorKind, ev.Refusal)
 		}
 		wantAnsweredRow(t, "spent budget", w, ev)

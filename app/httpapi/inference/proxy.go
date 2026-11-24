@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/settings"
@@ -162,7 +163,6 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	// does not expect; the spec's UpstreamPath is the un-prefixed target
 	// (e.g. /v1/messages). Falls back to the raw path when no spec maps it.
 	spec := d.Specs.Spec(adapterKind)
-	upstreamPath := proxyUpstreamPath(r.URL.Path, spec, host)
 
 	var pricing *pricing.Pricing
 	if lc != nil {
@@ -186,6 +186,14 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	}
 	if resolved != nil {
 		pricing = resolved.Pricing
+	}
+	upstreamPath, err := proxyUpstreamPath(r.URL.Path, spec, host)
+	if err != nil {
+		// Recorded like the pipeline's answer to the same fault, after the host and model are stamped on lc.
+		a, _ := pipeline.AnswerOf(err)
+		d.fireFailure(ctx, &lifecycle.PostFlightEvent{Status: a.Status, ErrorKind: a.Code, Refusal: string(a.Kind), ErrorMessage: a.Message})
+		mapPipelineErr(w, err)
+		return
 	}
 	preq := &proxy.Request{
 		Method:        r.Method,
@@ -257,22 +265,31 @@ func proxyPinAllowed(p *Principal, h *apphost.Host) bool {
 	return p != nil && p.Caller != nil && p.Caller.Refused == nil && p.Caller.ReachesHost(h.Meta.ID)
 }
 
-func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Host) string {
-	// The host's own path wins verbatim (explicit "" = baseURL is the whole
-	// endpoint), mirroring the pipeline flow's Host.Spec.Path semantics.
+func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Host) (string, error) {
+	// The host's own path wins (explicit "" = baseURL is the whole endpoint), then the shape's, each with its placeholders filled from the host's backend, mirroring the pipeline flow. The inbound path is the caller's and is never filled.
+	var shape adapters.Name
+	var path *string
+	if spec != nil {
+		shape = spec.Name
+		if spec.DefaultPath != "" {
+			path = &spec.DefaultPath
+		}
+	}
+	var backend map[string]string
 	if host != nil {
-		var shape adapters.Name
-		if spec != nil {
-			shape = spec.Name
-		}
 		if p := host.Spec.PathFor(shape); p != nil {
-			return *p
+			path = p
 		}
+		backend = host.Spec.Backend
 	}
-	if spec != nil && spec.DefaultPath != "" {
-		return spec.DefaultPath
+	if path == nil {
+		return inboundPath, nil
 	}
-	return inboundPath
+	filled, err := adapter.FillPath(*path, backend)
+	if unfilled, ok := errors.AsType[*pipeline.PathPlaceholderError](err); ok && host != nil {
+		unfilled.Host = host.Meta.Name
+	}
+	return filled, err
 }
 
 // extractorFor returns the per-shape token extractor used by proxy

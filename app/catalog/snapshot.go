@@ -76,10 +76,18 @@ type Snapshot struct {
 	// (e.g. "openai/gpt-5.4-mini" and "openai/gpt-5-4-mini" → one key). Per
 	// snapshot we materialize: provider-qualified ("openai/gpt-5-4-mini"),
 	// host-pinned ("gpt-5-4-mini@openai"), and both ("openai/gpt-5-4-mini@azure").
-	// Host-pinned entries carry the bound HostID so resolution pins that host.
+	// Host-pinned entries exist only at hosts whose binding serves the snapshot,
+	// and carry the bound HostID so resolution pins that host.
 	// Checked AFTER snapshotsByName, so a real snapshot name always wins over
 	// a synthesized alias.
 	snapshotAliases map[string]snapshotRef
+
+	// unservedPins holds the host-pinned keys of snapshotAliases' form that a
+	// snapshot does not get because the host's enabled binding does not serve
+	// it. Resolution answers such a key with nothing rather than falling
+	// through to declared aliases, so dropping the pin never hands the name to
+	// another model's alias.
+	unservedPins map[string]snapshotRef
 
 	// aliasExact indexes declared model aliases (model.Spec.Aliases) by
 	// every slug-normalized exact form (bare, provider-qualified,

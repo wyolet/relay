@@ -154,6 +154,10 @@ func (b *batch) applyEvent(ctx context.Context, ev Event) {
 		e.fetchWake = time.Now().Add(e.retryBase())
 		return
 	}
+	// Compared as a resync compares it, so a version-0 row that reads back unchanged rebuilds nothing.
+	if had && row != nil && !differs(cur, k.meta(row), row) {
+		return
+	}
 	b.applyRow(k, id, row)
 }
 

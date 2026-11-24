@@ -122,6 +122,16 @@ func (w *world) bind(m *model.Model, h *host.Host) *binding.Binding {
 	return b
 }
 
+// bindingAt is the binding of m at h.
+func (w *world) bindingAt(m *model.Model, h *host.Host) *binding.Binding {
+	for _, b := range w.bindings {
+		if b.Spec.ModelID == m.Meta.ID && b.Spec.HostID == h.Meta.ID {
+			return b
+		}
+	}
+	return nil
+}
+
 func (w *world) price(m *model.Model, h *host.Host) *pricing.Pricing {
 	p := &pricing.Pricing{
 		Meta: md(m.Meta.Name+"-at-"+h.Meta.Name, meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}),

@@ -93,7 +93,7 @@ func (a timeoutAdapter) CallTimeout(stream bool) time.Duration {
 	return a.timeout
 }
 
-func (a timeoutAdapter) Call(ctx context.Context, _ string, _ *string, _ string, _ []byte, _ http.Header, _ string, stream bool, _ bool) (*http.Response, error) {
+func (a timeoutAdapter) Call(ctx context.Context, _ Upstream, _ string, _ []byte, _ http.Header, _ string, stream bool, _ bool) (*http.Response, error) {
 	dl, ok := ctx.Deadline()
 	if !ok {
 		*a.deadline = 0

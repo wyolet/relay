@@ -225,6 +225,11 @@ type Config struct {
 	// CORS forbids them). Empty disables CORS entirely.
 	ControlAllowOrigins []string
 
+	// OAuthTokenHosts are the token URL hosts a service-account host key may
+	// name (RELAY_OAUTH_TOKEN_HOSTS): lowercase hostnames, matched exactly.
+	// Empty refuses service-account credentials.
+	OAuthTokenHosts []string
+
 	// UIDisable suppresses serving the embedded admin UI on the control
 	// listener (RELAY_UI_DISABLE=1). Off by default; the UI is same-origin
 	// and adds no surface beyond the control API it already fronts.
@@ -638,8 +643,27 @@ func Load() (*Config, error) {
 			}
 		}
 	}
+	if err := loadOAuthTokenHosts(cfg); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
+}
+
+// loadOAuthTokenHosts reads RELAY_OAUTH_TOKEN_HOSTS: hostnames only, since a
+// match is on the token URL's exact hostname.
+func loadOAuthTokenHosts(cfg *Config) error {
+	for _, h := range strings.Split(os.Getenv("RELAY_OAUTH_TOKEN_HOSTS"), ",") {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if strings.ContainsAny(h, "/:@*[] \t") {
+			return fmt.Errorf("RELAY_OAUTH_TOKEN_HOSTS takes hostnames such as token.example.com, without scheme, port or wildcard, got %q", h)
+		}
+		cfg.OAuthTokenHosts = append(cfg.OAuthTokenHosts, h)
+	}
+	return nil
 }
 
 // multiUserOn reports whether the deprecated RELAY_MULTI_USER flag is set to

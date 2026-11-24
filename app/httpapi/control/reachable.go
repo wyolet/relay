@@ -44,8 +44,22 @@ type ReachModelRef struct {
 
 // ReachVia is one pool and account a model is reached through.
 type ReachVia struct {
-	Pool    *ReachRef `json:"pool,omitempty"    doc:"The pool; omitted for a key reached by its scope's ownership, or a pool the caller may not read."`
-	Account *ReachRef `json:"account,omitempty" doc:"The account the keys draw on: a shared account when reached through one; omitted when the keys name none or the caller may not read it."`
+	Pool      *ReachRef `json:"pool,omitempty"    doc:"The pool; omitted for a key reached by its scope's ownership, or a pool the caller may not read."`
+	Account   *ReachRef `json:"account,omitempty" doc:"The account the keys draw on: a shared account when reached through one; omitted when the keys name none or the caller may not read it."`
+	Snapshots []string  `json:"snapshots"         doc:"The model's snapshot names whose requests this pool and account serve; a request naming another is not routed here."`
+}
+
+// ReachSnapshot is one snapshot name of a model, with the aliases resolving to it and, when a request naming it reaches nothing, why.
+type ReachSnapshot struct {
+	Name    string        `json:"name"              doc:"The snapshot name, usable as the model of a request."`
+	Aliases []string      `json:"aliases,omitempty" doc:"The model's declared exact aliases that resolve to this snapshot."`
+	Refused *ReachRefusal `json:"refused,omitempty" doc:"The refusal a request naming this snapshot gets; omitted when it reaches a host."`
+}
+
+// ReachHost is one host a model is reached at.
+type ReachHost struct {
+	ReachRef
+	Snapshots []string `json:"snapshots" doc:"The model's snapshot names whose requests this host serves for the lane; a request naming another is not routed here."`
 }
 
 // ReachUpstream is one provider account whose keys could serve the model and what its tier says.
@@ -65,24 +79,26 @@ type ReachRefusal struct {
 	Rung   string `json:"rung,omitempty" doc:"The rung that refuses: team, project, lane (caller rungs) or account (an upstream tier); empty when no rung decides, as for a disabled model."`
 }
 
-// ReachedModel is one model the lane reaches.
+// ReachedModel is one model the lane reaches through at least one of its snapshot names.
 type ReachedModel struct {
-	Provider ReachRef        `json:"provider" doc:"The model's provider."`
-	Model    ReachModelRef   `json:"model"    doc:"The model."`
-	Hosts    []ReachRef      `json:"hosts"    doc:"Hosts serving it for the lane, in failover order."`
-	Via      []ReachVia      `json:"via"      doc:"What brings it, in failover order."`
-	Upstream []ReachUpstream `json:"upstream" doc:"Each provider account whose keys could serve it, with its tier's verdict."`
-	Accounts []ReachRef      `json:"accounts,omitempty" doc:"For a bound policy: the bound accounts that reach it."`
+	Provider  ReachRef        `json:"provider" doc:"The model's provider."`
+	Model     ReachModelRef   `json:"model"    doc:"The model."`
+	Hosts     []ReachHost     `json:"hosts"     doc:"Hosts serving it for the lane, in failover order, each with the snapshot names it serves."`
+	Via       []ReachVia      `json:"via"       doc:"What brings it, in failover order."`
+	Snapshots []ReachSnapshot `json:"snapshots" doc:"Each snapshot name of the model, with its aliases and, for a name that reaches nothing, the refusal a request naming it gets."`
+	Upstream  []ReachUpstream `json:"upstream"  doc:"Each provider account whose keys could serve it, with its tier's verdict."`
+	Accounts  []ReachRef      `json:"accounts,omitempty" doc:"For a bound policy: the bound accounts that reach it."`
 }
 
 // ExcludedModel is one model at a reached host the lane may not use.
 type ExcludedModel struct {
 	ReachRefusal
-	Provider ReachRef        `json:"provider" doc:"The model's provider."`
-	Model    ReachModelRef   `json:"model"    doc:"The model."`
-	Hosts    []ReachRef      `json:"hosts"    doc:"The reached hosts that bind it."`
-	Upstream []ReachUpstream `json:"upstream" doc:"Each provider account whose keys could serve it, with its tier's verdict."`
-	Accounts []ReachRef      `json:"accounts,omitempty" doc:"For a bound policy: the bound accounts it is refused for; none of the bound accounts reaches it. The reason is one of their ladders'."`
+	Provider  ReachRef        `json:"provider" doc:"The model's provider."`
+	Model     ReachModelRef   `json:"model"    doc:"The model."`
+	Hosts     []ReachRef      `json:"hosts"     doc:"The reached hosts that bind it."`
+	Snapshots []ReachSnapshot `json:"snapshots" doc:"Each snapshot name of the model, with its aliases and the refusal a request naming it gets."`
+	Upstream  []ReachUpstream `json:"upstream"  doc:"Each provider account whose keys could serve it, with its tier's verdict."`
+	Accounts  []ReachRef      `json:"accounts,omitempty" doc:"For a bound policy: the bound accounts it is refused for; none of the bound accounts reaches it. The reason is one of their ladders'."`
 }
 
 // reachView projects a plan reach for a caller, leaving out rows they may not read.
@@ -120,9 +136,14 @@ func (rv reachView) project(r *plan.Reach) Reachable {
 		if !rv.sees("model", m.Model.Meta.ID, m.Model.Meta.Owner) {
 			continue
 		}
-		rm := ReachedModel{Provider: providerRef(m), Model: modelRef(m), Hosts: rv.hosts(m), Via: []ReachVia{}, Upstream: rv.upstream(m.Upstream), Accounts: rv.accountRefs(m.Accounts)}
+		rm := ReachedModel{Provider: providerRef(m), Model: modelRef(m), Hosts: []ReachHost{}, Via: []ReachVia{}, Snapshots: rv.snapshots(m), Upstream: rv.upstream(m.Upstream), Accounts: rv.accountRefs(m.Accounts)}
+		for _, h := range m.Hosts {
+			if rv.sees("host", h.Meta.ID, h.Meta.Owner) {
+				rm.Hosts = append(rm.Hosts, ReachHost{ReachRef: ReachRef{ID: h.Meta.ID, Name: h.Meta.Name, DisplayName: h.Meta.DisplayName}, Snapshots: m.SnapshotsAt(h)})
+			}
+		}
 		for _, via := range m.Via {
-			rvia := ReachVia{Account: rv.accountRef(via.Account)}
+			rvia := ReachVia{Account: rv.accountRef(via.Account), Snapshots: m.SnapshotsVia(via)}
 			if p := via.Pool; p != nil && rv.sees("pool", p.Meta.ID, p.Meta.Owner) {
 				rvia.Pool = &ReachRef{ID: p.Meta.ID, Name: p.Meta.Name, DisplayName: p.Meta.DisplayName}
 			}
@@ -136,7 +157,20 @@ func (rv reachView) project(r *plan.Reach) Reachable {
 		if !rv.sees("model", m.Model.Meta.ID, m.Model.Meta.Owner) {
 			continue
 		}
-		out.Excluded = append(out.Excluded, ExcludedModel{ReachRefusal: rv.refusal(m.Refused), Provider: providerRef(m), Model: modelRef(m), Hosts: rv.hosts(m), Upstream: rv.upstream(m.Upstream), Accounts: rv.accountRefs(m.Accounts)})
+		out.Excluded = append(out.Excluded, ExcludedModel{ReachRefusal: rv.refusal(m.Refused), Provider: providerRef(m), Model: modelRef(m), Hosts: rv.hosts(m), Snapshots: rv.snapshots(m), Upstream: rv.upstream(m.Upstream), Accounts: rv.accountRefs(m.Accounts)})
+	}
+	return out
+}
+
+func (rv reachView) snapshots(m plan.ModelReach) []ReachSnapshot {
+	out := make([]ReachSnapshot, 0, len(m.Snapshots))
+	for _, s := range m.Snapshots {
+		rs := ReachSnapshot{Name: s.Name, Aliases: s.Aliases}
+		if s.Refused != nil {
+			ref := rv.refusal(s.Refused)
+			rs.Refused = &ref
+		}
+		out = append(out, rs)
 	}
 	return out
 }

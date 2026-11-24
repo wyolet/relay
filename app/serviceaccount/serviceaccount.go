@@ -32,7 +32,7 @@ type Spec struct {
 	UserID string `json:"userId,omitempty" yaml:"userId,omitempty" readOnly:"true" doc:"Id of the owning user when metadata.owner is a user: the user's personal bot. Mirrors the owner; ignored on write."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference with the service account's keys (403 subject_disabled). Omitted means true."`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference with the service account's keys (401 unauthenticated). Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

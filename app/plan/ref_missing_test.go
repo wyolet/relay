@@ -3,11 +3,14 @@ package plan
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/meta"
 )
@@ -55,6 +58,31 @@ func TestRefMissing_MessagesInWords(t *testing.T) {
 			t.Errorf("message carries an id: %+v", i)
 		}
 	}
+}
+
+// Deleting a rate limit or budget a policy links drops the link through a foreign key, which leaves the policy's version alone: the policy re-read at that version links neither, and its missing-link issues clear.
+func TestPolicy_ReReadAtSameVersionDropsDeletedLinks(t *testing.T) {
+	b := newBasic()
+	rl := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
+	bud := b.w.budget("50")
+	pol := b.w.policy("linked", policy.Spec{
+		RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
+		Budgets:    []policy.BudgetLink{{BudgetID: bud.Meta.ID}},
+	})
+	pol.Meta.ResourceVersion = "3"
+	h := b.w.start(t)
+
+	del(h, KindRateLimit, rl.Meta.ID)
+	del(h, KindBudget, bud.Meta.ID)
+	h.wantIssue(KindPolicy, pol.Meta.ID, IssueRefMissing, true)
+
+	reread := clone(pol)
+	reread.Spec.RateLimits, reread.Spec.Budgets = nil, nil
+	apply(h, reread)
+	if diff := cmp.Diff(reread.Spec, get[policy.Policy](h, pol.Meta.ID).Spec); diff != "" {
+		t.Errorf("policy spec (-want +got):\n%s", diff)
+	}
+	h.wantIssue(KindPolicy, pol.Meta.ID, IssueRefMissing, false)
 }
 
 // issueSite is where one issue sits: the row and the field.

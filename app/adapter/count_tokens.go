@@ -41,9 +41,9 @@ type countCallAdapter struct {
 	*specAdapter
 }
 
-func (a *countCallAdapter) Call(ctx context.Context, baseURL string, _ *string, apiKey string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
+func (a *countCallAdapter) Call(ctx context.Context, up pipeline.Upstream, apiKey string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
 	callCtx, cancel := a.callContext(ctx, false)
-	req, releaseBody, err := a.newRequest(callCtx, baseURL+a.spec.CountPath, apiKey, body, hdr, oauth)
+	req, releaseBody, err := a.newRequest(callCtx, up.BaseURL+a.spec.CountPath, apiKey, body, hdr, oauth)
 	if err != nil {
 		cancelIfSet(cancel)
 		return nil, err

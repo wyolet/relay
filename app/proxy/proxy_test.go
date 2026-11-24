@@ -157,6 +157,7 @@ func TestClassifyFailure(t *testing.T) {
 		{"body error beats the cancellation it caused", fmt.Errorf("%w: %w", context.Canceled, bodyErr), "read_body"},
 		{"no upstream auth", ErrNoUpstreamAuth, "no_upstream_auth"},
 		{"refused by a limit", fmt.Errorf("admit: %w", &limits.Refused{}), "rate_limited"},
+		{"refused by a budget", fmt.Errorf("admit: %w", &limits.Refused{Counter: &limits.Counter{Kind: limits.KindBudget}}), "budget_exceeded"},
 		// A hold the store could not answer wraps the store's timeout; it must still read as a kv refusal.
 		{"store unavailable wrapping a timeout", fmt.Errorf("%w: %w", pkgratelimit.ErrUnavailable, fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded)), "kv_unavailable"},
 		{"limiter missing", ErrLimiterMissing, "limiter_missing"},

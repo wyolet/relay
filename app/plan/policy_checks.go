@@ -83,7 +83,7 @@ func checkGrantedModels(tx *engine.Txn, p *policy.Policy, idx *CatalogIndex, ent
 		}) {
 			continue
 		}
-		msg := "policy " + p.Meta.Name + " grants it, but no enabled binding at an enabled host serves it"
+		msg := "policy " + p.Meta.Name + " grants it, but no enabled binding at an enabled host serves any of its snapshots"
 		if u.hosts != "" {
 			msg += " (its bindings are at " + u.hosts + ")"
 		}
@@ -200,7 +200,7 @@ func disabledModel(idx *CatalogIndex, r modelref.Ref) *model.Model {
 	return off
 }
 
-// servedAtAny reports whether an enabled binding of an enabled model r matches is at one of hosts.
+// servedAtAny reports whether an enabled binding serving a snapshot of an enabled model r matches is at one of hosts.
 func servedAtAny(idx *CatalogIndex, r modelref.Ref, hosts []*host.Host) bool {
 	for _, h := range hosts {
 		if servedAt(idx, h, func(m *model.Model) bool { return entryMatches(idx, r, m, h) }) {
@@ -210,10 +210,10 @@ func servedAtAny(idx *CatalogIndex, r modelref.Ref, hosts []*host.Host) bool {
 	return false
 }
 
-// servedAt reports whether an enabled binding at h serves an enabled model match accepts.
+// servedAt reports whether an enabled binding at h serves a snapshot of an enabled model match accepts. A model entry grants every snapshot of the models it matches, so one served snapshot is enough.
 func servedAt(idx *CatalogIndex, h *host.Host, match func(m *model.Model) bool) bool {
 	for _, b := range idx.bindingsByHost[h.Meta.ID] {
-		if m, ok := idx.Snap.Model(b.Spec.ModelID); ok && m.IsEnabled() && match(m) {
+		if m, ok := idx.Snap.Model(b.Spec.ModelID); ok && m.IsEnabled() && servesSnapshotOf(b, m) && match(m) {
 			return true
 		}
 	}

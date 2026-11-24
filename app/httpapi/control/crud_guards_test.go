@@ -98,6 +98,29 @@ func TestMergeHostKeyPreserveValue(t *testing.T) {
 	}
 	mergeHostKeyPreserveValue(nil, &hostkey.HostKey{})
 	mergeHostKeyPreserveValue(&hostkey.HostKey{}, nil)
+
+	// An oauth key stored without a token resolves to nothing; the edit still keeps its credential.
+	tokenless := &hostkey.HostKey{
+		Meta: meta.Metadata{Name: "k", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: hostkey.Spec{HostID: "h", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindOAuth, Provider: "service-account"}},
+	}
+	edit := &hostkey.HostKey{Meta: tokenless.Meta, Spec: tokenless.Spec}
+	mergeHostKeyPreserveValue(tokenless, edit)
+	if err := edit.Validate(); err != nil || !edit.KeepStoredValue {
+		t.Fatalf("edit of a tokenless oauth key: %v (keeps value %v)", err, edit.KeepStoredValue)
+	}
+
+	// A key switching to oauth has no oauth blob to keep, so it must bring a value.
+	for _, from := range []hostkey.ValueFrom{{Kind: hostkey.ValueKindEnv, Env: "ACME_KEY"}, {Kind: hostkey.ValueKindStored}} {
+		t.Run(string(from.Kind)+" to oauth", func(t *testing.T) {
+			existing := &hostkey.HostKey{Meta: tokenless.Meta, Spec: hostkey.Spec{HostID: "h", ValueFrom: from}, Resolved: "sk-existing"}
+			switched := &hostkey.HostKey{Meta: tokenless.Meta, Spec: tokenless.Spec}
+			mergeHostKeyPreserveValue(existing, switched)
+			if err := switched.Validate(); err == nil || switched.KeepStoredValue || switched.Resolved != "" {
+				t.Fatalf("switch without a value: err %v, keeps value %v, resolved %q; want it refused", err, switched.KeepStoredValue, switched.Resolved)
+			}
+		})
+	}
 }
 
 // Spec is the source of truth for a scoped row's owner: a caller who sends a mismatched owner must not end up with a row filed under it. A service account's owner is metadata.owner, completed from spec.projectId when the default project owner has no id; a mismatched one is refused instead.

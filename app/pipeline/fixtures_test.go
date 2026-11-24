@@ -35,11 +35,11 @@ type fakeAdapter struct {
 	lastOAuth atomic.Bool
 }
 
-func (f *fakeAdapter) Call(ctx context.Context, baseURL string, _ *string, key string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
+func (f *fakeAdapter) Call(ctx context.Context, up pipeline.Upstream, key string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
 	f.callCount.Add(1)
 	f.lastOAuth.Store(oauth)
 	if f.callFn != nil {
-		return f.callFn(ctx, baseURL, key, body, hdr)
+		return f.callFn(ctx, up.BaseURL, key, body, hdr)
 	}
 	return okResp("ok"), nil
 }

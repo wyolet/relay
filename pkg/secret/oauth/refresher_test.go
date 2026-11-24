@@ -2,11 +2,16 @@ package oauth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -63,12 +68,12 @@ func tokenEndpoint(hits *int, fail string) http.HandlerFunc {
 	}
 }
 
-func testRefresher(t *testing.T, tokenURL string) (*Refresher, *memVault, *[]string) {
+func testRefresher(t *testing.T, tokenURL string, opts ...Option) (*Refresher, *memVault, *[]string) {
 	t.Helper()
 	vault := &memVault{blobs: map[string][]byte{}}
 	res := NewResolver(vault, func(string) (sdkoauth.ProviderConfig, bool) {
 		return sdkoauth.ProviderConfig{ClientID: "c", AuthURL: tokenURL, TokenURL: tokenURL}, true
-	})
+	}, opts...)
 	var events []string
 	revoked := map[string]bool{}
 	source := func(context.Context) ([]secret.Ref, error) {
@@ -128,6 +133,154 @@ func TestRefresher_RenewsDueCredential(t *testing.T) {
 
 	// Freshly renewed (expiry now beyond lead): second sweep is a no-op.
 	f.sweep(context.Background())
+	if hits != 1 {
+		t.Fatalf("second sweep hit the endpoint (%d hits) — not due, must no-op", hits)
+	}
+}
+
+// storeDueGrant stores a service-account credential whose token is inside the renewal lead.
+func storeDueGrant(t *testing.T, vault *memVault, id, tokenURL string) *sdkoauth.JWTBearer {
+	t.Helper()
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(rsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := &sdkoauth.JWTBearer{
+		Issuer:     "svc@example.test",
+		PrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
+		TokenURL:   tokenURL,
+		Scopes:     []string{"scope-a"},
+	}
+	b, err := json.Marshal(sdkoauth.Credential{
+		Token:     sdkoauth.Token{AccessToken: "at-old", Expiry: time.Now().Add(5 * time.Minute)},
+		JWTBearer: grant,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault.blobs[id] = b
+	return grant
+}
+
+func allowLocal(srv *httptest.Server) Option {
+	return func(r *Resolver) {
+		AllowLoopback(srv.Client().Transport.(*http.Transport).TLSClientConfig)(r)
+		TokenHosts([]string{"127.0.0.1"})(r)
+	}
+}
+
+// A renewal refuses a token URL at a non-public address or one that redirects, without following it; DNS answers change, so it keeps the token and retries rather than reporting the key revoked. An unlisted host is revoked.
+func TestRefresher_RefusedTokenURLRetries(t *testing.T) {
+	followed := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "/token", http.StatusTemporaryRedirect)
+			return
+		}
+		followed++
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name, path  string
+		opts        []Option
+		wantRevoked bool
+	}{
+		{"loopback address", "/token", []Option{TokenHosts([]string{"127.0.0.1"})}, false},
+		{"redirect", "/redirect", []Option{allowLocal(srv)}, false},
+		{"unlisted host", "/token", []Option{allowLocal(srv), TokenHosts([]string{"token.example"})}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, vault, notified := testRefresher(t, "http://unused", tc.opts...)
+			storeDueGrant(t, vault, "k1", srv.URL+tc.path)
+			before := string(vault.blobs["k1"])
+			f.sweep(context.Background())
+			revoked := slices.Contains(*notified, "revoked:k1")
+			if revoked != tc.wantRevoked || string(vault.blobs["k1"]) != before {
+				t.Fatalf("events %v, blob kept %v; want revoked %v and the token kept", *notified, string(vault.blobs["k1"]) == before, tc.wantRevoked)
+			}
+		})
+	}
+	if followed != 0 {
+		t.Fatalf("the token endpoint was reached %d times, want 0", followed)
+	}
+}
+
+// A renewal answered with a token without an expiry keeps the current token and retries on the next sweep.
+func TestRefresher_TokenWithoutExpiryRetries(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"forever","token_type":"Bearer"}`))
+	}))
+	defer srv.Close()
+
+	f, vault, notified := testRefresher(t, "http://unused", allowLocal(srv))
+	storeDueGrant(t, vault, "k1", srv.URL)
+	before := string(vault.blobs["k1"])
+
+	f.sweep(context.Background())
+	f.sweep(context.Background())
+
+	if hits != 2 || len(*notified) != 0 || string(vault.blobs["k1"]) != before {
+		t.Fatalf("hits = %d, events = %v, blob changed %v; want 2 hits, no event, the old token kept", hits, *notified, string(vault.blobs["k1"]) != before)
+	}
+}
+
+// A renewal answered with success but no access token is retried, never reported revoked.
+func TestRefresher_SuccessWithoutAccessTokenRetries(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id_token":"x","token_type":"Bearer"}`))
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+
+	f, vault, notified := testRefresher(t, "http://unused", allowLocal(srv))
+	storeDueGrant(t, vault, "k1", srv.URL)
+
+	f.sweep(ctx)
+	f.sweep(ctx)
+
+	if hits != 2 || len(*notified) != 0 {
+		t.Fatalf("hits = %d, events = %v; want 2 hits and no event", hits, *notified)
+	}
+}
+
+func TestRefresher_RenewsDueJWTBearerCredential(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(tokenEndpoint(&hits, ""))
+	defer srv.Close()
+	ctx := context.Background()
+
+	// The provider config testRefresher wires points at an http URL; a grant never consults it.
+	f, vault, notified := testRefresher(t, "http://unused", allowLocal(srv))
+	grant := storeDueGrant(t, vault, "k1", srv.URL)
+
+	f.sweep(ctx)
+
+	if hits != 1 {
+		t.Fatalf("token endpoint hits = %d, want 1", hits)
+	}
+	if len(*notified) != 1 || (*notified)[0] != "renewed:k1" {
+		t.Fatalf("events = %v, want [renewed:k1]", *notified)
+	}
+	var cred sdkoauth.Credential
+	if err := json.Unmarshal(vault.blobs["k1"], &cred); err != nil {
+		t.Fatal(err)
+	}
+	if cred.AccessToken != "at-new-1" || cred.JWTBearer == nil || cred.JWTBearer.PrivateKey != grant.PrivateKey {
+		t.Fatalf("persisted credential: access %q, grant kept %v", cred.AccessToken, cred.JWTBearer != nil)
+	}
+
+	f.sweep(ctx)
 	if hits != 1 {
 		t.Fatalf("second sweep hit the endpoint (%d hits) — not due, must no-op", hits)
 	}

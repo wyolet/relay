@@ -1,6 +1,10 @@
 package control
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/wyolet/relay/pkg/reqid"
+)
 
 // CORS returns a middleware that handles preflight (OPTIONS) and adds
 // the headers needed for a credentialed browser fetch from one of the
@@ -29,9 +33,10 @@ func CORS(allowedOrigins ...string) func(http.Handler) http.Handler {
 				h := w.Header()
 				h.Set("Access-Control-Allow-Origin", origin)
 				h.Set("Access-Control-Allow-Credentials", "true")
+				h.Set("Access-Control-Expose-Headers", reqid.HeaderOutbound+", "+reqid.HeaderInbound)
 				if r.Method == http.MethodOptions {
 					h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-					h.Set("Access-Control-Allow-Headers", "content-type, x-relay-admin-token, authorization")
+					h.Set("Access-Control-Allow-Headers", "content-type, x-relay-admin-token, authorization, x-request-id")
 					h.Set("Access-Control-Max-Age", "600")
 					w.WriteHeader(http.StatusNoContent)
 					return

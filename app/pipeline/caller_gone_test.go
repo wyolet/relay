@@ -20,7 +20,7 @@ type callerGoneAdapter struct {
 	calls *int
 }
 
-func (a callerGoneAdapter) Call(ctx context.Context, _ string, _ *string, _ string, _ []byte, _ http.Header, _ string, _ bool, _ bool) (*http.Response, error) {
+func (a callerGoneAdapter) Call(ctx context.Context, _ Upstream, _ string, _ []byte, _ http.Header, _ string, _ bool, _ bool) (*http.Response, error) {
 	*a.calls++
 	a.leave()
 	<-ctx.Done()

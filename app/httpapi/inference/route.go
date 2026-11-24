@@ -39,11 +39,11 @@ func keepHops(hops []plan.RouteHop, keep func(*plan.RouteHop) bool) []plan.Route
 	return hops
 }
 
-// pipelineRequest is the pipeline input for one dispatched request over hops, its body in shape.
+// pipelineRequest is the pipeline input for one dispatched request over hops, its body in shape and naming the first hop's model.
 func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, a pipeline.Adapter, body []byte, shape adapters.Name, lc *lifecycle.Context) *pipeline.Request {
 	return &pipeline.Request{
 		Body:          body,
-		HopBody:       HopBody,
+		HopBody:       HopBodyFor(hops, hops[0].UpstreamModel),
 		BodyShape:     shape,
 		Headers:       forwardHeaders(r.Header),
 		Adapter:       a,
@@ -51,7 +51,7 @@ func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops 
 		Provider:      route.Provider,
 		Hops:          hops,
 		ModelName:     route.Model.Meta.Name,
-		UpstreamModel: route.UpstreamModel,
+		UpstreamModel: hops[0].UpstreamModel,
 		Stream:        in.Stream,
 		Lifecycle:     lc,
 	}

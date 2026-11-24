@@ -86,19 +86,22 @@ func (w *World) Host(name, baseURL string) *host.Host {
 	return h
 }
 
-// Model adds a model of p with one snapshot named like it.
-func (w *World) Model(p *provider.Provider, name string) *model.Model {
+// Model adds a model of p with a snapshot named like it, the pointer, and one more snapshot per extra name.
+func (w *World) Model(p *provider.Provider, name string, snapshots ...string) *model.Model {
 	m := &model.Model{
 		Meta: md(name, meta.Owner{Kind: meta.OwnerProvider, ID: p.Meta.ID}),
 		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: slug.From(name)}}, Pointer: slug.From(name)},
+	}
+	for _, s := range snapshots {
+		m.Spec.Snapshots = append(m.Spec.Snapshots, model.Snapshot{Name: s})
 	}
 	w.Models = append(w.Models, m)
 	return m
 }
 
-// Bind serves m at h through the adapter.
-func (w *World) Bind(m *model.Model, h *host.Host, a adapters.Name) *binding.Binding {
-	b := &binding.Binding{Meta: md(m.Meta.Name+"-on-"+h.Meta.Name+"-"+seq(), System), Spec: binding.Spec{ModelID: m.Meta.ID, HostID: h.Meta.ID, Adapter: a}}
+// Bind serves m at h through the adapter: the snapshots named, or all of m's when none are.
+func (w *World) Bind(m *model.Model, h *host.Host, a adapters.Name, snapshots ...string) *binding.Binding {
+	b := &binding.Binding{Meta: md(m.Meta.Name+"-on-"+h.Meta.Name+"-"+seq(), System), Spec: binding.Spec{ModelID: m.Meta.ID, HostID: h.Meta.ID, Adapter: a, Snapshots: snapshots}}
 	w.Bindings = append(w.Bindings, b)
 	return b
 }

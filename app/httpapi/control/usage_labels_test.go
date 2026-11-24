@@ -11,6 +11,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
@@ -68,6 +69,22 @@ func TestUsageGroupLabelsFallBackToCatalog(t *testing.T) {
 			if tc.want == nil && strings.Contains(w.Body.String(), `"labels"`) {
 				t.Errorf("%s group_by=%s: labels must be omitted: %s", path, tc.groupBy, w.Body)
 			}
+		}
+	}
+}
+
+// A host_key_id is a hash of the key's value, so the catalog names no value of it, not even one equal to a host key's row id.
+func TestCatalogLabelNamesNoHostKeyID(t *testing.T) {
+	w := &plantest.World{}
+	h := w.Host("host-a", "https://upstream.invalid")
+	hk := w.Credential(h, nil, plantest.System, "sk-a")
+	snap := catalogtest.Catalog{Hosts: w.Hosts, HostKeys: w.Credentials}.Load(t).Current()
+	if _, ok := snap.HostKey(hk.Meta.ID); !ok {
+		t.Fatal("the host key is not in the snapshot")
+	}
+	for _, v := range []string{hk.Meta.ID, hk.KeyHash} {
+		if got := catalogLabel(snap, "host_key_id", v); got != "" {
+			t.Errorf("host_key_id %q labelled %q, want none", v, got)
 		}
 	}
 }

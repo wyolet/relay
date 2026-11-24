@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/pkg/adapters"
 	apphost "github.com/wyolet/relay/pkg/catalogkind/host"
@@ -40,8 +41,32 @@ func TestProxyUpstreamPath(t *testing.T) {
 		{"unknown shape", nil, &apphost.Host{}, "/openai/v1/responses"},
 		{"shape without a native path", &adapter.Spec{}, nil, "/openai/v1/responses"},
 	} {
-		if got := proxyUpstreamPath("/openai/v1/responses", tc.spec, tc.host); got != tc.want {
-			t.Errorf("%s: path %q, want %q", tc.name, got, tc.want)
+		if got, err := proxyUpstreamPath("/openai/v1/responses", tc.spec, tc.host); got != tc.want || err != nil {
+			t.Errorf("%s: path %q, %v; want %q", tc.name, got, err, tc.want)
+		}
+	}
+}
+
+// The host's and the shape's paths are filled from the host's backend; the caller's inbound path never is.
+func TestProxyUpstreamPath_Placeholders(t *testing.T) {
+	shapePath := (&adapter.Spec{DefaultPath: "/v1/{project}/responses"}).Build()
+	hostPath := "/v1/{project}/own"
+	backend := map[string]string{"project": "p1"}
+	for _, tc := range []struct {
+		name    string
+		spec    *adapter.Spec
+		host    *apphost.Host
+		want    string
+		wantErr bool
+	}{
+		{"shape's path filled", shapePath, &apphost.Host{Spec: apphost.Spec{Backend: backend}}, "/v1/p1/responses", false},
+		{"host path filled", shapePath, &apphost.Host{Spec: apphost.Spec{Path: &hostPath, Backend: backend}}, "/v1/p1/own", false},
+		{"shape's path unfilled", shapePath, &apphost.Host{}, "", true},
+		{"inbound path kept as sent", nil, &apphost.Host{Spec: apphost.Spec{Backend: backend}}, "/x/{project}", false},
+	} {
+		got, err := proxyUpstreamPath("/x/{project}", tc.spec, tc.host)
+		if _, unfilled := errors.AsType[*pipeline.PathPlaceholderError](err); got != tc.want || unfilled != tc.wantErr || (err != nil && !tc.wantErr) {
+			t.Errorf("%s: path %q, %v; want %q, error %v", tc.name, got, err, tc.want, tc.wantErr)
 		}
 	}
 }

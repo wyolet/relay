@@ -29,7 +29,7 @@ type statusAdapter struct {
 	retryAfter time.Duration
 }
 
-func (a *statusAdapter) Call(_ context.Context, _ string, _ *string, key string, _ []byte, _ http.Header, upstreamModel string, _, _ bool) (*http.Response, error) {
+func (a *statusAdapter) Call(_ context.Context, _ pipeline.Upstream, key string, _ []byte, _ http.Header, upstreamModel string, _, _ bool) (*http.Response, error) {
 	a.mu.Lock()
 	a.calls = append(a.calls, key+"/"+upstreamModel)
 	fail := a.failing != nil && a.failing(key, upstreamModel)

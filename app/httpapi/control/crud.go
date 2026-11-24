@@ -341,7 +341,7 @@ func registerKind[T any](
 			DefaultStatus: http.StatusCreated,
 			Errors:        []int{400, 401, 403, 404, 500},
 			Responses:     map[string]*huma.Response{"409": conflictResponse(api, createConflicts)},
-			RequestBody:   createRequestBody[T](api),
+			RequestBody:   createRequestBody[T](api, singular),
 		}, func(ctx context.Context, in *createRequest[T]) (*itemResponse[T], error) {
 			v := &in.Body
 			m := metaOf(v)

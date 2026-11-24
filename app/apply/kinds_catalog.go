@@ -240,7 +240,7 @@ func refuseCallerAccountPrune(a *account.Account) error {
 
 // keepHostKeySecret keeps the stored secret of a stored or oauth host key
 // whose document carries no value, as an export does; Store.Upsert leaves
-// the ciphertext untouched when it sees Resolved and no Value.
+// the ciphertext untouched when it sees KeepStoredValue and no Value.
 func keepHostKeySecret(prev, next *hostkey.HostKey) {
 	kind := next.Spec.ValueFrom.Kind
 	if next.Spec.Value != "" || kind != prev.Spec.ValueFrom.Kind ||
@@ -248,4 +248,5 @@ func keepHostKeySecret(prev, next *hostkey.HostKey) {
 		return
 	}
 	next.Resolved = prev.Resolved
+	next.KeepStoredValue = true
 }
