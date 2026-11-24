@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,59 @@ spec:
 	}
 	if !found {
 		t.Fatal("expected live model binding")
+	}
+}
+
+// The composed document is for direct SDK use: a binding through an upstream adapter the SDK client cannot call drops out, with its host and model sidecar when nothing else serves them; a name that is no upstream adapter stays for ValidateAdapters to reject.
+func TestCompose_LeavesOutRelayOnlyAdapters(t *testing.T) {
+	for _, tc := range []struct {
+		soloAdapter string
+		wantHosts   []string
+		wantModels  []string
+		wantReject  bool
+	}{
+		{"vertex_anthropic", []string{"host-a"}, []string{"shared-snap"}, false},
+		{"no-such-adapter", []string{"host-a", "host-b"}, []string{"shared-snap", "solo-snap"}, true},
+	} {
+		var docs []manifest.Document
+		parse := func(yaml string) {
+			t.Helper()
+			d, err := manifest.Parse(strings.NewReader(yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			docs = append(docs, d...)
+		}
+		parse("apiVersion: relay.wyolet.dev/v1alpha2\nkind: Provider\nmetadata:\n  name: prov\nspec:\n  enabled: true\n")
+		for _, h := range []string{"host-a", "host-b"} {
+			parse("apiVersion: relay.wyolet.dev/v1alpha2\nkind: Host\nmetadata:\n  name: " + h + "\nspec:\n  baseURL: https://" + h + ".example\n  enabled: true\n")
+		}
+		for _, m := range []string{"shared", "solo"} {
+			parse("apiVersion: relay.wyolet.dev/v1alpha2\nkind: Model\nmetadata:\n  name: " + m + "\n  owner:\n    kind: provider\n    id: prov\nspec:\n  enabled: true\n  pointer: " + m + "-snap\n  snapshots:\n    - name: " + m + "-snap\n")
+		}
+		for _, b := range [][3]string{{"shared", "host-a", "openai"}, {"shared", "host-b", "vertex_anthropic"}, {"solo", "host-b", tc.soloAdapter}} {
+			parse("apiVersion: relay.wyolet.dev/v1alpha2\nkind: HostBinding\nmetadata:\n  name: " + b[0] + "-" + b[1] + "\n  owner:\n    kind: system\nspec:\n  model: " + b[0] + "\n  host: " + b[1] + "\n  adapter: " + b[2] + "\n")
+		}
+
+		cat, err := Compose(docs, time.Time{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var hosts, models []string
+		for _, h := range cat.Hosts {
+			hosts = append(hosts, h.Name)
+		}
+		for _, m := range cat.Models {
+			models = append(models, m.MetadataName)
+		}
+		slices.Sort(hosts)
+		slices.Sort(models)
+		if !slices.Equal(hosts, tc.wantHosts) || !slices.Equal(models, tc.wantModels) {
+			t.Errorf("%s: hosts %v, models %v; want %v, %v", tc.soloAdapter, hosts, models, tc.wantHosts, tc.wantModels)
+		}
+		if err := ValidateAdapters(cat); (err != nil) != tc.wantReject {
+			t.Errorf("%s: ValidateAdapters = %v, want rejected %v", tc.soloAdapter, err, tc.wantReject)
+		}
 	}
 }
 

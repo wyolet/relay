@@ -30,7 +30,7 @@ type Source interface {
 	PricingForBinding(b *binding.Binding) (*pricing.Pricing, bool)
 }
 
-// Flatten projects snap into the SDK catalog schema, keeping only the enabled bindings keep accepts; nil keep keeps all. A binding through an upstream adapter outside SDKAdapters is left out too (relayOnly). Hosts left without a binding and sidecars for unserved slugs drop out, so a scoped document never names what keep refused.
+// Flatten projects snap into the SDK catalog schema, keeping only the enabled bindings keep accepts; nil keep keeps all. Hosts left without a binding and sidecars for unserved slugs drop out, so a scoped document never names what keep refused.
 func Flatten(snap Source, at time.Time, keep func(*model.Model, *binding.Binding) bool) *sdkcatalog.Catalog {
 	version := "relay-catalog@" + strings.TrimPrefix(manifest.APIVersion, "relay.wyolet.dev/")
 	out := &sdkcatalog.Catalog{
@@ -59,9 +59,6 @@ func Flatten(snap Source, at time.Time, keep func(*model.Model, *binding.Binding
 			}
 			for _, hb := range snap.BindingsForModel(m.Meta.ID) {
 				if hb.Spec.HostID != h.Meta.ID || !hb.IsEnabled() {
-					continue
-				}
-				if relayOnly(hb.Spec.Adapter) {
 					continue
 				}
 				if keep != nil && !keep(m, hb) {

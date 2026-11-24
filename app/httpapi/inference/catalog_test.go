@@ -37,7 +37,7 @@ import (
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
-// catalogRouteFixture serves two models from two authors. big-model is on both hosts, with the second host restricted to its newest snapshot; small-model is on the second host only. The first host carries every field the route strips. grants are the policy's modelref grants.
+// catalogRouteFixture serves two models from two authors. big-model is on both hosts, with the second host restricted to its newest snapshot; small-model is on the second host only, through an adapter the SDK client cannot call directly (the document is for clients calling through relay, so it stays). The first host carries every field the route strips. grants are the policy's modelref grants.
 func catalogRouteFixture(t *testing.T, grants ...string) (*catalog.Catalog, *Principal) {
 	t.Helper()
 	provA, provB := meta.NewID(), meta.NewID()
@@ -57,6 +57,8 @@ func catalogRouteFixture(t *testing.T, grants ...string) (*catalog.Catalog, *Pri
 			Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI, Snapshots: snapshots},
 		}
 	}
+	smallOnBeta := bind("small-on-beta", smallID, betaID)
+	smallOnBeta.Spec.Adapter = adapters.VertexAnthropic
 	u := w.User()
 	k := w.UserKey(u, "catalog-route-secret")
 	k.Meta.Name = "rk"
@@ -97,7 +99,7 @@ func catalogRouteFixture(t *testing.T, grants ...string) (*catalog.Catalog, *Pri
 		Bindings: []*binding.Binding{
 			bind("big-on-alpha", bigID, alphaID),
 			bind("big-on-beta", bigID, betaID, "big-model-2026"),
-			bind("small-on-beta", smallID, betaID),
+			smallOnBeta,
 		},
 	}
 	cat := c.Load(t)
