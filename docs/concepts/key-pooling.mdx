@@ -194,7 +194,7 @@ Relay reads `client_email` (the assertion's issuer), `private_key` (an RSA key i
 
 The token URL's hostname must be listed in [`RELAY_OAUTH_TOKEN_HOSTS`](/configuration#secrets-and-authentication), which is empty by default: until the operator lists a host, service-account keys are refused with `400`. A stored key whose host leaves the list is no longer exchanged: once its token expires it loads unresolved naming the host, and its renewal marks it revoked.
 
-The token URL comes from the key, so Relay also calls it only at a public address: it refuses a URL whose host resolves to a loopback, private, link-local (including the cloud metadata address `169.254.169.254`), unspecified or multicast address, checked on the address it connects to. It follows no redirect from the token endpoint and does not use `HTTP_PROXY`/`HTTPS_PROXY` for it. A refused URL fails the write with `400`; met on a renewal, it marks the key revoked.
+The token URL comes from the key, so Relay also calls it only at a public address: it refuses a URL whose host resolves to a loopback, private, link-local (including the cloud metadata address `169.254.169.254`), unspecified or multicast address, checked on the address it connects to. It follows no redirect from the token endpoint and does not use `HTTP_PROXY`/`HTTPS_PROXY` for it. A refused URL fails the write with `400`; met on a renewal, it is retried on the next sweep with the current token kept, since a DNS answer can change.
 
 The token endpoint must answer with `expires_in` of at least 5 minutes. A token without one, or with a shorter one, fails the write; on a renewal Relay keeps the current token and tries again on the next sweep.
 

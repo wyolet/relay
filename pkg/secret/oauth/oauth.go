@@ -382,10 +382,11 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 // operator re-authorization (the provider rejected the grant itself, e.g.
 // a revoked or reused refresh token), as opposed to a transient
 // network/server failure worth retrying. A success without an access token is
-// never permanent here: a renewal retries it. A token URL the exchange client
-// refuses (a non-public address, a redirect) or whose host is not listed is.
+// never permanent here: a renewal retries it, as it does a token URL the
+// exchange client refuses (a non-public address, a redirect), since DNS
+// answers change. A token URL whose host is not listed is permanent.
 func IsPermanent(err error) bool {
-	if refusedURL(err) || errors.As(err, new(unlistedHostError)) {
+	if errors.As(err, new(unlistedHostError)) {
 		return true
 	}
 	var re *oauth2.RetrieveError
@@ -487,7 +488,7 @@ func (r *Resolver) PrepareValue(ctx context.Context, raw []byte) ([]byte, error)
 		return nil, errShortLifetime
 	case err == nil:
 		next.Token = *tok
-	case IsPermanent(err), errors.Is(err, sdkoauth.ErrNoAccessToken):
+	case IsPermanent(err), errors.Is(err, sdkoauth.ErrNoAccessToken), refusedURL(err):
 		return nil, rejectedError{err}
 	default:
 		slog.Warn("secret/oauth: token exchange failed; storing the credential without a token", "err", err)

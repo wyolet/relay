@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -173,8 +173,8 @@ func allowLocal(srv *httptest.Server) Option {
 	}
 }
 
-// A renewal refuses a token URL at a non-public address or one that redirects, without following it, and reports the key revoked without naming the address.
-func TestRefresher_RefusedTokenURLRevokes(t *testing.T) {
+// A renewal refuses a token URL at a non-public address or one that redirects, without following it; DNS answers change, so it keeps the token and retries rather than reporting the key revoked. An unlisted host is revoked.
+func TestRefresher_RefusedTokenURLRetries(t *testing.T) {
 	followed := 0
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/redirect" {
@@ -186,20 +186,22 @@ func TestRefresher_RefusedTokenURLRevokes(t *testing.T) {
 	defer srv.Close()
 
 	for _, tc := range []struct {
-		name, path string
-		opts       []Option
+		name, path  string
+		opts        []Option
+		wantRevoked bool
 	}{
-		{"loopback address", "/token", []Option{TokenHosts([]string{"127.0.0.1"})}},
-		{"redirect", "/redirect", []Option{allowLocal(srv)}},
+		{"loopback address", "/token", []Option{TokenHosts([]string{"127.0.0.1"})}, false},
+		{"redirect", "/redirect", []Option{allowLocal(srv)}, false},
+		{"unlisted host", "/token", []Option{allowLocal(srv), TokenHosts([]string{"token.example"})}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f, vault, _ := testRefresher(t, "http://unused", tc.opts...)
-			var cause error
-			f.hooks.OnRevoked = func(_ context.Context, _ string, err error) error { cause = err; return nil }
+			f, vault, notified := testRefresher(t, "http://unused", tc.opts...)
 			storeDueGrant(t, vault, "k1", srv.URL+tc.path)
+			before := string(vault.blobs["k1"])
 			f.sweep(context.Background())
-			if cause == nil || !IsPermanent(cause) || strings.Contains(cause.Error(), "127.0.0.1") {
-				t.Fatalf("revocation cause = %v, want a permanent refusal that names no address", cause)
+			revoked := slices.Contains(*notified, "revoked:k1")
+			if revoked != tc.wantRevoked || string(vault.blobs["k1"]) != before {
+				t.Fatalf("events %v, blob kept %v; want revoked %v and the token kept", *notified, string(vault.blobs["k1"]) == before, tc.wantRevoked)
 			}
 		})
 	}
