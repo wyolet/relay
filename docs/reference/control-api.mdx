@@ -237,7 +237,7 @@ The route is served only when `RELAY_PSEUDO_KINDS` lists `agents` or is `all`; o
 }
 ```
 
-`metadata` is the service account's, as `POST /api/service-accounts` takes it; `name` is derived from `displayName` when left out. `spec` takes exactly one of `policyId`, an existing policy to bind the service account's account to, and `access`:
+`metadata` is the service account's. `metadata.owner` is required, with no default: the project the service account belongs to (the kinds a service account may be owned by). `name` is derived from `displayName` when left out. `spec` takes exactly one of `policyId`, an existing policy to bind the service account's account to, and `access`:
 
 | `access` | What is made after the service account and its account |
 | --- | --- |

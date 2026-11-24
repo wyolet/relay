@@ -22,6 +22,19 @@ var (
 	teamOwner = meta.Owner{Kind: meta.OwnerTeam, ID: "team"}
 )
 
+// Ids of the rows a body names.
+const (
+	teamAcctID  = "01a20b40-0000-7000-8000-000000000001"
+	projShareID = "01a20b40-0000-7000-8000-000000000002"
+	aliceAcctID = "01a20b40-0000-7000-8000-000000000003"
+	bobAcctID   = "01a20b40-0000-7000-8000-000000000004"
+	bobShareID  = "01a20b40-0000-7000-8000-000000000005"
+	policyID    = "01a20b40-0000-7000-8000-000000000006"
+	localPoolID = "01a20b40-0000-7000-8000-000000000007"
+	otherPoolID = "01a20b40-0000-7000-8000-000000000008"
+	nowhereID   = "01a20b40-0000-7000-8000-000000000009"
+)
+
 // agentWorld is what an expansion reads: a team account at host a the project reaches, a share already owned by the project at host a, alice's personal account at host b it does not reach, and bob's at host b, already shared with the project.
 type agentWorld struct {
 	teamAcct, projShare, alicesAcct, bobsAcct, bobsShare *account.Account
@@ -31,11 +44,11 @@ type agentWorld struct {
 func newAgentWorld() *agentWorld {
 	bob := meta.Owner{Kind: meta.OwnerUser, ID: "bob"}
 	return &agentWorld{
-		teamAcct:   &account.Account{Meta: meta.Metadata{ID: "team-acct", Name: "team-a", Owner: teamOwner}, Spec: account.Spec{HostID: "host-a"}},
-		projShare:  &account.Account{Meta: meta.Metadata{ID: "proj-share", Name: "shared-a", Owner: proj}, Spec: account.Spec{HostID: "host-a", SourceAccountID: "elsewhere"}},
-		alicesAcct: &account.Account{Meta: meta.Metadata{ID: "alice-acct", Name: "alice-b", DisplayName: "Alice B", Owner: alice}, Spec: account.Spec{HostID: "host-b"}},
-		bobsAcct:   &account.Account{Meta: meta.Metadata{ID: "bob-acct", Name: "bob-b", Owner: bob}, Spec: account.Spec{HostID: "host-b"}},
-		bobsShare:  &account.Account{Meta: meta.Metadata{ID: "bob-share", Name: "bob-b-for-app", Owner: proj}, Spec: account.Spec{HostID: "host-b", SourceAccountID: "bob-acct"}},
+		teamAcct:   &account.Account{Meta: meta.Metadata{ID: teamAcctID, Name: "team-a", Owner: teamOwner}, Spec: account.Spec{HostID: "host-a"}},
+		projShare:  &account.Account{Meta: meta.Metadata{ID: projShareID, Name: "shared-a", Owner: proj}, Spec: account.Spec{HostID: "host-a", SourceAccountID: "elsewhere"}},
+		alicesAcct: &account.Account{Meta: meta.Metadata{ID: aliceAcctID, Name: "alice-b", DisplayName: "Alice B", Owner: alice}, Spec: account.Spec{HostID: "host-b"}},
+		bobsAcct:   &account.Account{Meta: meta.Metadata{ID: bobAcctID, Name: "bob-b", Owner: bob}, Spec: account.Spec{HostID: "host-b"}},
+		bobsShare:  &account.Account{Meta: meta.Metadata{ID: bobShareID, Name: "bob-b-for-app", Owner: proj}, Spec: account.Spec{HostID: "host-b", SourceAccountID: bobAcctID}},
 		taken:      map[string]bool{"service-account/ci-bot": true},
 	}
 }
@@ -55,7 +68,18 @@ func (w *agentWorld) reads() AgentReads {
 }
 
 func agentBody(spec AgentSpec) Agent {
-	return Agent{Metadata: AgentMetadata{DisplayName: "CI bot", Labels: map[string]string{"sa-type": "agent"}, Owner: proj}, Spec: spec}
+	return Agent{Metadata: AgentMetadata{DisplayName: "CI bot", Labels: map[string]string{"sa-type": "agent"}, Owner: AgentOwner{Kind: proj.Kind, ID: proj.ID}}, Spec: spec}
+}
+
+// An owner is required; there is no default.
+func TestExpandAgent_RefusesNoOwner(t *testing.T) {
+	body := agentBody(AgentSpec{PolicyID: policyID})
+	body.Metadata.Owner = AgentOwner{}
+	rows, err := ExpandAgent(body, newAgentWorld().reads())
+	want := &BodyError{Pointer: "/metadata/owner", Message: "metadata.owner is required: the kind and id of the scope that owns the service account"}
+	if diff := cmp.Diff(want, err); diff != "" || rows != nil {
+		t.Errorf("rows %v, error (-want +got):\n%s", rows, diff)
+	}
 }
 
 // The rows every agent starts with: the service account (id-1, its name taken once) and its lane (id-2).
@@ -94,8 +118,8 @@ func TestExpandAgent(t *testing.T) {
 
 	sharedAlice := account.Share(w.alicesAcct, account.Receiver{Kind: account.ReceiverProject, ID: "proj"}, proj, "app")
 	sharedAlice.Meta.ID = "id-3"
-	poolA := &pool.Pool{Meta: meta.Metadata{ID: "id-4", Name: "ci-bot-at-alpha", DisplayName: "CI bot at alpha", Owner: proj, Labels: map[string]string{AgentLabel: "id-1"}}, Spec: pool.Spec{HostID: "host-a", AccountIDs: []string{"team-acct", "proj-share"}}}
-	poolB := &pool.Pool{Meta: meta.Metadata{ID: "id-5", Name: "ci-bot-at-beta", DisplayName: "CI bot at beta", Owner: proj, Labels: map[string]string{AgentLabel: "id-1"}}, Spec: pool.Spec{HostID: "host-b", AccountIDs: []string{"id-3", "bob-share"}}}
+	poolA := &pool.Pool{Meta: meta.Metadata{ID: "id-4", Name: "ci-bot-at-alpha", DisplayName: "CI bot at alpha", Owner: proj, Labels: map[string]string{AgentLabel: "id-1"}}, Spec: pool.Spec{HostID: "host-a", AccountIDs: []string{teamAcctID, projShareID}}}
+	poolB := &pool.Pool{Meta: meta.Metadata{ID: "id-5", Name: "ci-bot-at-beta", DisplayName: "CI bot at beta", Owner: proj, Labels: map[string]string{AgentLabel: "id-1"}}, Spec: pool.Spec{HostID: "host-b", AccountIDs: []string{"id-3", bobShareID}}}
 
 	for _, tc := range []struct {
 		name string
@@ -104,8 +128,8 @@ func TestExpandAgent(t *testing.T) {
 	}{
 		{
 			name: "an existing policy, no key",
-			spec: AgentSpec{PolicyID: "pol"},
-			want: append(headRows(), bindingRow("id-3", "gold-sa-ci-bot-2", "pol", "/spec/policyId")),
+			spec: AgentSpec{PolicyID: policyID},
+			want: append(headRows(), bindingRow("id-3", "gold-sa-ci-bot-2", policyID, "/spec/policyId")),
 		},
 		{
 			name: "every credential, no models, a key",
@@ -119,17 +143,17 @@ func TestExpandAgent(t *testing.T) {
 		},
 		{
 			name: "existing pools only",
-			spec: AgentSpec{Access: &AgentAccess{PoolIDs: []string{"local-pool", "other-pool"}}},
-			want: append(headRows(), policyRow("id-3", []string{"local-pool", "other-pool"}, nil), bindingRow("id-4", "ci-bot-sa-ci-bot-2", "id-3", "/spec/access")),
+			spec: AgentSpec{Access: &AgentAccess{PoolIDs: []string{localPoolID, otherPoolID}}},
+			want: append(headRows(), policyRow("id-3", []string{localPoolID, otherPoolID}, nil), bindingRow("id-4", "ci-bot-sa-ci-bot-2", "id-3", "/spec/access")),
 		},
 		{
 			name: "existing pools first, then one pool per host in the order hosts first appear; accounts reached, a share the owner holds, a real account it holds a share of, and one shared first",
-			spec: AgentSpec{Access: &AgentAccess{PoolIDs: []string{"local-pool"}, AccountIDs: []string{"team-acct", "alice-acct", "proj-share", "bob-acct"}, Models: []string{"openai"}}, Key: firstKey},
+			spec: AgentSpec{Access: &AgentAccess{PoolIDs: []string{localPoolID}, AccountIDs: []string{teamAcctID, aliceAcctID, projShareID, bobAcctID}, Models: []string{"openai"}}, Key: firstKey},
 			want: append(headRows(),
 				Row{Kind: "account", Pointer: "/spec/access/accountIds/1", Meta: &sharedAlice.Meta, Value: sharedAlice},
 				Row{Kind: "pool", Pointer: "/spec/access/accountIds", Meta: &poolA.Meta, Value: poolA},
 				Row{Kind: "pool", Pointer: "/spec/access/accountIds", Meta: &poolB.Meta, Value: poolB},
-				policyRow("id-6", []string{"local-pool", "id-4", "id-5"}, []string{"openai"}),
+				policyRow("id-6", []string{localPoolID, "id-4", "id-5"}, []string{"openai"}),
 				bindingRow("id-7", "ci-bot-sa-ci-bot-2", "id-6", "/spec/access"),
 				keyRow("id-8", &expires)),
 		},
@@ -148,7 +172,7 @@ func TestExpandAgent(t *testing.T) {
 
 // A given name is kept and held from the rows minted after it; minted names skip one another.
 func TestExpandAgent_Names(t *testing.T) {
-	body := agentBody(AgentSpec{PolicyID: "pol", Key: &AgentKey{}})
+	body := agentBody(AgentSpec{PolicyID: policyID, Key: &AgentKey{}})
 	body.Metadata.Name = "ci-bot"
 	in := newAgentWorld().reads()
 	in.Names = &Namer{Taken: func(kind, name string) bool { return kind == "key" && name == "key" }}
@@ -173,14 +197,17 @@ func TestExpandAgent_RefusesBody(t *testing.T) {
 		want *BodyError
 	}{
 		{"neither policyId nor access", AgentSpec{}, &BodyError{Pointer: "/spec", Message: "exactly one of spec.policyId and spec.access is required"}},
-		{"both policyId and access", AgentSpec{PolicyID: "pol", Access: &AgentAccess{EveryCredential: true}}, &BodyError{Pointer: "/spec", Message: "exactly one of spec.policyId and spec.access is required"}},
-		{"every credential with accounts", AgentSpec{Access: &AgentAccess{EveryCredential: true, AccountIDs: []string{"team-acct"}}}, &BodyError{Pointer: "/spec/access/accountIds", Message: "accountIds must be empty when everyCredential is true"}},
-		{"every credential with pools", AgentSpec{Access: &AgentAccess{EveryCredential: true, PoolIDs: []string{"local-pool"}}}, &BodyError{Pointer: "/spec/access/poolIds", Message: "poolIds must be empty when everyCredential is true"}},
+		{"both policyId and access", AgentSpec{PolicyID: policyID, Access: &AgentAccess{EveryCredential: true}}, &BodyError{Pointer: "/spec", Message: "exactly one of spec.policyId and spec.access is required"}},
+		{"a policy by slug", AgentSpec{PolicyID: "gold"}, &BodyError{Pointer: "/spec/policyId", Message: `policy "gold" is not an id; name the policy by its metadata.id`}},
+		{"an account by slug", AgentSpec{Access: &AgentAccess{AccountIDs: []string{teamAcctID, "team-a"}}}, &BodyError{Pointer: "/spec/access/accountIds/1", Message: `account "team-a" is not an id; name the account by its metadata.id`}},
+		{"a pool by slug", AgentSpec{Access: &AgentAccess{PoolIDs: []string{"local"}}}, &BodyError{Pointer: "/spec/access/poolIds/0", Message: `pool "local" is not an id; name the pool by its metadata.id`}},
+		{"every credential with accounts", AgentSpec{Access: &AgentAccess{EveryCredential: true, AccountIDs: []string{teamAcctID}}}, &BodyError{Pointer: "/spec/access/accountIds", Message: "accountIds must be empty when everyCredential is true"}},
+		{"every credential with pools", AgentSpec{Access: &AgentAccess{EveryCredential: true, PoolIDs: []string{localPoolID}}}, &BodyError{Pointer: "/spec/access/poolIds", Message: "poolIds must be empty when everyCredential is true"}},
 		{"neither accounts nor pools", AgentSpec{Access: &AgentAccess{}}, &BodyError{Pointer: "/spec/access", Message: "accountIds or poolIds is required unless everyCredential is true"}},
-		{"an account twice", AgentSpec{Access: &AgentAccess{AccountIDs: []string{"team-acct", "team-acct"}}}, &BodyError{Pointer: "/spec/access/accountIds/1", Message: `account "team-acct" is listed twice`}},
-		{"a pool twice", AgentSpec{Access: &AgentAccess{PoolIDs: []string{"local-pool", "other-pool", "local-pool"}}}, &BodyError{Pointer: "/spec/access/poolIds/2", Message: `pool "local-pool" is listed twice`}},
-		{"an account not read", AgentSpec{Access: &AgentAccess{AccountIDs: []string{"team-acct", "nowhere"}}}, &BodyError{Pointer: "/spec/access/accountIds/1", Message: `account "nowhere" not found`}},
-		{"an account at a host that takes no key", AgentSpec{Access: &AgentAccess{AccountIDs: []string{"team-acct", "bob-acct"}}},
+		{"an account twice", AgentSpec{Access: &AgentAccess{AccountIDs: []string{teamAcctID, teamAcctID}}}, &BodyError{Pointer: "/spec/access/accountIds/1", Message: `account "` + teamAcctID + `" is listed twice`}},
+		{"a pool twice", AgentSpec{Access: &AgentAccess{PoolIDs: []string{localPoolID, otherPoolID, localPoolID}}}, &BodyError{Pointer: "/spec/access/poolIds/2", Message: `pool "` + localPoolID + `" is listed twice`}},
+		{"an account not read", AgentSpec{Access: &AgentAccess{AccountIDs: []string{teamAcctID, nowhereID}}}, &BodyError{Pointer: "/spec/access/accountIds/1", Message: `account "` + nowhereID + `" not found`}},
+		{"an account at a host that takes no key", AgentSpec{Access: &AgentAccess{AccountIDs: []string{teamAcctID, bobAcctID}}},
 			&BodyError{Pointer: "/spec/access/accountIds/1", Message: `account "bob-b" is at host "beta", which takes no key, so a pool would ignore it; name that host's pool in poolIds instead`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

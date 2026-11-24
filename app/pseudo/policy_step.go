@@ -12,13 +12,27 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Target names the team, project or service account whose account a kind changes.
 type Target struct {
 	Kind string `json:"kind" enum:"team,project,service-account" doc:"What the target is: a team or a project, whose own account is changed, or a service account, whose account (its keys' default lane) is."`
-	ID   string `json:"id"   format:"uuid"                        doc:"Id of the team, project or service account."`
+	ID   string `json:"id"                                        doc:"Id (metadata.id) of the team, project or service account; a slug answers 400."`
+}
+
+// CheckTarget refuses a target of no kind the step takes, or named by anything but its id; it needs no read.
+func CheckTarget(t Target) error {
+	switch t.Kind {
+	case "team", "project", "service-account":
+	default:
+		return &BodyError{Pointer: "/spec/target/kind", Message: "spec.target.kind must be team, project or service-account"}
+	}
+	if !ids.Valid(t.ID) {
+		return &BodyError{Pointer: "/spec/target/id", Message: fmt.Sprintf("%s %q is not an id; name the %s by its metadata.id", t.Kind, t.ID, t.Kind)}
+	}
+	return nil
 }
 
 // PolicyCase names what the policy step does.

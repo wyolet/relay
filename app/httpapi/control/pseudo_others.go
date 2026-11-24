@@ -1,4 +1,4 @@
-// A check the access and limits kinds run on the plans their rows make, beside the plan check: no account but the target may reach other models or hosts than it does now. The rows are built so they cannot (a shared policy is copied, not edited; only a labelled pool nothing else links is changed or deleted); this refuses the write if they ever would.
+// Checks the access and limits kinds run on the plans their rows make, beside the plan check: the target's lane is not left refusing every request, and no account but the target may reach other models or hosts than it does now. The rows are built so they cannot (a shared policy is copied, not edited; only a labelled pool nothing else links is changed or deleted); this refuses the write if they ever would.
 
 package control
 
@@ -18,6 +18,41 @@ import (
 
 // codeOthersChanged refuses rows that would change what an account other than the target may use.
 const codeOthersChanged = "other_accounts_changed"
+
+// checkPolicyStep returns the checks of the plans after rows that the plan check does not make itself: the target's lane is not refused as a whole where it was not, also when its policy changed in place with no binding written (laneServed), and no other account's reach changed (othersUnchanged).
+func checkPolicyStep(live *engine.View, rows []pseudo.Row, targetID string) func(*engine.View) error {
+	return func(after *engine.View) error {
+		if err := laneServed(live, after, targetID); err != nil {
+			return err
+		}
+		return othersUnchanged(live, rows, targetID)(after)
+	}
+}
+
+// laneServed refuses a result in which the lane of account id (a team's or project's own account read as a lane directly under it) refuses every request, unless it does with the same code in live.
+func laneServed(live, after *engine.View, id string) error {
+	refused := func(v *engine.View) *plan.Refusal {
+		if r := plan.ReachOf(v, id, nil); r != nil {
+			return r.Refused
+		}
+		return nil
+	}
+	now := refused(after)
+	if now == nil {
+		return nil
+	}
+	if live != nil {
+		if prev := refused(live); prev != nil && prev.Code == now.Code {
+			return nil
+		}
+	}
+	r := refusal(&httpapi.APIError{
+		Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: codePlanIssue, Message: "the rows pass one by one but would leave the target's account refusing every request; nothing was written"},
+		HTTPStatus: http.StatusUnprocessableEntity,
+	}, "")
+	r.Issues = []PseudoIssue{{Code: now.Code, Message: "requests in this account would all be refused", Kind: string(plan.KindAccount), ID: id, Pointer: "/spec/target"}}
+	return r
+}
 
 // othersUnchanged returns the check of the plans after rows against live: every account but targetID bound to a policy the rows update, or to one linking a pool they update or delete, reaches what it reaches in live.
 func othersUnchanged(live *engine.View, rows []pseudo.Row, targetID string) func(*engine.View) error {

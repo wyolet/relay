@@ -52,13 +52,10 @@ type AccessChange struct {
 
 // ExpandAccess returns the steps that set the target's access: the shares access.accountIds needs, one pool per host (the labelled pool for that host updated in place when only the policy changed in place links it, else a new one labelled AccessLabel), the policy step setting the policy's pools to poolIds then those pools (none with everyCredential) and its models to access.models, then the delete of each labelled pool the policy no longer links that nothing else links.
 func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
-	a := body.Spec.Access
-	if a == nil {
-		return AccessChange{}, &BodyError{Pointer: "/spec/access", Message: "spec.access is required unless dryRun=true"}
-	}
-	if err := checkAccess(a); err != nil {
+	if err := CheckAccess(body); err != nil {
 		return AccessChange{}, err
 	}
+	a := body.Spec.Access
 	pc := in.Policy.Case()
 	if pc == CaseAbove {
 		c, err := ChangePolicy(in.Policy, func(*policy.Spec) {}, "/spec/target")
@@ -95,6 +92,17 @@ func ExpandAccess(body Access, in AccessReads) (AccessChange, error) {
 	}
 	c.Rows = rows
 	return AccessChange{PolicyChange: c}, nil
+}
+
+// CheckAccess refuses a body whose target or access is malformed, access left out included, or names a row by anything but its id; it needs no read, so a caller runs it before reading what the body names. ExpandAccess runs it too.
+func CheckAccess(body Access) error {
+	if err := CheckTarget(body.Spec.Target); err != nil {
+		return err
+	}
+	if body.Spec.Access == nil {
+		return &BodyError{Pointer: "/spec/access", Message: "spec.access is required unless dryRun=true"}
+	}
+	return checkAccess(body.Spec.Access)
 }
 
 type accessExpansion struct {

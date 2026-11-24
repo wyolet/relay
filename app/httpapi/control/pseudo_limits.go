@@ -67,7 +67,7 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 		var targetID string
 		var unpriced []string
 		ctx = pseudo.AfterCheck(ctx, func(after *engine.View) error {
-			if err := othersUnchanged(live, change.Rows, targetID)(after); err != nil {
+			if err := checkPolicyStep(live, change.Rows, targetID)(after); err != nil {
 				return err
 			}
 			if s.Budget != nil {
@@ -76,6 +76,9 @@ func registerPseudoLimits(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
+			if err := pseudo.CheckLimits(in.Body); err != nil {
+				return nil, err
+			}
 			reads, err := d.boundTo(tx).policyReads(ctx, s.Target)
 			if err != nil {
 				return nil, err

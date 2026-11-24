@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,13 +35,18 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// denyAction refuses one action and asks Inner about every other, so a test can refuse one row's own grant.
+// denyAction refuses one action and asks Inner about every other, so a test can refuse one row's own grant; rows whose ids are in hidden are not visible, and before, when set, runs as an action is asked about.
 type denyAction struct {
 	Inner  authz.RBAC
 	action *string
+	hidden map[string]bool
+	before *func(action string)
 }
 
 func (d denyAction) Authorize(ctx context.Context, action string, r authz.Resource) error {
+	if d.before != nil && *d.before != nil {
+		(*d.before)(action)
+	}
 	if action == *d.action {
 		return authz.ErrForbidden
 	}
@@ -48,7 +54,7 @@ func (d denyAction) Authorize(ctx context.Context, action string, r authz.Resour
 }
 
 func (d denyAction) Visible(ctx context.Context, kind, id string, owner meta.Owner) bool {
-	return d.Inner.Visible(ctx, kind, id, owner)
+	return !d.hidden[id] && d.Inner.Visible(ctx, kind, id, owner)
 }
 
 func (d denyAction) Unwrap() authz.Authorizer { return d.Inner }
@@ -57,8 +63,11 @@ func (d denyAction) Unwrap() authz.Authorizer { return d.Inner }
 type pseudoAgentWorld struct {
 	*sharesWorld
 	plans                                           *engine.Engine
+	holder                                          *plan.Holder
 	extraAccounts                                   []*account.Account
 	denied                                          *string
+	hidden                                          map[string]bool
+	before                                          func(action string)
 	owner                                           meta.Owner
 	teamTwoAcct, emptyAcct, bobAcct, secondHostAcct *account.Account
 	keylessAcct                                     *account.Account
@@ -69,10 +78,10 @@ type pseudoAgentWorld struct {
 func newPseudoAgentWorld(t *testing.T, opts ...func(*Deps)) *pseudoAgentWorld {
 	t.Helper()
 	t.Setenv("PSEUDO_AGENT_TEST_KEY", "sk-pseudo-agent-test-value")
-	w := &pseudoAgentWorld{denied: new(string)}
+	w := &pseudoAgentWorld{denied: new(string), hidden: map[string]bool{}}
 	w.sharesWorld = newSharesWorld(t, append([]func(*Deps){func(d *Deps) {
 		wrapped := d.Authz.(audit.Authorizer)
-		wrapped.Inner = denyAction{Inner: wrapped.Inner.(authz.RBAC), action: w.denied}
+		wrapped.Inner = denyAction{Inner: wrapped.Inner.(authz.RBAC), action: w.denied, hidden: w.hidden, before: &w.before}
 		d.Authz = wrapped
 		d.PlanView = func() *engine.View {
 			if w.plans == nil {
@@ -147,7 +156,8 @@ func newPseudoAgentWorld(t *testing.T, opts ...func(*Deps)) *pseudoAgentWorld {
 func (w *pseudoAgentWorld) loadPlans(t *testing.T) {
 	t.Helper()
 	cells := cell.NewRegistry(cell.Options{})
-	w.plans = engine.New(engine.Options{Cells: cells})
+	w.holder = &plan.Holder{}
+	w.plans = engine.New(engine.Options{Cells: cells, Hooks: engine.Hooks{OnPublish: w.holder.OnPublish}})
 	s := w.stores
 	var accounts engine.Source[account.Account] = s.Account
 	if len(w.extraAccounts) > 0 {
@@ -184,7 +194,11 @@ func (w *pseudoAgentWorld) post(t *testing.T, who string, body map[string]any, d
 	}
 	rec := w.send(who, http.MethodPost, path, string(raw))
 	var out PseudoAgentCreated
-	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if rec.Code < 300 {
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Errorf("decode %s: %v", rec.Body, err)
+		}
+	}
 	return rec, out
 }
 
@@ -273,6 +287,12 @@ func TestPseudoAgent_PolicyAndKey(t *testing.T) {
 	if k == nil || k.Spec.Principal != (key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID}) || k.Spec.AccountID != lane.Meta.ID || out.Key.Plaintext == "" || apikey.Hash(out.Key.Plaintext) != k.Spec.KeyHash {
 		t.Fatalf("key = %+v, plaintext %q", k, out.Key.Plaintext)
 	}
+	// Once the plans hold what was written, the plaintext authenticates as the service account, in its account, with nothing refused.
+	w.loadPlans(t)
+	kp := w.holder.Load().Keys.Lookup(apikey.Hash(out.Key.Plaintext), time.Now())
+	if kp == nil || kp.Principal != k.Spec.Principal || kp.Caller == nil || kp.Caller.Lane.Meta.ID != lane.Meta.ID || kp.Caller.Refused != nil {
+		t.Fatalf("the plaintext authenticates as %+v", kp)
+	}
 
 	var actions []string
 	for _, ev := range sink.all() {
@@ -285,6 +305,65 @@ func TestPseudoAgent_PolicyAndKey(t *testing.T) {
 	if diff := cmp.Diff(wantActions, actions); diff != "" {
 		t.Errorf("audit (-want +got):\n%s", diff)
 	}
+}
+
+// A write is audited as each row's create; a refused request as one row naming the request and its refusal; a dry run, refused or not, as nothing.
+func TestPseudoAgent_Audit(t *testing.T) {
+	type entry struct {
+		Action, Kind, Status string
+		Code                 int
+	}
+	created := func(kind string) entry {
+		return entry{authz.Plural(kind) + ".create", kind, audit.StatusAllowed, http.StatusCreated}
+	}
+	for _, tc := range []struct {
+		name, deny string
+		dry, empty bool
+		want       []entry
+	}{
+		{name: "made", want: []entry{created("service-account"), created("account"), created("pool"), created("policy"), created("policy-binding"), created("key")}},
+		{name: "a row refused", deny: "pools.create", want: []entry{{"pseudo-agents.create", "pseudo-agent", audit.StatusDenied, http.StatusForbidden}}},
+		{name: "refused by the plans", empty: true, want: []entry{{"pseudo-agents.create", "pseudo-agent", audit.StatusError, http.StatusUnprocessableEntity}}},
+		{name: "a dry run", dry: true},
+		{name: "a refused dry run", deny: "pools.create", dry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &auditSink{}
+			em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
+			w := newPseudoAgentWorld(t, func(d *Deps) { d.Audit = em })
+			w.loadPlans(t)
+			*w.denied = tc.deny
+			acct := w.teamTwoAcct
+			if tc.empty {
+				acct = w.emptyAcct
+			}
+			w.send("bob", http.MethodPost, pseudoPath(tc.dry), mustJSON(t, w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{acct.Meta.ID}}, "key": map[string]any{}})))
+			em.Close()
+			var got []entry
+			for _, ev := range sink.all() {
+				if strings.HasSuffix(ev.Request.Path, "/pseudo-agents") {
+					got = append(got, entry{ev.Action, ev.Resource.Kind, ev.Outcome.Status, ev.Outcome.Code})
+				}
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("audit (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func pseudoPath(dry bool) string {
+	if dry {
+		return "/pseudo-agents?dryRun=true"
+	}
+	return "/pseudo-agents"
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	must(t, "body", err)
+	return string(raw)
 }
 
 func (w *pseudoAgentWorld) holdingOf(t *testing.T, accountID string) *policybinding.PolicyBinding {
@@ -419,6 +498,9 @@ func TestPseudoAgent_RowRefusals(t *testing.T) {
 		{"an account the caller may not see", "bob", "", accounts(w.alicesAcct.Meta.ID), http.StatusNotFound, "/spec/access/accountIds/0"},
 		{"an account the caller sees but may not share", "bob", "", accounts(w.teamTwoAcct.Meta.ID, w.teamAcct.Meta.ID), http.StatusForbidden, "/spec/access/accountIds/1"},
 		{"a share made with another receiver", "bob", "", accounts(toBob.Meta.ID), http.StatusBadRequest, "/spec/access/accountIds"},
+		{"an account by slug", "bob", "", accounts(w.teamTwoAcct.Meta.Name), http.StatusBadRequest, "/spec/access/accountIds/0"},
+		{"a pool by slug", "bob", "", map[string]any{"access": map[string]any{"poolIds": []string{w.keylessPool.Meta.Name}}}, http.StatusBadRequest, "/spec/access/poolIds/0"},
+		{"a policy by slug", "bob", "", map[string]any{"policyId": w.projPolicy.Meta.Name}, http.StatusBadRequest, "/spec/policyId"},
 		{"an account at a host that takes no key", "bob", "", accounts(w.teamTwoAcct.Meta.ID, w.keylessAcct.Meta.ID), http.StatusBadRequest, "/spec/access/accountIds/1"},
 		{"a pool the project may not link", "bob", "", map[string]any{"access": map[string]any{"poolIds": []string{w.keylessPool.Meta.ID, w.teamOnePool.Meta.ID}}}, http.StatusBadRequest, "/spec/access/poolIds/1"},
 		{"the pool's grant", "bob", "pools.create", reached, http.StatusForbidden, "/spec/access/accountIds"},
@@ -467,6 +549,83 @@ func TestPseudoAgent_PlanIssue(t *testing.T) {
 	}
 	want := []PseudoIssue{{Code: plan.IssuePoolsServeNothing, Kind: string(plan.KindPolicy), Name: "ci-bot", Field: "spec.poolIds", Pointer: "/spec/access"}}
 	if diff := cmp.Diff(want, onPolicy); diff != "" {
+		t.Errorf("issues (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
+		t.Errorf("a refused request wrote rows (-before +after):\n%s", diff)
+	}
+}
+
+// Listing an account the caller may not share answers the same whether or not the owner already holds a share of it the caller may not see.
+func TestPseudoAgent_HiddenShareIsNotUsed(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	rec := w.share("dave", w.teamAcct, account.ReceiverProject, w.projTwo.Meta.ID)
+	wantStatus(t, rec, http.StatusCreated)
+	w.hidden[decodeAccount(t, rec).Meta.ID] = true
+	w.loadPlans(t)
+	rec, _ = w.post(t, "bob", w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.teamAcct.Meta.ID}}}), false)
+	wantStatus(t, rec, http.StatusForbidden)
+	if r := refusalOf(t, rec); r.Pointer != "/spec/access/accountIds/0" {
+		t.Errorf("pointer = %q, want the account's", r.Pointer)
+	}
+}
+
+// A share another change makes while the request runs answers share_exists, worded with the rows' names: the message is not read from the transaction the failed write aborted.
+func TestPseudoAgent_ShareTakenMeanwhile(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	w.loadPlans(t)
+	w.before = func(action string) {
+		if action != "service-accounts.create" {
+			return
+		}
+		w.before = nil
+		share := account.Share(w.bobAcct, account.Receiver{Kind: account.ReceiverProject, ID: w.projTwo.Meta.ID}, w.owner, w.projTwo.Meta.Name)
+		share.Meta.Name = "shared-meanwhile"
+		must(t, "share meanwhile", w.stores.Account.CreateShare(context.Background(), share))
+	}
+	before := w.rowCounts(t)
+	rec, _ := w.post(t, "bob", w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.teamTwoAcct.Meta.ID, w.bobAcct.Meta.ID}}}), false)
+	wantStatus(t, rec, http.StatusConflict)
+	r := refusalOf(t, rec)
+	if r.Err.Code != "share_exists" || r.Pointer != "/spec/access/accountIds/1" || !strings.Contains(r.Err.Message, `project "two-app"`) {
+		t.Errorf("refusal = %+v, want share_exists naming project \"two-app\" at the account", r)
+	}
+	before["account"]++
+	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
+		t.Errorf("rows other than the share made meanwhile (-want +got):\n%s", diff)
+	}
+}
+
+// A body without an owner is refused for that, with its pointer; there is no default owner.
+func TestPseudoAgent_OwnerRequired(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	w.loadPlans(t)
+	body := w.agentBody(map[string]any{"policyId": w.projPolicy.Meta.ID})
+	delete(body["metadata"].(map[string]any), "owner")
+	rec, _ := w.post(t, "bob", body, false)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if r := refusalOf(t, rec); r.Pointer != "/metadata/owner" || r.Err.Message != "metadata.owner is required: the kind and id of the scope that owns the service account" {
+		t.Errorf("refusal = %+v", r)
+	}
+}
+
+// A disabled policy files no error, but every request of a lane bound to it is refused: the request is refused, on the binding.
+func TestPseudoAgent_DisabledPolicy(t *testing.T) {
+	w := newPseudoAgentWorld(t)
+	off := false
+	disabled := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "two-app-off", Owner: w.owner}, Spec: policy.Spec{Enabled: &off}}
+	must(t, "disabled policy", w.stores.Policy.Upsert(t.Context(), disabled))
+	w.loadPlans(t)
+	before := w.rowCounts(t)
+	rec, _ := w.post(t, "bob", w.agentBody(map[string]any{"policyId": disabled.Meta.ID, "key": map[string]any{}}), false)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d %s, want 422", rec.Code, rec.Body)
+	}
+	var codes []string
+	for _, i := range refusalOf(t, rec).Issues {
+		codes = append(codes, i.Code+" "+i.Kind+" "+i.Pointer)
+	}
+	if diff := cmp.Diff([]string{"policy_disabled policybinding /spec/policyId"}, codes); diff != "" {
 		t.Errorf("issues (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(before, w.rowCounts(t)); diff != "" {
@@ -539,39 +698,57 @@ func TestPseudoAgent_BreaksAnExistingRow(t *testing.T) {
 	}
 }
 
-// Concurrent identical requests each land whole or answer 409; every service account made has its lane, binding and key.
+// Concurrent requests run one at a time: those that take no common name are all written, those that give the same name are written once and the rest answer 409 with nothing written.
 func TestPseudoAgent_Concurrent(t *testing.T) {
-	w := newPseudoAgentWorld(t)
-	w.loadPlans(t)
-	before := w.rowCounts(t)
 	const calls = 6
-	codes := make([]int, calls)
-	var wg sync.WaitGroup
-	for i := range calls {
-		wg.Go(func() {
-			rec, _ := w.post(t, "bob", w.agentBody(map[string]any{"policyId": w.projPolicy.Meta.ID, "key": map[string]any{}}), false)
-			codes[i] = rec.Code
-		})
+	run := func(t *testing.T, w *pseudoAgentWorld, name string) []int {
+		codes := make([]int, calls)
+		var wg sync.WaitGroup
+		for i := range calls {
+			wg.Go(func() {
+				body := w.agentBody(map[string]any{"policyId": w.projPolicy.Meta.ID, "key": map[string]any{}})
+				if name != "" {
+					body["metadata"].(map[string]any)["name"] = name
+				}
+				rec, _ := w.post(t, "bob", body, false)
+				codes[i] = rec.Code
+			})
+		}
+		wg.Wait()
+		slices.Sort(codes)
+		return codes
 	}
-	wg.Wait()
-	t.Logf("codes: %v", codes)
-	made := 0
-	for _, c := range codes {
-		switch c {
-		case http.StatusCreated:
-			made++
-		case http.StatusConflict:
-		default:
-			t.Fatalf("codes = %v, want only 201 and 409", codes)
+	grew := func(t *testing.T, w *pseudoAgentWorld, before map[string]int, n int) {
+		t.Helper()
+		after := w.rowCounts(t)
+		for _, kind := range []string{"service-account", "account", "policy-binding", "key"} {
+			if after[kind]-before[kind] != n {
+				t.Errorf("%d new %s rows, want %d", after[kind]-before[kind], kind, n)
+			}
 		}
 	}
-	if made == 0 {
-		t.Fatalf("codes = %v, want at least one through", codes)
-	}
-	after := w.rowCounts(t)
-	for _, kind := range []string{"service-account", "account", "policy-binding", "key"} {
-		if after[kind]-before[kind] != made {
-			t.Errorf("%d new %s rows for %d requests through", after[kind]-before[kind], kind, made)
+
+	// Requests that take no common name are each written in turn.
+	t.Run("apart", func(t *testing.T) {
+		w := newPseudoAgentWorld(t)
+		w.loadPlans(t)
+		before := w.rowCounts(t)
+		want := slices.Repeat([]int{http.StatusCreated}, calls)
+		if diff := cmp.Diff(want, run(t, w, "")); diff != "" {
+			t.Fatalf("codes (-want +got):\n%s", diff)
 		}
-	}
+		grew(t, w, before, calls)
+	})
+
+	// Requests that give the same name: one is written, the others answer 409 having written nothing.
+	t.Run("colliding", func(t *testing.T) {
+		w := newPseudoAgentWorld(t)
+		w.loadPlans(t)
+		before := w.rowCounts(t)
+		want := append([]int{http.StatusCreated}, slices.Repeat([]int{http.StatusConflict}, calls-1)...)
+		if diff := cmp.Diff(want, run(t, w, "ci-fixed")); diff != "" {
+			t.Fatalf("codes (-want +got):\n%s", diff)
+		}
+		grew(t, w, before, 1)
+	})
 }

@@ -44,10 +44,10 @@ type LimitsChange struct {
 
 // ExpandLimits returns the steps that put the limit on the target: the Budget or RateLimit owned by the target's scope, then the policy step adding its link to what the policy links already.
 func ExpandLimits(body Limits, in PolicyReads) (LimitsChange, error) {
-	s := body.Spec
-	if (s.Budget == nil) == (s.RateLimit == nil) {
-		return LimitsChange{}, &BodyError{Pointer: "/spec", Message: "exactly one of spec.budget and spec.rateLimit is required"}
+	if err := CheckLimits(body); err != nil {
+		return LimitsChange{}, err
 	}
+	s := body.Spec
 	if in.Case() == CaseAbove {
 		c, err := ChangePolicy(in, func(*policy.Spec) {}, "/spec/target")
 		return LimitsChange{PolicyChange: c}, err
@@ -74,6 +74,17 @@ func ExpandLimits(body Limits, in PolicyReads) (LimitsChange, error) {
 	}
 	c.Rows = append([]Row{limit}, c.Rows...)
 	return LimitsChange{PolicyChange: c, Limit: limit}, nil
+}
+
+// CheckLimits refuses a body whose target is malformed or that names not exactly one limit; it needs no read, so a caller runs it before reading what the body names. ExpandLimits runs it too.
+func CheckLimits(body Limits) error {
+	if err := CheckTarget(body.Spec.Target); err != nil {
+		return err
+	}
+	if s := body.Spec; (s.Budget == nil) == (s.RateLimit == nil) {
+		return &BodyError{Pointer: "/spec", Message: "exactly one of spec.budget and spec.rateLimit is required"}
+	}
+	return nil
 }
 
 // name keeps the name m was given, held from the rows minted after it, or mints one of kind from its display name.

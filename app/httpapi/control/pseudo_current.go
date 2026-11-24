@@ -5,6 +5,7 @@ package control
 import (
 	"context"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/pseudo"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 )
@@ -66,11 +67,23 @@ func (d Deps) policyCurrent(ctx context.Context, p *policy.Policy, accountID str
 	return out, nil
 }
 
-// policyPrefill reads the case and current policy of target t for a dry run with the change omitted; nothing is written. above answers its refusal.
+// policyPrefill reads the case and current policy of target t for a dry run with the change omitted; nothing is written and, as for every dry run, nothing is audited. above answers its refusal.
 func (d Deps) policyPrefill(ctx context.Context, t pseudo.Target) (pseudo.PolicyCase, *PolicyCurrent, error) {
-	in, err := d.policyReads(ctx, t)
+	audit.Discard(ctx)
+	c, cur, err := d.readPrefill(ctx, t)
 	if err != nil {
 		return "", nil, d.pseudoError(ctx, err)
+	}
+	return c, cur, nil
+}
+
+func (d Deps) readPrefill(ctx context.Context, t pseudo.Target) (pseudo.PolicyCase, *PolicyCurrent, error) {
+	if err := pseudo.CheckTarget(t); err != nil {
+		return "", nil, err
+	}
+	in, err := d.policyReads(ctx, t)
+	if err != nil {
+		return "", nil, err
 	}
 	c := in.Case()
 	if c == pseudo.CaseAbove {

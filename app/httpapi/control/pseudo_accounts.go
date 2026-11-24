@@ -31,8 +31,10 @@ func (d Deps) readAccessAccounts(ctx context.Context, accountIDs []string, owner
 		return out, err
 	}
 	receiver := account.Receiver{Kind: account.ReceiverKind(owner.Kind), ID: owner.ID}
+	sees := sharerAuthz{Authorizer: d.Authz, d: d}
 	for _, s := range all {
-		if s.IsShared() && s.Meta.Owner == owner && s.Receiver() == receiver {
+		// A share the caller may not see is not used: whether the owner holds one must not show in the answer.
+		if s.IsShared() && s.Meta.Owner == owner && s.Receiver() == receiver && sees.Visible(ctx, "account", s.Meta.ID, s.Meta.Owner) {
 			out.shares[s.Spec.SourceAccountID] = s
 		}
 	}

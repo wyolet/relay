@@ -66,9 +66,12 @@ func registerPseudoAccess(api huma.API, d Deps, protect huma.Middlewares) {
 		var targetID string
 		poolNames := map[string]string{}
 		ctx = pseudo.AfterCheck(ctx, func(after *engine.View) error {
-			return othersUnchanged(live, change.Rows, targetID)(after)
+			return checkPolicyStep(live, change.Rows, targetID)(after)
 		})
 		expand := func(ctx context.Context, tx *appcatalog.Stores) ([]pseudo.Row, error) {
+			if err := pseudo.CheckAccess(in.Body); err != nil {
+				return nil, err
+			}
 			reads, names, err := d.boundTo(tx).accessReads(ctx, in.Body)
 			if err != nil {
 				return nil, err

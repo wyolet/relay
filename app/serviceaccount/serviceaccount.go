@@ -8,6 +8,8 @@ package serviceaccount
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/wyolet/relay/pkg/meta"
 )
@@ -37,6 +39,17 @@ func (s *ServiceAccount) StampOwner() {
 	s.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: s.Spec.ProjectID}
 }
 
+// OwnerKinds are the kinds of scope a service account may be owned by; Validate refuses any other, and request shapes that name an owner document these.
+var OwnerKinds = []meta.OwnerKind{meta.OwnerProject}
+
+func ownerKindsText() string {
+	names := make([]string, len(OwnerKinds))
+	for i, k := range OwnerKinds {
+		names[i] = string(k)
+	}
+	return strings.Join(names, " or ")
+}
+
 // SetOwner places the service account under o, filling the spec field the owner mirrors; Validate refuses an owner a service account cannot have.
 func (s *ServiceAccount) SetOwner(o meta.Owner) {
 	s.Meta.Owner = o
@@ -51,8 +64,8 @@ func (s *ServiceAccount) Validate() error {
 	if err := meta.Validator.Struct(s); err != nil {
 		return err
 	}
-	if s.Meta.Owner.Kind != meta.OwnerProject {
-		return fmt.Errorf("serviceaccount %q: owner.kind must be project, got %q", s.Meta.Name, s.Meta.Owner.Kind)
+	if !slices.Contains(OwnerKinds, s.Meta.Owner.Kind) {
+		return fmt.Errorf("serviceaccount %q: owner.kind must be %s, got %q", s.Meta.Name, ownerKindsText(), s.Meta.Owner.Kind)
 	}
 	if s.Meta.Owner.ID != "" && s.Meta.Owner.ID != s.Spec.ProjectID {
 		return fmt.Errorf("serviceaccount %q: owner.id %q does not match spec.projectId %q", s.Meta.Name, s.Meta.Owner.ID, s.Spec.ProjectID)

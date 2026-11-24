@@ -28,7 +28,7 @@ func TestExpandLimits(t *testing.T) {
 				case CaseCopy:
 					in.Alone = false
 				}
-				body := Limits{Metadata: LimitsMetadata{DisplayName: "CI cap"}, Spec: LimitsSpec{Target: Target{Kind: "project", ID: "proj"}}}
+				body := Limits{Metadata: LimitsMetadata{DisplayName: "CI cap"}, Spec: LimitsSpec{Target: Target{Kind: "project", ID: targetID}}}
 				if limit == "budget" {
 					body.Spec.Budget = &budget.Spec{AmountUSD: "100"}
 				} else {
@@ -69,7 +69,8 @@ func TestExpandLimits(t *testing.T) {
 
 func TestExpandLimits_ExactlyOne(t *testing.T) {
 	in := newAccessWorld().reads().Policy
-	for _, spec := range []LimitsSpec{{}, {Budget: &budget.Spec{AmountUSD: "1"}, RateLimit: &ratelimit.Spec{}}} {
+	target := Target{Kind: "team", ID: targetID}
+	for _, spec := range []LimitsSpec{{Target: target}, {Target: target, Budget: &budget.Spec{AmountUSD: "1"}, RateLimit: &ratelimit.Spec{}}} {
 		_, err := ExpandLimits(Limits{Spec: spec}, in)
 		if diff := cmp.Diff(&BodyError{Pointer: "/spec", Message: "exactly one of spec.budget and spec.rateLimit is required"}, err); diff != "" {
 			t.Errorf("(-want +got):\n%s", diff)
