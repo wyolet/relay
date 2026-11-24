@@ -197,10 +197,10 @@ type pseudoWrite struct {
 	plaintexts map[string]string
 }
 
-// runPseudo writes the rows expand returns in one transaction (pseudo.Writer); a dry run writes nothing and records no audit row.
-func (d Deps) runPseudo(ctx context.Context, expand pseudo.ExpandFunc, dryRun bool) (*pseudoWrite, []pseudo.Row, error) {
+// runPseudo writes the rows expand returns in one transaction (pseudo.Writer), after the outside writes; a dry run writes nothing and records no audit row.
+func (d Deps) runPseudo(ctx context.Context, expand pseudo.ExpandFunc, dryRun bool, outside ...pseudo.Outside) (*pseudoWrite, []pseudo.Row, error) {
 	w := &pseudoWrite{d: d, plaintexts: map[string]string{}}
-	writer := pseudo.Writer{Stores: d.Stores, Check: d.PlanCheck, View: d.PlanView}
+	writer := pseudo.Writer{Stores: d.Stores, Check: d.PlanCheck, View: d.PlanView, Outside: outside}
 	rows, err := writer.Run(ctx, expand, w.create, dryRun)
 	if err != nil {
 		return nil, nil, d.pseudoError(ctx, err)
@@ -317,9 +317,12 @@ func (d Deps) pseudoError(ctx context.Context, err error) error {
 	var ie *pseudo.IssuesError
 	var re *pseudo.RowError
 	var answered *pseudoRefusal
+	var ue *pseudo.UndoError
 	switch {
 	case errors.As(err, &answered):
 		return answered
+	case errors.As(err, &ue):
+		return refusal(huma.Error500InternalServerError(ue.Error()), "")
 	case errors.As(err, &be):
 		return refusal(huma.Error400BadRequest(be.Message), be.Pointer)
 	case errors.As(err, &ie):

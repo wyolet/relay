@@ -80,6 +80,8 @@ func TestPseudoError(t *testing.T) {
 			&pseudoRefusal{APIError: apiErr(409, "conflict", dupMsg), Pointer: "/spec/key"}},
 		{"a store failing", &pseudo.RowError{Row: keyRow, Err: errors.New("connection reset")},
 			&pseudoRefusal{APIError: apiErr(500, "", "connection reset"), Pointer: "/spec/key"}},
+		{"an outside write left behind", &pseudo.UndoError{Err: &pseudo.RowError{Row: keyRow, Err: huma.Error403Forbidden("forbidden")}, Left: []string{"the sealed value of host key k"}, Undo: errors.New("connection reset")},
+			&pseudoRefusal{APIError: apiErr(500, "", "key /spec/key: forbidden; no row was written, but undoing what was written before the transaction failed, leaving the sealed value of host key k behind: connection reset")}},
 		{"a slow check", plan.ErrCheckTimeout,
 			&pseudoRefusal{APIError: apiErr(503, "", "checking the rows against the plans took too long; nothing was written, retry the request")}},
 		{"no plans", pseudo.ErrNoPlans,

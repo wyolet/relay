@@ -76,9 +76,11 @@ type Writer struct {
 	Check  *plan.Check
 	// View is the live plans' current view.
 	View func() *engine.View
+	// Outside are the writes made before the transaction opens, undone when it does not commit.
+	Outside []Outside
 }
 
-// Run expands, creates each row in order, checks the rows against the plans and commits; a dry run does all of it but the commit. It returns the rows as created, also on a dry run. A refused row is a *RowError, a body that expands to nothing a *BodyError, rows the plans refuse an *IssuesError; nothing is written on any error. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created.
+// Run makes the outside writes, then expands, creates each row in order, checks the rows against the plans and commits; a dry run does all of it but the outside writes and the commit. It returns the rows as created, also on a dry run. A refused row is a *RowError, a body that expands to nothing a *BodyError, rows the plans refuse an *IssuesError; nothing is written on any error, and an *UndoError names what an outside write left behind when it could not be undone. The rows expand and create read are those they pass to Record under the ctx they are given; the plan check lays them over the live view, under the rows created.
 func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, dryRun bool) ([]Row, error) {
 	if w.Check == nil || w.View == nil {
 		return nil, ErrNoPlans
@@ -88,8 +90,12 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 		return nil, ErrNoPlans
 	}
 	ctx, read := withReads(ctx)
+	written, err := w.writeOutside(ctx, dryRun)
+	if err != nil {
+		return nil, err
+	}
 	var rows []Row
-	err := w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
+	err = w.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
 		var err error
 		if rows, err = expand(ctx, tx); err != nil {
 			return err
@@ -119,7 +125,7 @@ func (w Writer) Run(ctx context.Context, expand ExpandFunc, create CreateFunc, d
 		return rows, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, undoOutside(ctx, written, err)
 	}
 	return rows, nil
 }
