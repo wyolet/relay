@@ -51,16 +51,18 @@ func TestHostPolicies_OwnTierPresetsOnly(t *testing.T) {
 	disabledRL.Spec.Enabled = &off
 	disabledTier := policyOf("a-disabled", hostTier("host-a"), nil)
 	disabledTier.Spec.Enabled = &off
+	tier := policyOf("tier", hostTier("host-a"), nil)
+	tier.Meta.DisplayName = "Tier 1"
 	svc := newService(
 		hostOf("host-a"), hostOf("host-b"), rlOf("rpm", 50), disabledRL,
-		limitedBy(limitedBy(limitedBy(limitedBy(policyOf("tier", hostTier("host-a"), nil), "rpm"), "rpm", "openai/gpt-4o"), "off"), "deleted"),
+		limitedBy(limitedBy(limitedBy(limitedBy(tier, "rpm"), "rpm", "openai/gpt-4o"), "off"), "deleted"),
 		disabledTier,
 		policyOf("other-host", hostTier("host-b"), nil),
 		policyOf("cust", operator, nil),
 	)
 	viewed(t, "host-a", hostRef("host-a"), []HostPolicyRow{
 		{ID: "policy:a-disabled", Name: "a-disabled", RateLimits: []PolicyRateLimitRow{}},
-		{ID: "policy:tier", Name: "tier", Enabled: true, RateLimits: []PolicyRateLimitRow{
+		{ID: "policy:tier", Name: "tier", DisplayName: "Tier 1", Enabled: true, RateLimits: []PolicyRateLimitRow{
 			{ID: "rl:rpm", Name: "rpm", Default: true, Limits: []Limit{limit(50)}},
 			{ID: "rl:rpm", Name: "rpm", Models: []string{"openai/gpt-4o"}, Limits: []Limit{limit(50)}},
 			// A disabled rate limit adds no rule; a deleted one keeps its link's id.

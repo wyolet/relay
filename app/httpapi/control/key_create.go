@@ -21,8 +21,9 @@ import (
 )
 
 type createKeyMetadata struct {
-	Name        string `json:"name,omitempty"        doc:"Slug for the key; derived from displayName when omitted."`
-	DisplayName string `json:"displayName,omitempty" doc:"Free-text name shown in the UI."`
+	Name        string            `json:"name,omitempty"        doc:"Slug for the key; derived from displayName when omitted."`
+	DisplayName string            `json:"displayName,omitempty" doc:"Free-text name shown in the UI."`
+	Labels      map[string]string `json:"labels,omitempty"      doc:"Key/value selectors; GET /keys filters on them with ?label=key=value."`
 }
 
 type createKeySpec struct {
@@ -70,6 +71,7 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		k := &key.Key{}
 		k.Meta.ID = ids.New()
 		k.Meta.DisplayName = in.Body.Metadata.DisplayName
+		k.Meta.Labels = in.Body.Metadata.Labels
 		k.Meta.Name = in.Body.Metadata.Name
 		if k.Meta.Name == "" {
 			base := slug.From(k.Meta.DisplayName)
