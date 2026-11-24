@@ -16,7 +16,7 @@ import (
 // (user kind) or system for seeded rows.
 type Team struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
-	Spec Spec          `json:"spec"     yaml:"spec"`
+	Spec Spec          `json:"spec"     yaml:"spec"     required:"false"`
 }
 
 // Spec carries the enabled flag. A team's spend cap is a Budget its bound policy links.

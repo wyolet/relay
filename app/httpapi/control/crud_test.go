@@ -484,6 +484,8 @@ func TestCRUDCreate(t *testing.T) {
 		{"an admin's group is the organization's", "root", "/groups", tenant, 201, "", "eng", org},
 		{"an admin's role is the organization's", "root", "/roles", customRole, 201, "", "release-manager", org},
 		{"a team written as the system's is the organization's", "root", "/teams", systemTeam, 201, "", "ops", org},
+		{"a team needs no spec", "root", "/teams", `{"metadata":{"name":"bare-team"}}`, 201, "", "bare-team", org},
+		{"a group needs no spec", "root", "/groups", `{"metadata":{"name":"bare-group"}}`, 201, "", "bare-group", org},
 		{"a custom role is not the system's", "root", "/roles", systemRole, 400, reserved, "", meta.Owner{}},
 		{"a team takes no personal owner", "alice", "/teams", personal, 400, "team owner.kind must be organization; omit metadata.owner", "", meta.Owner{}},
 		{"a team takes no personal owner from an admin", "root", "/teams", personal, 400, "team owner.kind must be organization; omit metadata.owner", "", meta.Owner{}},
