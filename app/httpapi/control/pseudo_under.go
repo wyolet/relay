@@ -16,18 +16,19 @@ const underListed = 20
 
 // PseudoUnder is what the rows do to the lanes under a team or project target.
 type PseudoUnder struct {
-	Lanes           int         `json:"lanes"                     doc:"Lanes under the target: those of its projects, service accounts and members, those the caller may not see included."`
-	Narrowed        int         `json:"narrowed"                  doc:"Lanes under it that lose at least one model, host, or pool or account a model comes through."`
-	Widened         int         `json:"widened"                   doc:"Lanes under it that gain at least one."`
-	Unreachable     []UnderLane `json:"unreachable"               doc:"Lanes under it that served a model at some host before and serve none after, at most 20; a lane the caller may not see has no name."`
-	UnreachableMore int         `json:"unreachableMore,omitempty" doc:"Lanes that become unreachable beyond those listed."`
+	Lanes             int         `json:"lanes"                     doc:"Lanes under the target: those of its projects, service accounts and members, those the caller may not see included."`
+	Narrowed          int         `json:"narrowed"                  doc:"Lanes under it that lose at least one model, host, or pool or account a model comes through."`
+	Widened           int         `json:"widened"                   doc:"Lanes under it that gain at least one."`
+	Unreachable       []UnderLane `json:"unreachable"                 doc:"Lanes under it the caller may see that served a model at some host before and serve none after, at most 20."`
+	UnreachableMore   int         `json:"unreachableMore,omitempty"   doc:"Lanes the caller may see that become unreachable beyond those listed."`
+	UnreachableHidden int         `json:"unreachableHidden,omitempty" doc:"Lanes the caller may not see that become unreachable: counted, not named."`
 }
 
 // UnderLane is one lane under the target.
 type UnderLane struct {
-	Kind string `json:"kind"           doc:"account: a lane is an account."`
-	ID   string `json:"id"             doc:"Id of the lane's account."`
-	Name string `json:"name,omitempty" doc:"Slug of the lane's account; omitted when the caller may not see it."`
+	Kind string `json:"kind" doc:"account: a lane is an account."`
+	ID   string `json:"id"   doc:"Id of the lane's account."`
+	Name string `json:"name" doc:"Slug of the lane's account."`
 }
 
 // inSubtree reports whether cp is the lane of targetID or climbs it: a project or lane under a team, a lane under a project.
@@ -75,15 +76,15 @@ func (d Deps) under(ctx context.Context, f plan.Findings, target *account.Accoun
 		if !c.Unreachable {
 			continue
 		}
-		if len(out.Unreachable) == underListed {
+		a := engine.Get[account.Account](f.Result, c.AccountID)
+		switch {
+		case a == nil || !visibleTo(ctx, d.Authz, "account", a.Meta.ID, a.Meta.Owner):
+			out.UnreachableHidden++
+		case len(out.Unreachable) == underListed:
 			out.UnreachableMore++
-			continue
+		default:
+			out.Unreachable = append(out.Unreachable, UnderLane{Kind: "account", ID: a.Meta.ID, Name: a.Meta.Name})
 		}
-		lane := UnderLane{Kind: "account", ID: c.AccountID}
-		if a := engine.Get[account.Account](f.Result, c.AccountID); a != nil && visibleTo(ctx, d.Authz, "account", a.Meta.ID, a.Meta.Owner) {
-			lane.Name = a.Meta.Name
-		}
-		out.Unreachable = append(out.Unreachable, lane)
 	}
 	return out, nil
 }

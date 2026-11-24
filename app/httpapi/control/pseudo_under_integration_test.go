@@ -4,6 +4,7 @@ package control
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -16,6 +17,28 @@ import (
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
 )
+
+// A lane under the target the caller may not see that becomes unreachable is counted in unreachableHidden, neither its id nor its name answered.
+func TestPseudoAccess_UnderHidesLanes(t *testing.T) {
+	w := newPolicyStepWorld(t)
+	must(t, "m1 at the second host", w.stores.Binding.Upsert(t.Context(), &binding.Binding{Meta: meta.Metadata{ID: ids.New(), Name: "m1-at-second-host", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: binding.Spec{ModelID: w.m1.Meta.ID, HostID: w.secondHostAcct.Spec.HostID, Adapter: adapters.OpenAI}}))
+	must(t, "reload", w.cat.Reload(t.Context()))
+	w.loadPlans(t)
+	var agent PseudoAgentCreated
+	wantStatus(t, w.postPseudo(t, "bob", "/pseudo-agents", w.agentBody(map[string]any{"access": map[string]any{"accountIds": []string{w.secondHostAcct.Meta.ID}}}), false, &agent), http.StatusCreated)
+	w.loadPlans(t)
+	w.hidden[agent.Account.ID] = true
+	rec, out := w.access(t, "bob", target("project", w.projTwo.Meta.ID), map[string]any{"accountIds": []string{w.teamTwoAcct.Meta.ID}}, true)
+	wantStatus(t, rec, http.StatusOK)
+	if diff := cmp.Diff(&PseudoUnder{Lanes: 1, Narrowed: 1, Unreachable: []UnderLane{}, UnreachableHidden: 1}, out.Under); diff != "" {
+		t.Errorf("under (-want +got):\n%s", diff)
+	}
+	for _, s := range []string{agent.Account.ID, agent.Account.Name} {
+		if strings.Contains(rec.Body.String(), s) {
+			t.Errorf("the answer names %q of a lane the caller may not see", s)
+		}
+	}
+}
 
 // Setting a project's access to one account at the share host leaves an agent under it, whose own policy links only a pool at the second host, serving nothing. That is what the change means, so it is not refused: the dry run and the save answer the agent in under.unreachable. A project beside it in the same team, outside the target, reaches what it did.
 func TestPseudoAccess_UnderTheTarget(t *testing.T) {

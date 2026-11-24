@@ -351,7 +351,7 @@ The dry run without a change answers the case and what you may see of the curren
 
 Each row passes what its own create, update or delete call passes, with the same answers and pointers, and is audited as that call; then the result is checked against the plans as for `POST /api/pseudo-agents`, and against what every other account reaches: Relay compares what each account reaches with and without the request's rows, whichever row changes it, and a request that would give any account other than the target, and those under a team or project target, more or less (a model, a host, or a pool or account a model comes through) answers `422` `other_accounts_changed`, counting them and naming none, accounts you may not see included. A share made for the target reaches no other account: an account reaches by ownership only the host keys its scopes own, and a share's keys stay its real account's. A request that would leave the target's account refusing every request answers `422` `plan_issue`.
 
-A change on a team or project applies to everything under it: the lanes of its projects, service accounts and members climb its policy. That is never a refusal; `under`, answered on the dry run and the save for a team or project target, is how to see the effect before saving: `lanes` counts the lanes under the target, `narrowed` and `widened` those that lose or gain a model, host, or pool or account a model comes through, and `unreachable` lists, up to 20 with `unreachableMore` counting the rest, the lanes that served a model before and serve none after (`kind`, `id`, and `name` when you may see the lane):
+A change on a team or project applies to everything under it: the lanes of its projects, service accounts and members climb its policy. That is never a refusal; `under`, answered on the dry run and the save for a team or project target, is how to see the effect before saving: `lanes` counts the lanes under the target, `narrowed` and `widened` those that lose or gain a model, host, or pool or account a model comes through, and `unreachable` lists, up to 20 with `unreachableMore` counting the rest, the lanes you may see that served a model before and serve none after (`kind`, `id`, `name`); `unreachableHidden` counts those you may not see. Nothing is compared, and `under` is absent, when the request writes nothing:
 
 ```json
 { "under": { "lanes": 3, "narrowed": 1, "widened": 0,
@@ -434,10 +434,9 @@ A label is a claim anyone who can make a pool or policy can write, so a labelled
 | --- | --- |
 | `in_use` | A binding or policy the request does not delete uses it, whether you may see it or not. |
 | `kept_by_request` | `keep` names it. |
-| `not_visible` | The service account's scope owns it, but you may not see it; its `name` is left out. |
 | `not_deletable` | It is owned outside the service account's scope, or its delete's grant or governance refuses you. |
 
-A labelled row owned outside the scope that you may not see is neither touched nor listed. `keep` names labelled rows the answer lists; any other id answers `400` with `pointer` `/spec/keep/<i>`.
+A labelled row of the service account's scope that you may not see stays and is counted in `keptHidden`, not named; one owned outside the scope that you may not see is neither touched nor counted. `keep` names labelled rows you may see; any other id answers `400` with `pointer` `/spec/keep/<i>`.
 
 ```json
 {
@@ -454,9 +453,9 @@ A labelled row owned outside the scope that you may not see is neither touched n
 }
 ```
 
-`deleted` lists every row in delete order, with the bindings a revoke left empty after their share and the service account's account after it; `updated` lists a binding the account left that holds other accounts, and the bindings, keys and pools a revoke changed. Both answers are `200`. `expect`, when given, is the ids of a dry run's `deleted`: when the set to delete differs at submit, the request answers `409` `changed` with the current `deleted` and `kept`, and deletes nothing.
+`deleted` lists every row in delete order, with the bindings a revoke left empty after their share and the service account's account after it; `updated` lists a binding the account left that holds other accounts, and the bindings, keys and pools a revoke changed. A row you may not read through its own read, such as a binding a revoke empties in another scope, is counted in `deletedHidden` or `updatedHidden` instead, as `DELETE /api/accounts/by-id/{id}` counts it. Both answers are `200`. `expect`, when given, is the ids of a dry run's `deleted`: when the set to delete differs at submit, the request answers `409` `changed` with the current `deleted` and `kept` and their hidden counts, and deletes nothing.
 
-Each delete passes the grant, governance and reference check of its own delete call, with the same answer and `pointer` `/spec/serviceAccountId`; a refused delete refuses the request and nothing is deleted. A `409` `resource_in_use` carries the row's `blockers`, such as a role binding naming the service account. Then the result is checked against the plans as for `pseudo-agents`, so a delete that would leave an error on a row that stays answers `422` `plan_issue`, and against what every other account reaches, as for `pseudo-access`. Each row deleted or changed is audited as its own delete call records it. A deleted key stops authenticating once the pod's plans hear the delete, as after `DELETE /api/keys/by-id/{id}`.
+Before any list is answered, each delete's visibility, grant and governance are asked, the service account's first, as the transaction will ask them; a refused delete refuses the request with the same answer and `pointer` `/spec/serviceAccountId`, and a row you may not see answers `404` without naming it. Each delete then passes its reference check as its own delete call does; a refused delete refuses the request and nothing is deleted. A `409` `resource_in_use` carries the row's `blockers`, such as a role binding naming the service account. Then the result is checked against the plans as for `pseudo-agents`, so a delete that would leave an error on a row that stays answers `422` `plan_issue`, and against what every other account reaches, as for `pseudo-access`. Each row deleted or changed is audited as its own delete call records it. A deleted key stops authenticating once the pod's plans hear the delete, as after `DELETE /api/keys/by-id/{id}`.
 
 | Answer | When |
 | --- | --- |

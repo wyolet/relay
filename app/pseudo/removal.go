@@ -162,10 +162,10 @@ func CheckAgentRemoval(body AgentRemoval) error {
 	return nil
 }
 
-// checkKeep refuses a kept id that is no labelled row the answer would list.
+// checkKeep refuses a kept id that is no labelled row the caller may see.
 func checkKeep(keep []string, labelled []Labelled) error {
 	for i, id := range keep {
-		if !slices.ContainsFunc(labelled, func(l Labelled) bool { return l.Meta.ID == id && (l.Visible || l.InScope) }) {
+		if !slices.ContainsFunc(labelled, func(l Labelled) bool { return l.Meta.ID == id && l.Visible }) {
 			return &BodyError{Pointer: fmt.Sprintf("/spec/keep/%d", i), Message: fmt.Sprintf("%q is not a policy or pool labelled %s for this service account", id, AgentLabel)}
 		}
 	}

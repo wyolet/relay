@@ -248,12 +248,11 @@ func TestPseudoAgentRemoval_LabelsAreClaims(t *testing.T) {
 	wantKept := []PseudoKept{
 		{Kind: "pool", ID: ownPool.ID, Name: ownPool.Name, Reason: pseudo.KeptByRequest},
 		{Kind: "pool", ID: seen.Meta.ID, Name: seen.Meta.Name, Reason: pseudo.KeptNotDeletable},
-		{Kind: "pool", ID: hiddenOwn.Meta.ID, Reason: pseudo.KeptNotVisible},
 	}
-	if diff := cmp.Diff(wantKept, got.Kept, cmpopts.SortSlices(func(a, b PseudoKept) bool { return a.ID < b.ID })); diff != "" {
-		t.Errorf("kept (-want +got):\n%s", diff)
+	if diff := cmp.Diff(wantKept, got.Kept, cmpopts.SortSlices(func(a, b PseudoKept) bool { return a.ID < b.ID })); diff != "" || got.KeptHidden != 1 {
+		t.Errorf("kept hidden %d, want 1; kept (-want +got):\n%s", got.KeptHidden, diff)
 	}
-	for _, s := range []string{spoof.Meta.ID, spoof.Meta.Name, hiddenOwn.Meta.Name} {
+	for _, s := range []string{spoof.Meta.ID, spoof.Meta.Name, hiddenOwn.Meta.ID, hiddenOwn.Meta.Name} {
 		if strings.Contains(rec.Body.String(), s) {
 			t.Errorf("the answer says %q of a row bob may not see: %s", s, rec.Body)
 		}
@@ -309,6 +308,33 @@ func TestPseudoAgentRemoval_RevokesHeldShares(t *testing.T) {
 	}
 	if left := w.stillStored(t, want); len(left) != 0 {
 		t.Errorf("still stored: %v", left)
+	}
+}
+
+// A binding a share's revoke leaves empty in a scope the caller may not see goes with the revoke, as DELETE /accounts/by-id/{id} takes it, and is counted in deletedHidden without its id or name.
+func TestPseudoAgentRemoval_HiddenRowOfARevoke(t *testing.T) {
+	w := newAgentRemovalWorld(t)
+	ctx := t.Context()
+	sh := account.Share(w.teamTwoAcct, account.Receiver{Kind: account.ReceiverServiceAccount, ID: w.agent.ServiceAccount.ID}, w.owner, "ci-bot")
+	sh.Meta.ID = ids.New()
+	must(t, "share", w.stores.Account.Upsert(ctx, sh))
+	tb := w.bind(t, w.policy(t, "share-host-tier", meta.Owner{Kind: meta.OwnerHost, ID: w.host.Meta.ID}, policy.Spec{}), w.owner, sh)
+	w.hidden[tb.Meta.ID] = true
+	w.loadPlans(t)
+	rows := w.agentRows(t)
+	want := append(append(append([]CreatedRow{}, rows[:2]...), CreatedRow{Kind: "account", ID: sh.Meta.ID, Name: sh.Meta.Name}), rows[2:]...)
+
+	for _, dry := range []bool{true, false} {
+		rec, got := w.remove(t, "bob", map[string]any{}, dry)
+		wantStatus(t, rec, http.StatusOK)
+		if diff := cmp.Diff(want, got.Deleted); diff != "" || got.DeletedHidden != 1 {
+			t.Errorf("dry run %v: deleted hidden %d, want 1; deleted (-want +got):\n%s", dry, got.DeletedHidden, diff)
+		}
+		for _, s := range []string{tb.Meta.ID, tb.Meta.Name} {
+			if strings.Contains(rec.Body.String(), s) {
+				t.Errorf("dry run %v: the answer names %q of a hidden binding", dry, s)
+			}
+		}
 	}
 }
 
