@@ -42,9 +42,10 @@ func keepHops(hops []plan.RouteHop, keep func(*plan.RouteHop) bool) []plan.Route
 
 // pipelineRequest is the pipeline input for one dispatched request over hops, its body in shape and naming the first hop's model. With perHop set each hop is called with its own binding's adapter from specs instead of a.
 func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, a pipeline.Adapter, body []byte, shape adapters.Name, lc *lifecycle.Context, specs *adapter.Registry, perHop bool) *pipeline.Request {
+	perHop = perHop && specs != nil
 	req := &pipeline.Request{
 		Body:          body,
-		HopBody:       HopBodyFor(specs, hops, hops[0].UpstreamModel),
+		HopBody:       HopBodyFor(specs, hops, hops[0].UpstreamModel, shape, perHop),
 		BodyShape:     shape,
 		Headers:       forwardHeaders(r.Header),
 		Adapter:       a,
@@ -56,7 +57,7 @@ func pipelineRequest(r *http.Request, in DispatchInput, route *plan.Route, hops 
 		Stream:        in.Stream,
 		Lifecycle:     lc,
 	}
-	if perHop && specs != nil {
+	if perHop {
 		req.HopAdapters = specs
 	}
 	return req

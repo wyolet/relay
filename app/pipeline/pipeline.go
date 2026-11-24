@@ -98,7 +98,7 @@ type Request struct {
 	// Adapter calls every hop, unless HopAdapters is set.
 	Adapter Adapter
 
-	// HopAdapters, when set, gives each hop the adapter of its binding's shape (plan.RouteHop.Binding.Spec.Adapter), which calls the hop, reads its response in post-flight, and names the shape handed to HopBody and Host.Spec.PathFor in place of BodyShape. Nil calls every hop with Adapter.
+	// HopAdapters, when set, gives each hop the adapter of its binding's shape (plan.RouteHop.Binding.Spec.Adapter), which calls the hop, reads its response in post-flight (its TranslatorProvider's translator replacing Lifecycle.Translator once it serves), and names the shape handed to HopBody and Host.Spec.PathFor in place of BodyShape. Nil calls every hop with Adapter.
 	HopAdapters interface {
 		PipelineAdapter(adapters.Name) Adapter
 	}
@@ -378,6 +378,10 @@ func (p *Pipeline) makeResult(req *Request, st *runState, resp *http.Response, c
 		// Stamp the outcome so the metrics stream observer (whose Fill fan-out
 		// a stream session skips) can read it at end-of-stream.
 		req.Lifecycle.ResponseStatus = status
+		// Hops called with their own adapters may read their wire differently: the stream session and the usage hook decode with the one that served.
+		if tp, ok := st.adapter.(TranslatorProvider); ok && req.HopAdapters != nil {
+			req.Lifecycle.Translator = tp.Translator()
+		}
 	}
 
 	// The first-byte reader stamps the upstream TTFT + response-end marks as
@@ -518,6 +522,11 @@ func (p *Pipeline) runPostFlight(
 	if p.HostHealth != nil {
 		p.HostHealth.Reachable(ctx, st.cur.hop.Host.Meta.ID)
 	}
+}
+
+// TranslatorProvider is the optional capability of an Adapter that reads its wire shape through a canonical translator; nil when the shape has none.
+type TranslatorProvider interface {
+	Translator() v1.Translator
 }
 
 // ResponseSummarizer is the optional capability of an Adapter that reads the canonical Summary of a buffered response, so post-flight decodes the body once for the rate-limit commit and usage alike. false means it has no translator for the body; the caller then uses ExtractTokens.

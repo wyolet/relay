@@ -20,6 +20,7 @@ const (
 	shapeBase   adapters.Name = "shape-base"
 	shapeMember adapters.Name = "shape-member"
 	shapeOther  adapters.Name = "shape-other"
+	shapeStray  adapters.Name = "shape-stray"
 )
 
 const canonicalReply = `{"id":"r","object":"response","model":"test-model","status":"completed"}`
@@ -40,7 +41,44 @@ func countingFamilyRegistry(baseCount, memberCount string) *adapter.Registry {
 			JoinHeaders:    []string{"X-Beta"},
 		}}).Build(),
 		(&adapter.Spec{Name: shapeOther, Translator: v1.IdentityTranslator{}}).Build(),
+		(&adapter.Spec{Name: shapeStray, DefaultPath: "/stray/generate", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}, Translator: strayTranslator{}}).Build(),
 	)
+}
+
+// strayTranslator is a translator of its own: a shape outside the family that reads and writes canonical too.
+type strayTranslator struct{ v1.IdentityTranslator }
+
+// A failover keeps to the hops the one body serves: byte-pass skips a hop outside the inbound shape's family, canonical a hop whose translator differs from the first hop's, even one that would read the body the same way.
+func TestDispatch_FamilyFailoverSkipsOtherHops(t *testing.T) {
+	for name, tc := range map[string]struct {
+		inbound adapters.Name
+		first   hopFixture
+		want    familyCall
+	}{
+		"byte-pass skips another family":     {shapeBase, hopFixture{host: "member", adapter: shapeMember}, familyCall{Path: "/member/generate", MemberKey: "sk-member"}},
+		"canonical skips another translator": {shapeOther, hopFixture{host: "base", adapter: shapeBase}, familyCall{Path: "/base/generate", Auth: "Bearer sk-base"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			firstURL, firstCalls := familyUpstream(t, http.StatusInternalServerError)
+			strayURL, strayCalls := familyUpstream(t, http.StatusOK)
+			tc.first.url = firstURL
+			d, pr := buildHopsDeps(t, tc.first, hopFixture{host: "stray", url: strayURL, adapter: shapeStray})
+			useSpecs(&d, familyRegistry())
+
+			w := dispatchWithBeta(d, pr, DispatchInput{Inbound: tc.inbound, Body: []byte(familyBody), ModelName: "test-model"})
+
+			if w.Code != http.StatusInternalServerError {
+				t.Errorf("status %d: %s; want the first hop's 500", w.Code, w.Body)
+			}
+			got := firstCalls()
+			if len(got) != 1 || got[0].Path != tc.want.Path || got[0].Auth != tc.want.Auth || got[0].MemberKey != tc.want.MemberKey {
+				t.Errorf("first hop = %+v, want one call to %s", got, tc.want.Path)
+			}
+			if got := strayCalls(); len(got) != 0 {
+				t.Errorf("the hop outside the body's reach was called: %+v", got)
+			}
+		})
+	}
 }
 
 // familyCall is one request an upstream received: its path, the two credentials headers, the X-Beta lines joined by "|", and the body.
@@ -77,15 +115,17 @@ func dispatchWithBeta(d Deps, pr *Principal, in DispatchInput) *httptest.Respons
 
 const familyBody = `{"model":"test-model","input":"hi"}`
 
-// A caller speaking a shape byte-passes to a member of its family, which gets the body in its envelope, its own path and auth, and the caller's repeated header lines joined; a failover from a base hop sends the base hop the body as sent.
+// A caller speaking a shape, or the member's own shape, byte-passes to a member of the family, which gets the body in its envelope, its own path and auth, and the caller's repeated header lines joined; a failover from a base hop sends the base hop the body as sent.
 func TestDispatch_FamilyBytePass(t *testing.T) {
 	member := familyCall{"/member/generate", "", "sk-member", "a,b", `{"input":"hi","version":"v1"}`}
 	for name, tc := range map[string]struct {
+		inbound   adapters.Name
 		baseFirst bool
 		wantBase  []familyCall
 	}{
-		"member hop only":                {false, nil},
-		"base hop fails, member answers": {true, []familyCall{{"/base/generate", "Bearer sk-base", "", "a|b", familyBody}}},
+		"member hop only":                  {shapeBase, false, nil},
+		"base hop fails, member answers":   {shapeBase, true, []familyCall{{"/base/generate", "Bearer sk-base", "", "a|b", familyBody}}},
+		"caller speaks the member's shape": {shapeMember, false, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			baseURL, baseCalls := familyUpstream(t, http.StatusInternalServerError)
@@ -97,7 +137,7 @@ func TestDispatch_FamilyBytePass(t *testing.T) {
 			d, pr := buildHopsDeps(t, hops...)
 			useSpecs(&d, familyRegistry())
 
-			w := dispatchWithBeta(d, pr, DispatchInput{Inbound: shapeBase, Body: []byte(familyBody), ModelName: "test-model"})
+			w := dispatchWithBeta(d, pr, DispatchInput{Inbound: tc.inbound, Body: []byte(familyBody), ModelName: "test-model"})
 
 			if w.Code != http.StatusOK || w.Body.String() != canonicalReply {
 				t.Fatalf("status %d: %s; want the member's answer verbatim", w.Code, w.Body)

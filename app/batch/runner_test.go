@@ -431,8 +431,14 @@ func TestRun_KeepsThePlanItStartedWith(t *testing.T) {
 	}
 }
 
-// An item runs on a route whose first hop binds another member of its shape's family, failing over to a hop of the shape itself: each hop is sent the item in its own form, path and auth.
+// An item in the family's shape, or in the member's own, runs on a route whose first hop binds a member of the family, failing over to a hop of the family's shape: each hop is sent the item in its own form, path and auth.
 func TestRun_FamilyRoute(t *testing.T) {
+	for _, inbound := range []adapters.Name{"shape-base", "shape-member"} {
+		t.Run(string(inbound), func(t *testing.T) { runFamilyRoute(t, inbound) })
+	}
+}
+
+func runFamilyRoute(t *testing.T, inbound adapters.Name) {
 	member := newUpstream(t, answering(http.StatusInternalServerError, `{"error":{"message":"down"}}`))
 	base := newUpstream(t, answering(http.StatusOK, `{"id":"x"}`))
 
@@ -455,7 +461,7 @@ func TestRun_FamilyRoute(t *testing.T) {
 	)
 
 	attr := Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: u.ID, CredentialKind: inference.CredentialKey, CredentialID: k.Meta.ID}
-	if status, _, err := rn.Run(context.Background(), "item-1", k.Spec.KeyHash, TokenClaims{}, attr, "shape-base", []byte(itemBody)); err != nil || status != http.StatusOK {
+	if status, _, err := rn.Run(context.Background(), "item-1", k.Spec.KeyHash, TokenClaims{}, attr, inbound, []byte(itemBody)); err != nil || status != http.StatusOK {
 		t.Fatalf("Run: status %d, err %v; want the base hop's 200", status, err)
 	}
 	if d := cmp.Diff([]sent{{"/member/generate", "Token sk-member", `{"version":"v1"}`}}, member.sent()); d != "" {

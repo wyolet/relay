@@ -36,6 +36,7 @@ var (
 	_ pipeline.Adapter            = (*specAdapter)(nil)
 	_ pipeline.ResponseSummarizer = (*specAdapter)(nil)
 	_ pipeline.CallTimeouter      = (*specAdapter)(nil)
+	_ pipeline.TranslatorProvider = (*specAdapter)(nil)
 )
 
 // Call issues POST {up.BaseURL}{path}: the host's own path when set (up.Path
@@ -176,6 +177,9 @@ func (s *Spec) setAuth(h http.Header, apiKey string, oauth bool) {
 		}
 	}
 }
+
+// Translator returns the spec's canonical translator, nil when it has none.
+func (a *specAdapter) Translator() v1.Translator { return a.spec.Translator }
 
 // ExtractTokens delegates to the spec's extractor, or returns nil if unset.
 func (a *specAdapter) ExtractTokens(body []byte) pkgusage.Tokens {

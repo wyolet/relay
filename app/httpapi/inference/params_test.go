@@ -99,7 +99,7 @@ func TestHopBodyFor(t *testing.T) {
 	}
 	const base = `{"model":"m","max_tokens":5}`
 	body := []byte(base)
-	hopBody := HopBodyFor(nil, hops, "m")
+	hopBody := HopBodyFor(nil, hops, "m", "", true)
 	for i, want := range []string{base, `{"model":"acme/m-v1:0","max_completion_tokens":5}`} {
 		if got, _ := hopBody(&hops[i], adapters.OpenAI, body); string(got) != want {
 			t.Errorf("hop %d: body = %s, want %s", i, got, want)
@@ -112,7 +112,7 @@ func TestHopBodyFor(t *testing.T) {
 		t.Fatalf("base body modified to %s", body)
 	}
 	same := hops[:1]
-	if n := testing.AllocsPerRun(100, func() { HopBodyFor(nil, same, "m")(&same[0], adapters.OpenAI, body) }); n != 0 && !raceInstrumented {
+	if n := testing.AllocsPerRun(100, func() { HopBodyFor(nil, same, "m", "", true)(&same[0], adapters.OpenAI, body) }); n != 0 && !raceInstrumented {
 		t.Errorf("HopBodyFor over hops sending the body's name allocates %v times", n)
 	}
 }
@@ -123,6 +123,8 @@ func TestEditHopBody_Envelope(t *testing.T) {
 	withDefault := &adapter.RequestEnvelope{DefaultMembers: []adapter.BodyMember{{Key: "version", Value: []byte(`"v1"`)}}}
 	both := &adapter.RequestEnvelope{DropMembers: []string{"model", "stream"}, DefaultMembers: withDefault.DefaultMembers}
 	renames := host.Spec{RequestParamRenames: map[adapters.Name]map[string]string{"shape-member": {"max_tokens": "max_completion_tokens"}}}.ParamRenames("shape-member")
+	moveVersion := host.Spec{RequestParamRenames: map[adapters.Name]map[string]string{"shape-member": {"version": "api_version"}}}.ParamRenames("shape-member")
+	replaceVersion := &adapter.RequestEnvelope{DropMembers: []string{"version"}, DefaultMembers: withDefault.DefaultMembers}
 	for _, tc := range []struct {
 		name      string
 		body      string
@@ -140,6 +142,8 @@ func TestEditHopBody_Envelope(t *testing.T) {
 		{"model set skipped when dropped", `{"model":"m","x":1}`, nil, "acme/m", dropModel, `{"x":1}`, false},
 		{"model set when kept", `{"model":"m","x":1}`, nil, "acme/m", withDefault, `{"model":"acme/m","x":1,"version":"v1"}`, false},
 		{"body without the member", `{"contents":[]}`, nil, "acme/m", dropModel, `{"contents":[]}`, true},
+		{"default into a key a rename moved", `{"version":"mine"}`, moveVersion, "", withDefault, `{"version":"v1","api_version":"mine"}`, false},
+		{"default into a key the envelope drops", `{"version":"mine","x":1}`, nil, "", replaceVersion, `{"version":"v1","x":1}`, false},
 		{"not an object", `[{"model":"m"}]`, nil, "", both, `[{"model":"m"}]`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -176,7 +180,7 @@ func TestHopBodyFor_Envelope(t *testing.T) {
 	hops := []plan.RouteHop{{Binding: base, Host: &host.Host{}, UpstreamModel: "m"}, {Binding: member, Host: &host.Host{}, UpstreamModel: "m"}}
 	const sent = `{"model":"m","x":1}`
 	body := []byte(sent)
-	hopBody := HopBodyFor(specs, hops, "m")
+	hopBody := HopBodyFor(specs, hops, "m", "", true)
 	for i, want := range []string{sent, `{"x":1,"version":"v1"}`} {
 		if got, _ := hopBody(&hops[i], hops[i].Binding.Spec.Adapter, body); string(got) != want {
 			t.Errorf("hop %d: body = %s, want %s", i, got, want)
@@ -185,12 +189,21 @@ func TestHopBodyFor_Envelope(t *testing.T) {
 	if string(body) != sent {
 		t.Fatalf("base body modified to %s", body)
 	}
-	if got, _ := HopBodyFor(nil, hops, "m")(&hops[1], "shape-member", body); string(got) != sent {
+	if got, _ := HopBodyFor(nil, hops, "m", "", true)(&hops[1], "shape-member", body); string(got) != sent {
 		t.Errorf("without specs: body = %s, want the base untouched", got)
 	}
 	plain := hops[:1]
-	if n := testing.AllocsPerRun(100, func() { HopBodyFor(specs, plain, "m")(&plain[0], "shape-base", body) }); n != 0 && !raceInstrumented {
+	if n := testing.AllocsPerRun(100, func() { HopBodyFor(specs, plain, "m", "", true)(&plain[0], "shape-base", body) }); n != 0 && !raceInstrumented {
 		t.Errorf("HopBodyFor over hops without an envelope allocates %v times", n)
+	}
+
+	// Without per-hop adapters every hop is called in the one shape given: its envelope decides, not the bindings'.
+	if got, _ := HopBodyFor(specs, plain, "m", "shape-member", false)(&plain[0], "shape-member", body); string(got) != `{"x":1,"version":"v1"}` {
+		t.Errorf("base binding called in the member shape: body = %s, want the member's envelope", got)
+	}
+	members := hops[1:]
+	if n := testing.AllocsPerRun(100, func() { HopBodyFor(specs, members, "m", "shape-base", false)(&members[0], "shape-base", body) }); n != 0 && !raceInstrumented {
+		t.Errorf("member binding called in the base shape allocates %v times, want the plain HopBody", n)
 	}
 }
 

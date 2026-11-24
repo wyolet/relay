@@ -22,8 +22,8 @@ import (
 	pkgrelay "github.com/wyolet/relay/sdk/v1"
 )
 
-// stubV1Translator is a no-op v1.Translator for test specs.
-type stubV1Translator struct{}
+// stubV1Translator is a no-op v1.Translator for test specs. Specs registered side by side get distinct shapes, so they do not share a translator group as production's distinct translators do not.
+type stubV1Translator struct{ shape adapters.Name }
 
 func (stubV1Translator) ParseRequest(body []byte) (*pkgrelay.Request, error) {
 	return nil, fmt.Errorf("stub: not implemented")
@@ -49,7 +49,7 @@ func buildTestRegistry() *adapter.Registry {
 		Name:        adapters.OpenAI,
 		DefaultPath: "/v1/chat/completions",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:  stubV1Translator{},
+		Translator:  stubV1Translator{shape: adapters.OpenAI},
 		ParamPaths:  map[string]string{"temperature": "temperature", "top_p": "top_p"},
 	}).Build()
 
@@ -58,7 +58,7 @@ func buildTestRegistry() *adapter.Registry {
 		Name:        adapters.OpenAIResponses,
 		DefaultPath: "/v1/responses",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:  stubV1Translator{},
+		Translator:  stubV1Translator{shape: adapters.OpenAIResponses},
 		IsNativePath: func(b *binding.Binding, h *host.Host) bool {
 			return b.Spec.Adapter == adapters.OpenAI && h.Meta.Name == "openai"
 		},
@@ -75,7 +75,7 @@ func buildTestRegistry() *adapter.Registry {
 		Name:        adapters.Anthropic,
 		DefaultPath: "/v1/messages",
 		Auth:        adapter.AuthStrategy{Header: "x-api-key"},
-		Translator:  stubV1Translator{},
+		Translator:  stubV1Translator{shape: adapters.Anthropic},
 	}).Build()
 
 	// Canonical inbound shape — real identity translator (not a stub).

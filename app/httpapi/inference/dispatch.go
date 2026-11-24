@@ -226,10 +226,10 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	}
 
 	// Standard dispatch: look up the upstream spec and determine whether
-	// this is a same-shape pass (inbound is the upstream's shape family) or
-	// a cross-shape canonical translation. The body is built once, so
-	// failover keeps to the hops that body serves, each called with its own
-	// binding's adapter.
+	// this is a same-shape pass (inbound is the upstream's shape or its
+	// family) or a cross-shape canonical translation. The body is built
+	// once, so failover keeps to the hops that body serves, each called with
+	// its own binding's adapter.
 	upstreamName := first.Binding.Spec.Adapter
 	upstreamSpec := d.Specs.Spec(upstreamName)
 	if upstreamSpec == nil {
@@ -246,7 +246,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		return
 	}
 	specs := d.Specs
-	if family := upstreamSpec.FamilyName(); in.Inbound == family {
+	if family := upstreamSpec.FamilyName(); in.Inbound == upstreamName || in.Inbound == family {
 		hops := keepHops(route.Hops, func(h *plan.RouteHop) bool {
 			return h.Binding.Spec.Adapter == upstreamName || specs.Spec(h.Binding.Spec.Adapter).FamilyName() == family
 		})
@@ -263,12 +263,9 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 			"missing canonical translator for "+string(in.Inbound)+" or "+string(upstreamName))
 		return
 	}
+	group := specs.TranslatorGroup(upstreamName)
 	hops := keepHops(route.Hops, func(h *plan.RouteHop) bool {
-		if h.Binding.Spec.Adapter == upstreamName {
-			return true
-		}
-		s := specs.Spec(h.Binding.Spec.Adapter)
-		return s != nil && s.Translator == upstreamV1
+		return h.Binding.Spec.Adapter == upstreamName || group != 0 && specs.TranslatorGroup(h.Binding.Spec.Adapter) == group
 	})
 
 	dispatchCanonical(d, w, r, in, route, hops, upstreamAdapter, inboundV1, upstreamV1)

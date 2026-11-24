@@ -80,7 +80,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 	}
 	native := inboundSpec.IsNativePath
 	family := upstreamSpec.FamilyName()
-	sameFamily := inbound == family
+	sameFamily := inbound == shape || inbound == family
 	sameShape := sameFamily || inboundSpec.BytePass || (native != nil && native(first.Binding, first.Host))
 	if !sameShape {
 		return 0, nil, fmt.Errorf("%w (%s→%s)", ErrCrossShape, inbound, shape)
@@ -132,7 +132,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 
 	preq := &pipeline.Request{
 		Body:          wireBody,
-		HopBody:       inference.HopBodyFor(rn.Specs, hops, route.UpstreamModel),
+		HopBody:       inference.HopBodyFor(rn.Specs, hops, route.UpstreamModel, inbound, sameFamily),
 		BodyShape:     inbound,
 		Headers:       http.Header{},
 		Adapter:       upstreamAdapter,

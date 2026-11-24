@@ -2,7 +2,6 @@ package inference
 
 import (
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/wyolet/relay/app/adapter"
@@ -84,10 +83,14 @@ func HopBody(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []st
 	return editHopBody(body, renames, "", nil)
 }
 
-// HopBodyFor returns the pipeline.Request.HopBody for a body naming model, sent over hops: HopBody itself when every hop sends model and no hop's binding shape has an envelope in specs, else one that also sets the body's model member to the hop's own UpstreamModel on each hop sending another name, and applies the envelope of the shape the hop is called in. A body without a model member (a shape naming the model in its URL) keeps only the renames and the envelope. Nil specs apply no envelope.
-func HopBodyFor(specs *adapter.Registry, hops []plan.RouteHop, model string) func(*plan.RouteHop, adapters.Name, []byte) ([]byte, []string) {
+// HopBodyFor returns the pipeline.Request.HopBody for a body naming model, sent over hops, each called in shape, or in its binding's shape when perHop is set (pipeline.Request.HopAdapters): HopBody itself when every hop sends model and no hop's shape has an envelope in specs, else one that also sets the body's model member to the hop's own UpstreamModel on each hop sending another name, and applies the envelope of the shape the hop is called in. A body without a model member (a shape naming the model in its URL) keeps only the renames and the envelope. Nil specs apply no envelope.
+func HopBodyFor(specs *adapter.Registry, hops []plan.RouteHop, model string, shape adapters.Name, perHop bool) func(*plan.RouteHop, adapters.Name, []byte) ([]byte, []string) {
 	for i := range hops {
-		if hops[i].UpstreamModel != model || requestEnvelope(specs, hops[i].Binding.Spec.Adapter) != nil {
+		called := shape
+		if perHop {
+			called = hops[i].Binding.Spec.Adapter
+		}
+		if hops[i].UpstreamModel != model || requestEnvelope(specs, called) != nil {
 			return func(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []string) {
 				env := requestEnvelope(specs, shape)
 				if hop.UpstreamModel == model && env == nil {
@@ -147,7 +150,7 @@ func (o *jsonObject) renameMembers(renames []host.ParamRename) ([]memberEdit, []
 	return edits, superseded
 }
 
-// editHopBody applies renames to the top-level members of body, then, when model is set and env keeps the model member, sets the body's top-level model member to it if the body has one, then env's drops and defaults (env nil for none); body itself when nothing changes.
+// editHopBody applies renames to the top-level members of body, then, when model is set, sets the body's top-level model member to it if the body has one, then env's drops (a dropped model included) and defaults (env nil for none); body itself when nothing changes.
 func editHopBody(body []byte, renames []host.ParamRename, model string, env *adapter.RequestEnvelope) ([]byte, []string) {
 	var inline [16]jsonMember
 	obj, err := scanJSONObject(body, inline[:])
@@ -155,7 +158,7 @@ func editHopBody(body []byte, renames []host.ParamRename, model string, env *ada
 		return body, nil
 	}
 	edits, superseded := obj.renameMembers(renames)
-	if model != "" && obj.lastIndex("model") >= 0 && (env == nil || !slices.Contains(env.DropMembers, "model")) {
+	if model != "" && obj.lastIndex("model") >= 0 {
 		edits = append(edits, memberEdit{key: "model", value: appendJSONString(nil, model)})
 	}
 	if env != nil && obj.isObject {

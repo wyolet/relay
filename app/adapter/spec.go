@@ -192,7 +192,7 @@ type InboundPath struct {
 
 // RequestEnvelope is how a shape's upstream request differs from its family's: applied per hop, on byte-pass and after SerializeRequest alike.
 type RequestEnvelope struct {
-	// DropMembers are top-level body members removed, e.g. a model the shape names in its URL instead.
+	// DropMembers are top-level body members removed, e.g. a model the shape names in its URL instead. Only members whose information the shape carries elsewhere belong here, so nothing the caller asked for is lost; that is why a drop is not reported as a dropped param.
 	DropMembers []string
 	// DefaultMembers are top-level body members set only when the body lacks the key.
 	DefaultMembers []BodyMember
