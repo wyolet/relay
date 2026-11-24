@@ -421,16 +421,27 @@ func TestPrepareValue_SuccessWithoutAccessTokenFailsTheWrite(t *testing.T) {
 	}
 }
 
-// A token that never expires would never be renewed, and one about to would be renewed on every sweep: a save refuses both.
+// A token without an expiry would never be renewed, and one living less than the refresher's 10-minute lead plus 5 would be renewed on every sweep: a save refuses both, and accepts 15 minutes.
 func TestPrepareValue_RefusesTokenWithoutUsableLifetime(t *testing.T) {
-	for _, body := range []string{
-		`{"access_token":"minted","token_type":"Bearer"}`,
-		`{"access_token":"minted","token_type":"Bearer","expires_in":60}`,
+	for _, tc := range []struct {
+		body    string
+		refused bool
+	}{
+		{`{"access_token":"minted","token_type":"Bearer"}`, true},
+		{`{"access_token":"minted","token_type":"Bearer","expires_in":60}`, true},
+		{`{"access_token":"minted","token_type":"Bearer","expires_in":600}`, true},
+		{`{"access_token":"minted","token_type":"Bearer","expires_in":910}`, false},
 	} {
-		t.Run(body, func(t *testing.T) {
-			srv, allow, _ := tokenServer(t, http.StatusOK, body)
+		t.Run(tc.body, func(t *testing.T) {
+			srv, allow, _ := tokenServer(t, http.StatusOK, tc.body)
 			_, err := prepare(keyFile(srv.URL), allow)
-			if err == nil || !strings.Contains(err.Error(), "under 5 minutes") || pkgoauth.IsPermanent(err) {
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("err = %v, want the token accepted", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "under 15 minutes") || pkgoauth.IsPermanent(err) {
 				t.Fatalf("err = %v, want the lifetime refusal, not permanent", err)
 			}
 		})

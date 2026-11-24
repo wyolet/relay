@@ -466,12 +466,12 @@ func (e rejectedError) Error() string {
 func (e rejectedError) Unwrap() error { return e.err }
 
 // minTokenLifetime is the shortest token lifetime a JWT-bearer exchange may
-// return: a token without an expiry would never be renewed, and the refresher
-// renews 10 minutes ahead once a minute.
-const minTokenLifetime = 5 * time.Minute
+// return: a token without an expiry would never be renewed, and one inside the
+// refresher's lead would be renewed on every sweep.
+const minTokenLifetime = defaultLead + 5*time.Minute
 
 // errShortLifetime refuses a new credential on save; a renewal retries it and keeps the current token.
-var errShortLifetime = errors.New("the token endpoint returned a token with no expiry (expires_in) or one valid for under 5 minutes")
+var errShortLifetime = fmt.Errorf("the token endpoint returned a token with no expiry (expires_in) or one valid for under %d minutes", int(minTokenLifetime/time.Minute))
 
 func (r *Resolver) shortLived(tok *sdkoauth.Token) bool {
 	return tok.Expiry.IsZero() || tok.Expiry.Before(r.now().Add(minTokenLifetime))
