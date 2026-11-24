@@ -171,7 +171,7 @@ func TestTeamServiceAccountRoundTrips(t *testing.T) {
 	}
 	for _, spec := range []string{"{project: ml-search, team: platform}", "{enabled: true}"} {
 		d := parseOne(t, "apiVersion: "+manifest.APIVersion+"\nkind: ServiceAccount\nmetadata: {name: deployer}\nspec: "+spec+"\n")
-		if _, err := relayTranslate(d, idx); err == nil || !strings.Contains(err.Error(), "exactly one of project and team") {
+		if _, err := relayTranslate(d, idx); err == nil || !strings.Contains(err.Error(), "exactly one of project, team and user") {
 			t.Errorf("spec %s: err = %v, want exactly one owner", spec, err)
 		}
 	}

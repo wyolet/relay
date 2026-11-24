@@ -72,17 +72,17 @@ func (p *planner) run() error {
 		create: ungranted((*dir).CreateProject), update: ungranted((*dir).UpdateProject), remove: (*dir).DeleteProject}); err != nil {
 		return err
 	}
-	if err := planKind(p, kindOps[directory.ServiceAccount]{kind: KindServiceAccount, rows: rs.serviceAccounts,
-		meta: func(x *directory.ServiceAccount) *directory.Metadata { return &x.Meta }, to: r.ToServiceAccount, from: r.FromServiceAccount,
-		create: ungranted((*dir).CreateServiceAccount), update: ungranted((*dir).UpdateServiceAccount), remove: (*dir).DeleteServiceAccount}); err != nil {
-		return err
-	}
 	if err := planKind(p, kindOps[directory.Role]{kind: KindRole, rows: rs.roles,
 		meta: func(x *directory.Role) *directory.Metadata { return &x.Meta }, to: r.ToRole, from: r.FromRole,
 		create: ungranted((*dir).CreateRole), update: granted((*dir).UpdateRole), remove: (*dir).DeleteRole}); err != nil {
 		return err
 	}
 	if err := p.planUsers(); err != nil {
+		return err
+	}
+	if err := planKind(p, kindOps[directory.ServiceAccount]{kind: KindServiceAccount, rows: rs.serviceAccounts,
+		meta: func(x *directory.ServiceAccount) *directory.Metadata { return &x.Meta }, to: r.ToServiceAccount, from: r.FromServiceAccount,
+		create: ungranted((*dir).CreateServiceAccount), update: ungranted((*dir).UpdateServiceAccount), remove: (*dir).DeleteServiceAccount}); err != nil {
 		return err
 	}
 	if err := planKind(p, kindOps[directory.Group]{kind: KindGroup, rows: rs.groups,

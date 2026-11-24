@@ -52,7 +52,7 @@ var ErrScopePruned = errors.New("its team or project is pruned in the same apply
 // ErrTeamOwnsServiceAccount reports a pruned team that still owns a service account the same apply keeps, which the store refuses to delete the team under.
 var ErrTeamOwnsServiceAccount = errors.New("its team is pruned in the same apply, but a team that owns a service account is not deleted; select the service account for the prune too, or keep the team")
 
-var errServiceAccountOwner = errors.New("exactly one of project and team names the service account's owner")
+var errServiceAccountOwner = errors.New("exactly one of project, team and user names the service account's owner")
 
 // ErrOwnerDerived reports a metadata.owner, which these kinds derive rather than take.
 var ErrOwnerDerived = errors.New("metadata.owner is not accepted: the owner is derived from the kind and its spec (the system for Team, Role and Group, the parent for Project and ServiceAccount, the scope for RoleBinding)")
