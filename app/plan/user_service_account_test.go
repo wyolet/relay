@@ -2,6 +2,7 @@ package plan
 
 import (
 	"iter"
+	"slices"
 	"testing"
 	"time"
 
@@ -271,6 +272,37 @@ func TestLane_UserServiceAccountFollowsItsOwner(t *testing.T) {
 	botAcct := b.w.saAccount(bot)
 	if i := issueAt(h.issues(KindAccount, botAcct.Meta.ID), IssueRefMissing, "metadata.owner"); i == nil || i.Target != (engine.Ref{Kind: KindUser, ID: u.ID}) {
 		t.Errorf("owner gone: issue = %+v, want the deleted user as the owner", i)
+	}
+}
+
+// The owner's state closes the bot's lane whether or not relay has made the owner's personal account yet: a disabled owner refuses it, a deleted one leaves no plan.
+func TestLane_UserServiceAccountFollowsItsOwnerWithoutThePersonalAccount(t *testing.T) {
+	b := newBasic()
+	u := b.w.user()
+	b.w.accounts = slices.DeleteFunc(b.w.accounts, func(a *account.Account) bool { return a == b.w.personal(u) })
+	bot := b.w.userSA(u)
+	k := b.w.saKey(bot)
+	h := b.w.start(t)
+	if r := h.keyPlan(k).Caller.Refused; r != nil {
+		t.Fatalf("owner enabled: refused %+v", r)
+	}
+
+	disabled := clone(u)
+	disabled.Disabled = true
+	apply(h, disabled)
+	if r := h.keyPlan(k).Caller.Refused; r == nil || r.Code != CodeSubjectDisabled || r.Rung != limits.RungPersonal {
+		t.Errorf("owner disabled: refused %+v, want subject_disabled on the personal rung", r)
+	}
+	if cp := LanePlan(h.e.View(), b.w.saAccount(bot).Meta.ID); cp == nil || cp.Refused == nil || cp.Refused.Code != CodeSubjectDisabled {
+		t.Errorf("owner disabled: lane plan %+v, want refused with subject_disabled", cp)
+	}
+
+	del(h, KindUser, u.ID)
+	if kp := h.keyPlan(k); kp != nil && kp.Caller.Refused == nil {
+		t.Errorf("owner gone: the bot's key still runs: %+v", kp.Caller)
+	}
+	if cp := LanePlan(h.e.View(), b.w.saAccount(bot).Meta.ID); cp != nil && cp.Refused == nil {
+		t.Errorf("owner gone: lane plan %+v, want none or refused", cp)
 	}
 }
 

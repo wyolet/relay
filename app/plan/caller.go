@@ -183,7 +183,8 @@ func foldCaller(cp *CallerPlan, rd callerReads) {
 	lane, group := cp.counterGroup()
 	for i := range cp.Rungs {
 		r := &cp.Rungs[i]
-		if r.ScopeID == "" && r.SubjectID == "" {
+		// The personal rung names no scope and, until relay makes the personal account, no subject; its owner's state applies all the same.
+		if r.ScopeID == "" && r.SubjectID == "" && r.Kind != limits.RungPersonal {
 			continue
 		}
 		switch {
