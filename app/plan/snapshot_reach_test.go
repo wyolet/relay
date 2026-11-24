@@ -267,3 +267,21 @@ func TestModelRefBlocked_RungAllowsOnlyAHostServingNoSnapshot(t *testing.T) {
 		t.Errorf("project policy issues (-want +got):\n%s", diff)
 	}
 }
+
+// A model with no snapshot has no name a request can send, so the preview refuses it as a request does, rather than listing it reached with no host.
+func TestReach_ModelWithoutSnapshotsIsRefused(t *testing.T) {
+	s := newSnapshotWorld()
+	empty := s.w.Model(s.w.Providers[0], "m0")
+	empty.Spec.Snapshots = nil
+	s.w.Bind(empty, s.w.Hosts[0], adapters.OpenAI)
+	l := s.lane(nil, s.pa)
+	plans := s.w.Load(t)
+	_, models := previewAnswers(plan.ReachOf(plans.Engine.View(), l.acct.Meta.ID, nil))
+	want := answer{Hosts: []string{"host-a"}, Refused: plan.CodeModelNotFound}
+	if diff := cmp.Diff(want, models["m0"]); diff != "" {
+		t.Errorf("preview of m0 (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(map[string]answer{"m0": {Refused: plan.CodeModelNotFound}}, routeAnswers(keyCaller(t, plans, l.key), "m0")); diff != "" {
+		t.Errorf("request (-want +got):\n%s", diff)
+	}
+}

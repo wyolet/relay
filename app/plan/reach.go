@@ -31,7 +31,7 @@ type Reach struct {
 	Dropped []DroppedLink
 }
 
-// ModelReach is one model and how the lane reaches it through any of its snapshot names, or, with Refused set, why none of them reaches anything: the pointer snapshot's refusal.
+// ModelReach is one model and how the lane reaches it through any of its snapshot names, or, with Refused set, why none of them reaches anything: the pointer snapshot's refusal, or model_not_found for a model with no snapshot.
 type ModelReach struct {
 	Model    *model.Model
 	Provider *provider.Provider
@@ -272,8 +272,11 @@ func (cp *CallerPlan) reachModel(m *model.Model) ModelReach {
 			mr.Hosts, mr.Via = addHop(mr.Hosts, mr.Via, hop)
 		}
 	}
-	if len(mr.Hosts) > 0 {
+	switch {
+	case len(mr.Hosts) > 0:
 		mr.Refused = nil
+	case len(m.Spec.Snapshots) == 0:
+		mr.Refused = &Refusal{Code: CodeModelNotFound, Message: "model " + m.Meta.Name + " has no snapshot a request can name"}
 	}
 	mr.Upstream = cp.upstreamChecks(m)
 	return mr
