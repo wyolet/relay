@@ -99,7 +99,16 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 				return pseudo.ExpandHostKey(body, reads)
 			}
 		}
-		preflight := func(ctx context.Context) error { return d.preflightPseudo(ctx, expandWith(nil)) }
+		var dryWrite *pseudoWrite
+		var dryRows []pseudo.Row
+		preflight := func(ctx context.Context) error {
+			if !in.DryRun {
+				return d.preflightPseudo(ctx, expandWith(nil))
+			}
+			var err error
+			dryWrite, dryRows, err = d.runPseudo(ctx, expandWith(nil), true)
+			return err
+		}
 		organization := func(c *keyCheck) error {
 			if c.Outcome != keyDetected {
 				return nil
@@ -117,13 +126,15 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 			err = d.refusePseudo(ctx, err, in.DryRun)
 			return nil, err
 		}
-		var outside []pseudo.Outside
-		if v := body.Spec.Value; v != "" {
-			outside = append(outside, d.sealHostKeyValue(keyID, body.Metadata.Owner, v))
-		}
-		w, rows, err := d.runPseudo(ctx, expandWith(check), in.DryRun, outside...)
-		if err != nil {
-			return nil, err
+		w, rows := dryWrite, dryRows
+		if w == nil {
+			var outside []pseudo.Outside
+			if v := body.Spec.Value; v != "" {
+				outside = append(outside, d.sealHostKeyValue(keyID, body.Metadata.Owner, v))
+			}
+			if w, rows, err = d.runPseudo(ctx, expandWith(check), in.DryRun, outside...); err != nil {
+				return nil, err
+			}
 		}
 		out := &pseudoHostKeyOutput{Status: http.StatusCreated, Body: hostKeyCreated(rows, body.Spec, reads, check)}
 		out.Body.Warnings = w.warnings
@@ -139,7 +150,7 @@ func registerPseudoHostKey(api huma.API, d Deps, protect huma.Middlewares) {
 	}
 }
 
-// checkHostKeyForm runs what is checked before the value leaves relay or is stored: the body's own rules, its owner settled as POST /host-keys settles it, the host, the value against the host, the create grants the rows will ask (mayCreateHostKeyForm), the secret backend, then preflight, the whole write rolled back. Then it asks the provider about the value, whose refusal of the key refuses the request, and gives what it said to organization. It returns what the host said of the value, refused or not, nil when the provider was not asked.
+// checkHostKeyForm runs what is checked before the value leaves relay or is stored: the body's own rules, its owner settled as POST /host-keys settles it, the host, the value against the host, the create grants the rows will ask (mayCreateHostKeyForm). With a value to check and seal, also the secret backend and preflight, the whole write rolled back; without one nothing leaves relay and the write's own checks suffice. Then it asks the provider about the value, whose refusal of the key refuses the request, and gives what it said to organization. It returns what the host said of the value, refused or not, nil when the provider was not asked.
 func (d Deps) checkHostKeyForm(ctx context.Context, body *pseudo.HostKeyForm, preflight func(context.Context) error, organization func(*keyCheck) error) (*keyCheck, error) {
 	if err := pseudo.CheckHostKey(*body); err != nil {
 		return nil, err
@@ -158,14 +169,14 @@ func (d Deps) checkHostKeyForm(ctx context.Context, body *pseudo.HostKeyForm, pr
 		return nil, err
 	}
 	v := body.Spec.Value
-	if v != "" && d.Stores.Stored == nil {
+	if v == "" {
+		return nil, nil
+	}
+	if d.Stores.Stored == nil {
 		return nil, refusal(mapWriteErr("host-key", "", hostkey.ErrNoSecretBackend), "/spec/value")
 	}
 	if err := preflight(ctx); err != nil {
 		return nil, err
-	}
-	if v == "" {
-		return nil, nil
 	}
 	c := checkKeyValue(ctx, d.Catalog.Current(), d.Adapters, h.Meta.ID, v)
 	if c.Outcome == keyRefused {

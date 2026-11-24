@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
 )
@@ -63,6 +64,35 @@ func TestPseudoHostKey_RefusedBeforeProbeAndSeal(t *testing.T) {
 				t.Errorf("%s, dry run %v: the host was asked %d times, want %d", tc.name, dry, n, tc.probes)
 			}
 		}
+	}
+}
+
+// A request with a value makes one rolled-back pass before the write; a dry run's rolled-back pass is its answer; a request with no value to check or seal makes no extra pass. Counted by the reads of the plans: the rolled-back pass before a write reads them twice, a pass that answers three times.
+func TestPseudoHostKey_PassesOverTheWrite(t *testing.T) {
+	reads := 0
+	w := newHostKeyFormWorld(t, func(d *Deps) {
+		view := d.PlanView
+		d.PlanView = func() *engine.View { reads++; return view() }
+	})
+	for _, tc := range []struct {
+		name  string
+		spec  map[string]any
+		host  string
+		dry   bool
+		reads int
+	}{
+		{"a value", map[string]any{"value": keyOrgC, "account": map[string]any{"displayName": "Work"}}, w.alpha.Meta.ID, false, 5},
+		{"a value, dry run", map[string]any{"value": keyBare, "account": map[string]any{"displayName": "Bare"}}, w.alpha.Meta.ID, true, 3},
+		{"no value", map[string]any{"account": map[string]any{"displayName": "Local"}}, w.local.Meta.ID, false, 3},
+	} {
+		reads = 0
+		body := w.body("alice", tc.spec)
+		body["spec"].(map[string]any)["hostId"] = tc.host
+		rec, _ := w.post(t, "alice", body, tc.dry)
+		if rec.Code >= 300 || reads != tc.reads {
+			t.Errorf("%s: %d %s, plans read %d times, want %d", tc.name, rec.Code, rec.Body, reads, tc.reads)
+		}
+		w.loadPlans(t)
 	}
 }
 
