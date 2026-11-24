@@ -62,6 +62,10 @@ func (d Deps) namesTaken(kind string) func(string) bool {
 		return slugTakenFn(s.Key, func(r *key.Key) *meta.Metadata { return &r.Meta })
 	case "host-key":
 		return slugTakenFn(s.HostKey, func(r *hostkey.HostKey) *meta.Metadata { return &r.Meta })
+	case "budget":
+		return slugTakenFn(s.Budget, func(r *budget.Budget) *meta.Metadata { return &r.Meta })
+	case "rate-limit":
+		return slugTakenFn(s.RateLimit, func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta })
 	}
 	return func(string) bool { return false }
 }
