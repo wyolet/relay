@@ -486,7 +486,7 @@ func (l *Limiter) nearCap(s *slot, now time.Time) bool {
 }
 
 // rungs are the rungs the budget-crossing metric is labelled by; a slot stores the index.
-var rungs = [...]limits.Rung{"", limits.RungAccount, limits.RungTeam, limits.RungProject, limits.RungLane, limits.RungSystem}
+var rungs = [...]limits.Rung{"", limits.RungAccount, limits.RungTeam, limits.RungProject, limits.RungLane, limits.RungSystem, limits.RungPersonal}
 
 func rungCode(r limits.Rung) uint8 {
 	for i, have := range rungs {

@@ -29,7 +29,7 @@ func keySubjects(s *Snapshot, k *key.Key) []string {
 	return []string{SubjectAuthenticated}
 }
 
-// SubjectsForServiceAccount renders the subjects a service account acts under: its own, the all-accounts group, its owner's group when the owner is known (group:system:serviceaccounts:<project> for a project, group:system:serviceaccounts:team:<team> for a team; slugs carry no ':', so the two never collide), then the catch-all.
+// SubjectsForServiceAccount renders the subjects a service account acts under: its own, the all-accounts group, its owner's group when the owner is known (group:system:serviceaccounts:<project> for a project, group:system:serviceaccounts:team:<team> for a team; slugs carry no ':', so the two never collide; none for a user's), then the catch-all.
 func (s *Snapshot) SubjectsForServiceAccount(id string) []string {
 	subs := []string{"serviceaccount:" + id, SubjectServiceAccounts}
 	if sa, ok := s.serviceAccountsByID[id]; ok {

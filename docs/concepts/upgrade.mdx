@@ -37,11 +37,11 @@ Each migration waits at most `RELAY_MIGRATE_LOCK_TIMEOUT_S` seconds (default `10
 `relay migrate down` is destructive: it drops the tables and columns its down-migrations remove, with the rows in them. Take the backup before the upgrade, not after.
 </Warning>
 
-`relay migrate down` and `relay migrate force` read and write relay's version table, `schema_migrations`. The auth module's migrations, which boot and `relay migrate up` run after relay's, record their version in `auth_schema_migrations`. `relay migrate force` never changes it; `relay migrate down` to a version below 26 first steps the auth module back to its version 1, because relay's down-migrations below 26 drop tables the module's later migrations extend. The next upgrade reapplies them: accounts keep their primary sign-in identity, and further identities and external ids are gone.
+`relay migrate down` and `relay migrate force` read and write relay's version table, `schema_migrations`. The auth module's migrations, which boot and `relay migrate up` run after relay's, record their version in `auth_schema_migrations`. `relay migrate force` never changes it; `relay migrate down` to a version below 26 runs relay's down-migrations to 26, then steps the auth module back to its version 1, because relay's down-migrations below 26 drop tables the module's later migrations extend. A down-migration above 26 that refuses stops the rollback there: the auth module stays where it was, and relay's version stays clean at the refusing migration, so the next boot applies the ones above it again. After a full rollback the next upgrade reapplies the module's migrations: accounts keep their primary sign-in identity, and further identities and external ids are gone.
 
 ### Rolling back the auth module
 
-The auth module's migrations only add: the `identities` table, `external_source` / `external_id` on users and groups, `scim_clients`, and `users.resource_version`. A binary from before them ignores all of it, and a trigger copies the sign-in identity such a binary writes into `identities`, so the safe default is to roll back the image and leave the schema where it is. Run the module's down-migrations only when you need the schema itself back:
+The auth module's migrations 2 to 5 only add: the `identities` table, `external_source` / `external_id` on users and groups, `scim_clients`, and `users.resource_version`. A binary from before them ignores all of it, and a trigger copies the sign-in identity such a binary writes into `identities`. Migrations 6 and 7 let a team and a user own a service account, which then has no `project_id`; a binary from before them cannot read such a row (see the [release notes](#release-notes)), and their down-migrations refuse while one remains, leaving the module's version clean. So the safe default is to delete the team- and user-owned service accounts, roll back the image and leave the schema where it is. Run the module's down-migrations only when you need the schema itself back:
 
 ```bash
 relay migrate auth down <version>
@@ -68,6 +68,10 @@ docker run --rm --network host \
 ```
 
 ## Release notes
+
+### Service accounts owned by a team or a user (schema 47 and 48, auth module 6 and 7)
+
+Migration 47 lets a team own a service account directly, with no project, and migration 48 lets a user own one; such a row has no `project_id`. A binary from before 47 cannot read such a row, and fails to list every service account once one exists. Create none until no older pod runs, and before rolling the image back delete the team- and user-owned service accounts: `relay migrate down 47` refuses while a user-owned one remains, and `relay migrate down 46` while a team-owned one does.
 
 ### 0.30.0: the organization owner (schema 45)
 

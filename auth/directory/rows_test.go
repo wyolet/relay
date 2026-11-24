@@ -160,3 +160,22 @@ func TestTeamOwnedServiceAccount(t *testing.T) {
 	must(t, h.d.DeleteServiceAccount(ctx, sa.Meta.ID))
 	must(t, h.d.DeleteTeam(ctx, team.Meta.ID))
 }
+
+func TestUserOwnedServiceAccount(t *testing.T) {
+	h := newHarness(t)
+	u := &directory.User{Username: "ada"}
+	must(t, h.d.CreateUser(ctx, nil, u))
+
+	sa := &directory.ServiceAccount{Meta: directory.Metadata{Name: "ada-bot"}, Spec: directory.ServiceAccountSpec{UserID: u.ID}}
+	must(t, h.d.CreateServiceAccount(ctx, sa))
+	if sa.Meta.Owner != (authz.Owner{Kind: directory.OwnerUser, ID: u.ID}) {
+		t.Fatalf("service account owner = %+v, want its user", sa.Meta.Owner)
+	}
+	wantErr(t, "account of a missing user", h.d.CreateServiceAccount(ctx, &directory.ServiceAccount{Meta: directory.Metadata{Name: "x"},
+		Spec: directory.ServiceAccountSpec{UserID: "nope"}}), directory.ErrInvalid)
+
+	must(t, h.d.DeleteUser(ctx, u.ID))
+	if got, _ := h.s.ServiceAccounts.Get(ctx, sa.Meta.ID); got != nil {
+		t.Fatal("user delete left the user's service account")
+	}
+}

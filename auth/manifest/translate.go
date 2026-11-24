@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/rbac"
@@ -56,15 +57,21 @@ func (r *Registry) ToProject(d *Document, refs Resolver) (*directory.Project, er
 	return p, nil
 }
 
-// ToServiceAccount translates a ServiceAccount document; exactly one of spec.project and spec.team names its owner and must resolve.
+// ToServiceAccount translates a ServiceAccount document; exactly one of spec.project, spec.team and spec.user names its owner and must resolve.
 func (r *Registry) ToServiceAccount(d *Document, refs Resolver) (*directory.ServiceAccount, error) {
 	if d.ServiceAccount == nil {
 		return nil, wrongKind(d, KindServiceAccount)
 	}
 	spec := directory.ServiceAccountSpec{Enabled: d.ServiceAccount.Enabled}
 	switch s := d.ServiceAccount; {
-	case (s.Project == "") == (s.Team == ""):
+	case len(slices.DeleteFunc([]string{s.Project, s.Team, s.User}, func(n string) bool { return n == "" })) != 1:
 		return nil, docError(d, "spec", errServiceAccountOwner)
+	case s.User != "":
+		userID, ok := lookup(refs, KindUser, s.User)
+		if !ok {
+			return nil, docError(d, "spec.user", &RefError{Kind: "user", Name: s.User})
+		}
+		spec.UserID = userID
 	case s.Team != "":
 		teamID, ok := lookup(refs, KindTeam, s.Team)
 		if !ok {

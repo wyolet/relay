@@ -47,12 +47,19 @@ func (b *builder) planCallerAccounts(teamDocs []*manifest.TeamDTO, projDocs []*m
 		plan(account.ForProject(b.idx.Projects[d.Metadata.Name], d.Metadata.Name, d.Metadata.DisplayName))
 	}
 	for _, d := range saDocs {
-		owner := manifest.WireOwner{Kind: meta.OwnerProject, Name: d.Spec.Project}
-		if d.Spec.Team != "" {
-			owner = manifest.WireOwner{Kind: meta.OwnerTeam, Name: d.Spec.Team}
+		var owner meta.Owner
+		switch {
+		case d.Spec.User != "":
+			owner = meta.Owner{Kind: meta.OwnerUser, ID: b.idx.Users[d.Spec.User]}
+		case d.Spec.Team != "":
+			scope, _ := b.scopeOf(manifest.WireOwner{Kind: meta.OwnerTeam, Name: d.Spec.Team})
+			owner = scope.owner
+		default:
+			scope, _ := b.scopeOf(manifest.WireOwner{Kind: meta.OwnerProject, Name: d.Spec.Project})
+			owner = scope.owner
 		}
-		if scope, ok := b.scopeOf(owner); ok {
-			plan(account.ForServiceAccount(b.idx.ServiceAccounts[d.Metadata.Name], d.Metadata.Name, d.Metadata.DisplayName, scope.owner))
+		if owner.ID != "" {
+			plan(account.ForServiceAccount(b.idx.ServiceAccounts[d.Metadata.Name], d.Metadata.Name, d.Metadata.DisplayName, owner))
 		}
 	}
 	for _, d := range userDocs {

@@ -44,7 +44,7 @@ var controlTags = []*huma.Tag{
 	{Name: "roles", Description: "Roles: named sets of rules over control-API kinds and verbs."},
 	{Name: "scim", Description: "SCIM provisioning clients."},
 	{Name: "secret-keys", Description: "The data keys stored secrets are sealed under."},
-	{Name: "service-accounts", Description: "Service accounts: non-human principals holding relay keys, owned by a project or, with no project in between, by a team (metadata.owner). A create that names only spec.projectId is owned by that project. The owner is fixed at create."},
+	{Name: "service-accounts", Description: "Service accounts: non-human principals holding relay keys, owned by a project, by a team with no project in between, or by a user as their personal bot (metadata.owner). A create that names only spec.projectId is owned by that project; a user creates one for themselves, the admin token for any user. A user's service account climbs the user's personal account, is closed while the user's personal accounts are off, and goes with the user. The owner is fixed at create."},
 	{Name: "settings", Description: "Typed, hot-reloaded settings sections."},
 	{Name: "system", Description: "Health, version, license, manifests and operator actions."},
 	{Name: "teams", Description: "Teams: the top tenancy scope, holding projects."},

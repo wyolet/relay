@@ -36,7 +36,7 @@ A dirty row the manifest matches is `unchanged` and nothing is written, so it st
 
 A `PolicyBinding` names `accounts`, and a `Key` may name its default lane in `account`. Both may name the accounts Relay makes for a team, project, user or service account (`team-<team>`, `sa-<name>`, …; see [Accounts](/concepts/accounts#accounts-relay-makes)), including those of rows declared in the same bundle: the apply creates them first. An `Account` document creates provider accounts only; one without `host` may only update an account Relay made, and a prune never removes one unless it is a closed member account. See [Upgrading to 0.20](/concepts/upgrade-0-20).
 
-A `ServiceAccount` names its owner in exactly one of `spec.project` and `spec.team`, by name. A document that names another owner than the stored row's is refused: create a new service account instead.
+A `ServiceAccount` names its owner in exactly one of `spec.project`, `spec.team` and `spec.user`, by name (a username for `spec.user`). A document that names another owner than the stored row's is refused: create a new service account instead. A bundle may declare a user and their service account together; the user is written first. A new service account whose `spec.user` names someone other than the caller is refused unless the admin token applies it, as on `POST /api/service-accounts`.
 
 `User` documents are accepted under `auth.wyolet.dev/v1alpha1` only; `metadata.name` is the username:
 

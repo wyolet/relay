@@ -33,10 +33,15 @@ func readLane[R *engine.Txn | *engine.View](r R, acc *account.Account, over *run
 		if h := acc.Spec.Holder; h != nil && !readHolder(r, &rd, acc) || !readScopes(r, &rd, acc, issue) {
 			return rd, false
 		}
-		if p := rd.rungs[rungProject].rung.ScopeID; p != "" {
-			scopes = append(scopes, "project:"+p)
+		switch acc.Meta.Owner.Kind {
+		case meta.OwnerUser:
+			scopes = append(scopes, ownerRef(acc.Meta.Owner))
+		default:
+			if p := rd.rungs[rungProject].rung.ScopeID; p != "" {
+				scopes = append(scopes, "project:"+p)
+			}
+			scopes = append(scopes, "team:"+rd.rungs[rungTeam].rung.ScopeID)
 		}
-		scopes = append(scopes, "team:"+rd.rungs[rungTeam].rung.ScopeID)
 		scopes = append(scopes, deploymentScopes...)
 	default:
 		return rd, false
@@ -101,9 +106,12 @@ func readHolder[R *engine.Txn | *engine.View](r R, rd *callerReads, acc *account
 	return true
 }
 
-// readScopes reads the team and project the account sits in, and their own accounts; false when the scope is gone. An account owned by a team leaves the project rung empty.
+// readScopes reads the team and project the account sits in, and their own accounts; false when the scope is gone. An account owned by a team leaves the project rung empty; one owned by a user climbs that user's personal account instead.
 func readScopes[R *engine.Txn | *engine.View](r R, rd *callerReads, lane *account.Account, issue func(engine.Issue)) bool {
 	scope := lane.Meta.Owner
+	if scope.Kind == meta.OwnerUser {
+		return readOwnerPersonal(r, rd, lane, issue)
+	}
 	teamID := scope.ID
 	teamOf, teamField := engine.Ref{Kind: KindAccount, ID: lane.Meta.ID}, "metadata.owner"
 	if scope.Kind == meta.OwnerProject {
@@ -128,6 +136,21 @@ func readScopes[R *engine.Txn | *engine.View](r R, rd *callerReads, lane *accoun
 		if a := rd.rungs[i].rung.Account; a != nil {
 			rd.in = append(rd.in, a)
 		}
+	}
+	return true
+}
+
+// readOwnerPersonal reads the user who owns a service account's lane and their personal account, the rung above the lane; false when the user is gone. The rung names no scope: usage reads a team from the outermost rung, and the lane sits in none.
+func readOwnerPersonal[R *engine.Txn | *engine.View](r R, rd *callerReads, lane *account.Account, issue func(engine.Issue)) bool {
+	u := engine.Get[user.User](r, lane.Meta.Owner.ID)
+	if u == nil {
+		issue(parentMissing(engine.Ref{Kind: KindAccount, ID: lane.Meta.ID}, "metadata.owner", engine.Ref{Kind: KindUser, ID: lane.Meta.Owner.ID}))
+		return false
+	}
+	rd.rungs[rungTeam] = scopeRung(r, limits.RungPersonal, "personal:"+u.ID, "", "", u.Disabled)
+	rd.in = append(rd.in, u.ID, u.Disabled)
+	if a := rd.rungs[rungTeam].rung.Account; a != nil {
+		rd.in = append(rd.in, a)
 	}
 	return true
 }
@@ -164,6 +187,12 @@ func readRung[R *engine.Txn | *engine.View](r R, rr *rungRead, in *inputs, over 
 		return
 	}
 	rr.rung.Policy, rr.refused = rp.Rung.Policy, rp.Refused
+	// A personal account's binding refuses as a lane's; above a user's service account it refuses on the personal rung.
+	if rr.refused != nil && rr.refused.Rung != rr.rung.Kind {
+		refused := *rr.refused
+		refused.Rung = rr.rung.Kind
+		rr.refused = &refused
+	}
 	if rr.rung.Policy.links() {
 		rr.linked = linkedPools(r, rr.rung.Policy, rp.unusable, in)
 	}

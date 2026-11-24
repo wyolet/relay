@@ -218,6 +218,14 @@ func (w *World) TeamServiceAccount(t *team.Team) *serviceaccount.ServiceAccount 
 	return s
 }
 
+// UserServiceAccount adds a service account u owns, their personal bot, and its account.
+func (w *World) UserServiceAccount(u *user.User) *serviceaccount.ServiceAccount {
+	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerUser, ID: u.ID}), Spec: serviceaccount.Spec{UserID: u.ID}}
+	w.ServiceAccounts = append(w.ServiceAccounts, s)
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", s.Meta.Owner))
+	return s
+}
+
 // User adds a user and the user's personal account.
 func (w *World) User() *user.User {
 	u := &user.User{ID: meta.NewID(), Username: "user-" + seq()}

@@ -24,6 +24,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/pkg/filter"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/meta"
@@ -420,7 +421,7 @@ func registerKind[T any](
 		Method:      http.MethodPut,
 		Path:        base + "/by-id/{id}",
 		Summary:     "Update " + singular + " by id",
-		Description: "Replaces the " + singular + ". When metadata.resourceVersion is set, the update applies only while the stored row still has that version; otherwise it fails with 409 and error code stale_resource_version. Without it the update is unconditional. A metadata.owner different from the stored one moves the row to that scope: it needs create permission there, and fails with 409 resource_in_use while rows that reference it could not do so from the new scope. An omitted owner keeps the stored one; kinds whose owner follows a spec field (spec.teamId on a project, spec.scope on a role binding) take it from that field. A service account keeps the project or team it was made in: a spec.projectId that contradicts its owner answers 400, a new owner 409 resource_in_use.",
+		Description: "Replaces the " + singular + ". When metadata.resourceVersion is set, the update applies only while the stored row still has that version; otherwise it fails with 409 and error code stale_resource_version. Without it the update is unconditional. A metadata.owner different from the stored one moves the row to that scope: it needs create permission there, and fails with 409 resource_in_use while rows that reference it could not do so from the new scope. An omitted owner keeps the stored one; kinds whose owner follows a spec field (spec.teamId on a project, spec.scope on a role binding) take it from that field. A service account keeps the project, team or user it was made under: a spec.projectId that contradicts its owner answers 400, a new owner 409 resource_in_use.",
 		Tags:        []string{tag},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 403, 404, 500},
@@ -554,6 +555,12 @@ func registerKind[T any](
 			var se huma.StatusError
 			if errors.As(err, &se) {
 				return nil, err
+			}
+			// The directory's foreign keys refused it: a row the scan above missed references it now, and the scan answers with that row.
+			if errors.Is(err, directory.ErrInvalid) && refuseInUse != nil {
+				if _, inUse := refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); inUse != nil {
+					return nil, inUse
+				}
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}

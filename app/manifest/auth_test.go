@@ -171,9 +171,32 @@ func TestTeamServiceAccountRoundTrips(t *testing.T) {
 	}
 	for _, spec := range []string{"{project: ml-search, team: platform}", "{enabled: true}"} {
 		d := parseOne(t, "apiVersion: "+manifest.APIVersion+"\nkind: ServiceAccount\nmetadata: {name: deployer}\nspec: "+spec+"\n")
-		if _, err := relayTranslate(d, idx); err == nil || !strings.Contains(err.Error(), "exactly one of project and team") {
+		if _, err := relayTranslate(d, idx); err == nil || !strings.Contains(err.Error(), "exactly one of project, team and user") {
 			t.Errorf("spec %s: err = %v, want exactly one owner", spec, err)
 		}
+	}
+}
+
+// A ServiceAccount document naming spec.user is the user's personal bot under either apiVersion and renders back to the same document with the user as its owner; one naming a team and a user is refused.
+func TestUserServiceAccountRoundTrips(t *testing.T) {
+	idx := manifest.MapResolver{Teams: map[string]string{"platform": teamUUID}, Users: map[string]string{"alice": aliceUUID}}
+	rev := manifest.MapReverseResolver{Users: map[string]string{aliceUUID: "alice"}}
+	ofAlice := meta.Owner{Kind: meta.OwnerUser, ID: aliceUUID}
+	for _, apiVersion := range []string{manifest.APIVersion, authmanifest.APIVersion} {
+		d := parseOne(t, "apiVersion: "+apiVersion+"\nkind: ServiceAccount\nmetadata: {name: alice-bot}\nspec: {user: alice}\n")
+		sa := translate(t, d, idx).(*serviceaccount.ServiceAccount)
+		want := &serviceaccount.ServiceAccount{Meta: meta.Metadata{Name: "alice-bot", Owner: ofAlice}, Spec: serviceaccount.Spec{UserID: aliceUUID}}
+		if diff := cmp.Diff(want, sa); diff != "" {
+			t.Errorf("under %s: row (-want +got):\n%s", apiVersion, diff)
+		}
+		wantDTO := manifest.ServiceAccountDTO{APIVersion: manifest.APIVersion, Kind: "ServiceAccount",
+			Metadata: manifest.WireMeta{Name: "alice-bot", Owner: manifest.WireOwner{Kind: meta.OwnerUser, Name: "alice"}},
+			Spec:     manifest.ServiceAccountSpec{User: "alice"}}
+		exported(t, "FromServiceAccount", wantDTO, manifest.FromServiceAccount(sa, rev))
+	}
+	d := parseOne(t, "apiVersion: "+manifest.APIVersion+"\nkind: ServiceAccount\nmetadata: {name: alice-bot}\nspec: {team: platform, user: alice}\n")
+	if _, err := relayTranslate(d, idx); err == nil || !strings.Contains(err.Error(), "exactly one of project, team and user") {
+		t.Errorf("a team and a user: err = %v, want exactly one owner", err)
 	}
 }
 

@@ -422,7 +422,7 @@ func TestApplyRefusesMovingAServiceAccountToAnotherOwner(t *testing.T) {
 	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}}}
 	bot.StampOwner()
 	rows.ServiceAccounts = append(rows.ServiceAccounts, bot)
-	want := "spec.project and spec.team cannot change: the service account's account and keys belong to the project or team it was made in; declare a new service account"
+	want := "spec.project, spec.team and spec.user cannot change: the service account's account and keys belong to the owner it was made under; declare a new service account"
 	for name, doc := range map[string]string{
 		"team to project": "kind: ServiceAccount\nmetadata: {name: deployer}\nspec: {project: ml-search}\n",
 		"project to team": "kind: ServiceAccount\nmetadata: {name: indexer}\nspec: {team: platform}\n",

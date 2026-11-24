@@ -163,7 +163,7 @@ func (d *Directory) afterUserWrite(ctx context.Context, u *User, wasDisabled, en
 	return nil
 }
 
-// DeleteUser removes the account; its store drops it from every group and binding, and its sessions end.
+// DeleteUser removes the account; its store drops it from every group and binding and deletes the service accounts it owns, and its sessions end.
 func (d *Directory) DeleteUser(ctx context.Context, id string) error {
 	users := d.cfg.Stores.Users
 	u, err := users.Get(ctx, id)

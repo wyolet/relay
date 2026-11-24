@@ -7,13 +7,21 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ── ServiceAccount ────────────────────────────────────────────────────────
 
 func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) error {
 	if !sa.IsEnabled() {
-		return c.ApplyServiceAccountDelete(sa.Meta.ID)
+		// Disabling stops it serving but leaves it in its owner's read scope: the traffic it already produced stays theirs.
+		c.rmu.Lock()
+		defer c.rmu.Unlock()
+		s := c.snap.Load().clone()
+		deleteServiceAccount(s, sa.Meta.ID)
+		s.indexServiceAccountOwner(sa)
+		c.snap.Store(s)
+		return nil
 	}
 	if err := sa.Validate(); err != nil {
 		return err
@@ -24,6 +32,7 @@ func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) e
 		return err
 	}
 	s := c.snap.Load().clone()
+	s.indexServiceAccountOwner(sa)
 	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), snapIDs(s.teamsByID))
 	if !keep {
 		deleteServiceAccount(s, sa.Meta.ID)
@@ -41,6 +50,7 @@ func (c *Catalog) ApplyServiceAccountDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteServiceAccount(s, id)
+	s.dropServiceAccountOwner(id)
 	c.snap.Store(s)
 	return nil
 }
@@ -108,7 +118,14 @@ func (c *Catalog) ApplyTeamUpsert(t *team.Team) error {
 		return err
 	}
 	s := c.snap.Load().clone()
+	// A team's slug is part of the subjects of the service accounts it owns itself, so a rename reaches their keys.
+	old, existed := s.teamsByID[t.Meta.ID]
 	insertTeam(s, t)
+	if existed && old.Meta.Name != t.Meta.Name {
+		for _, sa := range s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}] {
+			reindexKeySubjects(s, key.PrincipalServiceAccount, sa.Meta.ID)
+		}
+	}
 	c.snap.Store(s)
 	return nil
 }

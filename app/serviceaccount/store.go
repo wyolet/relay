@@ -1,4 +1,4 @@
-// Service accounts are stored by the auth module's directory store; project_id and team_id are real columns there, so deleting a Project drops its accounts (FK cascade) and deleting a Team that owns one is refused (FK restrict) without parsing JSONB.
+// Service accounts are stored by the auth module's directory store; project_id, team_id and user_id are real columns there, so deleting a Project or a User drops its accounts (FK cascade) and deleting a Team that owns one is refused (FK restrict) without parsing JSONB.
 
 package serviceaccount
 

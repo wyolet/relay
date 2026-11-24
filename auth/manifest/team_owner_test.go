@@ -58,6 +58,46 @@ func TestTeamOwnedServiceAccountRoundTrips(t *testing.T) {
 	}
 }
 
+const userOwnedBundle = `apiVersion: auth.wyolet.dev/v1alpha1
+kind: User
+metadata: {name: ada}
+spec: {email: ada@example.com}
+---
+apiVersion: auth.wyolet.dev/v1alpha1
+kind: ServiceAccount
+metadata: {name: ada-bot, labels: {managed-by: gitops}}
+spec: {user: ada}
+`
+
+// A ServiceAccount document naming spec.user is owned by that user and renders back to the same document.
+func TestUserOwnedServiceAccountRoundTrips(t *testing.T) {
+	e := newEnv(t)
+	e.apply(t, userOwnedBundle, manifest.Options{})
+	ctx := context.Background()
+	s := e.store.Stores()
+	ada, _ := s.Users.ByUsername(ctx, "ada")
+	sas, _ := s.ServiceAccounts.List(ctx)
+	if ada == nil || len(sas) != 1 {
+		t.Fatalf("stored user %v and %d service accounts, want ada and one", ada, len(sas))
+	}
+	if diff := cmp.Diff(authz.Owner{Kind: directory.OwnerUser, ID: ada.ID}, sas[0].Meta.Owner); diff != "" {
+		t.Errorf("owner (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(directory.ServiceAccountSpec{UserID: ada.ID}, sas[0].Spec); diff != "" {
+		t.Errorf("spec (-want +got):\n%s", diff)
+	}
+	sa, err := e.reg.FromServiceAccount(sas[0], storeNames(t, e))
+	must(t, err)
+	if diff := cmp.Diff(&manifest.ServiceAccountSpec{User: "ada"}, sa.ServiceAccount); diff != "" {
+		t.Errorf("rendered spec (-want +got):\n%s", diff)
+	}
+	for _, entry := range e.plan(t, e.parse(t, userOwnedBundle), manifest.Options{}).Entries {
+		if entry.Action != manifest.ActionUnchanged {
+			t.Errorf("%s %s/%s %v on a re-plan, want unchanged", entry.Action, entry.Kind, entry.Name, entry.ChangedFields)
+		}
+	}
+}
+
 // A ServiceAccount document names exactly one owner.
 func TestServiceAccountDocumentNamesOneOwner(t *testing.T) {
 	e := newEnv(t)
@@ -65,7 +105,9 @@ func TestServiceAccountDocumentNamesOneOwner(t *testing.T) {
 	for name, spec := range map[string]string{
 		"neither":  "{}",
 		"both":     "{project: search, team: platform}",
+		"all":      "{project: search, team: platform, user: alice}",
 		"no team":  "{team: nowhere}",
+		"no user":  "{user: nobody}",
 		"no owner": "{enabled: true}",
 	} {
 		doc := "apiVersion: auth.wyolet.dev/v1alpha1\nkind: ServiceAccount\nmetadata: {name: bot}\nspec: " + spec + "\n"
@@ -74,13 +116,35 @@ func TestServiceAccountDocumentNamesOneOwner(t *testing.T) {
 			t.Errorf("%s: translated, want an error", name)
 			continue
 		}
-		want := "spec"
-		if name == "no team" {
-			want = "spec.team"
+		want := map[string]string{"no team": "spec.team", "no user": "spec.user"}[name]
+		if want == "" {
+			want = "spec"
 		}
 		if got := asError(t, err); got.Field != want {
 			t.Errorf("%s: error on %q (%v), want %q", name, got.Field, err, want)
 		}
+	}
+}
+
+// Pruning a team that still owns a stored service account the selector leaves out is refused while planning, before any write; selected too, both go, the service account first.
+func TestPlanRefusesPruningATeamThatOwnsAKeptServiceAccount(t *testing.T) {
+	prune := func(e *env) manifest.Options {
+		return manifest.Options{Prune: true, Selector: map[string]string{"managed-by": "gitops"}, Refs: e.opts.Refs, Names: e.opts.Names}
+	}
+	e := newEnv(t)
+	e.apply(t, strings.Replace(teamOwnedBundle, "{name: deployer, labels: {managed-by: gitops}}", "{name: deployer}", 1), manifest.Options{})
+	if _, err := e.reg.Plan(context.Background(), e.store.Stores(), nil, prune(e)); !errors.Is(err, manifest.ErrTeamOwnsServiceAccount) {
+		t.Fatalf("plan err = %v, want ErrTeamOwnsServiceAccount", err)
+	}
+	if teams, _ := e.store.Stores().Teams.List(context.Background()); len(teams) != 1 {
+		t.Fatalf("teams after the refused plan = %d, want the team kept", len(teams))
+	}
+
+	e = newEnv(t)
+	e.apply(t, teamOwnedBundle, manifest.Options{})
+	p := e.apply(t, "", prune(e))
+	if got := strings.Join(actions(p), ","); got != "delete ServiceAccount/deployer,delete Team/platform" {
+		t.Fatalf("prune of both = %s", got)
 	}
 }
 

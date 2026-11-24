@@ -11,14 +11,14 @@ import (
 	"github.com/wyolet/relay/pkg/engine"
 )
 
-// Caller rung positions in CallerPlan.Rungs, outermost first.
+// Caller rung positions in CallerPlan.Rungs, outermost first. A user's service account holds its owner's personal account in the team's position.
 const (
 	rungTeam = iota
 	rungProject
 	rungLane
 )
 
-// CallerPlan is the caller half of the ladder folded for one lane: the account a request runs in and is charged to. A member or service account in project P of team T climbs T's account, then P's, then the lane; a member of team T climbs T's account, then the lane; a personal account is the lane alone. A provider account used as a lane climbs nothing: its own policy applies as the upstream rung of its keys, which are all it reaches. Every key whose default lane this is points at it, so a key write or rotation touches no allowance.
+// CallerPlan is the caller half of the ladder folded for one lane: the account a request runs in and is charged to. A member or service account in project P of team T climbs T's account, then P's, then the lane; a member of team T, or a service account T owns, climbs T's account, then the lane; a service account user U owns climbs U's personal account, then the lane; a personal account is the lane alone. A provider account used as a lane climbs nothing: its own policy applies as the upstream rung of its keys, which are all it reaches. Every key whose default lane this is points at it, so a key write or rotation touches no allowance.
 type CallerPlan struct {
 	Lane *account.Account
 	// Holder is the principal acting in the lane ("user:<id>" or "serviceaccount:<id>"); empty for a provider account.
@@ -42,7 +42,7 @@ type CallerPlan struct {
 
 func (p *CallerPlan) builtFrom() inputs { return p.in }
 
-// Team and Project return the lane's team and project rungs; their SubjectID is empty when the lane sits in no team or project.
+// Team and Project return the lane's team and project rungs; their SubjectID is empty when the lane sits in no team or project. Above a user's service account Team is the owner's personal rung, whose ID and Name are empty.
 func (p *CallerPlan) Team() *Rung    { return &p.Rungs[rungTeam] }
 func (p *CallerPlan) Project() *Rung { return &p.Rungs[rungProject] }
 
@@ -131,10 +131,10 @@ func (c *controllers) callerPlan(tx *engine.Txn, subject string) error {
 		return nil
 	}
 	kind := acc.DerivedKind()
-	if kind == account.KindPersonal || kind == account.KindProvider {
+	if kind == account.KindPersonal || kind == account.KindProvider || kind == account.KindService {
 		if off := personalAccountOff(tx, acc.Meta.Owner); off != nil {
 			// A provider account carries this issue from its account plan already.
-			if kind == account.KindPersonal {
+			if kind != account.KindProvider {
 				tx.Issue(engine.Issue{Severity: engine.SeverityError, Code: IssuePersonalAccountOff, Source: engine.Ref{Kind: KindAccount, ID: acc.Meta.ID}, Field: "metadata.owner",
 					Message: "personal accounts are turned off for " + off.name() + "; this account and its keys serve nothing until they are on again"})
 			}
@@ -183,14 +183,18 @@ func foldCaller(cp *CallerPlan, rd callerReads) {
 	lane, group := cp.counterGroup()
 	for i := range cp.Rungs {
 		r := &cp.Rungs[i]
-		if r.ScopeID == "" && r.SubjectID == "" {
+		// The personal rung names no scope and, until relay makes the personal account, no subject; its owner's state applies all the same.
+		if r.ScopeID == "" && r.SubjectID == "" && r.Kind != limits.RungPersonal {
 			continue
 		}
 		switch {
 		case rd.rungs[i].disabled && cp.Refused == nil:
 			what := string(r.Kind) + " " + r.Name + " is disabled"
-			if i == rungLane {
+			switch {
+			case i == rungLane:
 				what = "the holder of account " + r.Account.Meta.Name + " is disabled"
+			case r.Kind == limits.RungPersonal:
+				what = "the user who owns account " + cp.Lane.Meta.Name + " is disabled"
 			}
 			cp.Refused = rungRefusal(CodeSubjectDisabled, r, "", what)
 		case rd.rungs[i].closed && cp.Refused == nil:

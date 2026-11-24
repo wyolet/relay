@@ -131,6 +131,9 @@ type Snapshot struct {
 	// disabled keys included: the usage read scope answers "the rows my own
 	// keys produced", and disabling a key does not un-own its past traffic.
 	hashesByUser map[string][]string
+	// serviceAccountIDsByOwner holds the sorted ids of every service account a team or a user owns, disabled ones included: their traffic carries no project, so the team's or the user's usage readers find it by principal, and disabling a service account does not hide what it did. serviceAccountOwners maps each of those ids back to its owner.
+	serviceAccountIDsByOwner map[meta.Owner][]string
+	serviceAccountOwners     map[string]meta.Owner
 
 	// tokenVersionByUser mirrors users.token_version of enabled users, so
 	// token verification stays a map read.
@@ -177,7 +180,7 @@ type Snapshot struct {
 
 	serviceAccountsByID   map[string]*serviceaccount.ServiceAccount
 	serviceAccountsByName map[string]*serviceaccount.ServiceAccount
-	// serviceAccountsByOwner groups a project's or a team's own accounts (sorted by name).
+	// serviceAccountsByOwner groups a project's, a team's or a user's own accounts (sorted by name).
 	serviceAccountsByOwner map[meta.Owner][]*serviceaccount.ServiceAccount
 
 	groupsByID   map[string]*group.Group

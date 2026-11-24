@@ -1,13 +1,16 @@
 package manifest
 
 import (
+	"fmt"
+
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/rbac"
 )
 
-// checkPrunedScopes refuses a RoleBinding document scoped to, or a ServiceAccount document owned by, a team or project the plan prunes, or a project of a pruned team: the store deletes them with their scope, so they would be written and then lost, and refuses deleting a team that owns a service account.
+// checkPrunedScopes refuses a RoleBinding document scoped to, or a ServiceAccount document owned by, a team or project the plan prunes, or a project of a pruned team: the store deletes them with their scope, so they would be written and then lost. It refuses pruning a team that still owns a stored service account the plan keeps: the store refuses that team's delete, which would stop the apply after its earlier writes.
 func (p *planner) checkPrunedScopes() error {
 	gone := map[rbac.Scope]bool{}
+	deleted := map[string]bool{}
 	for _, kind := range p.deletes {
 		for _, e := range kind {
 			if e.Action != ActionDelete {
@@ -23,6 +26,8 @@ func (p *planner) checkPrunedScopes() error {
 				}
 			case KindProject:
 				gone[rbac.Scope{Kind: directory.OwnerProject, ID: e.ID}] = true
+			case KindServiceAccount:
+				deleted[e.ID] = true
 			}
 		}
 	}
@@ -45,6 +50,11 @@ func (p *planner) checkPrunedScopes() error {
 		}
 		if gone[rbac.Scope(sa.Meta.Owner)] {
 			return docError(d, "spec."+sa.Meta.Owner.Kind, ErrScopePruned)
+		}
+	}
+	for _, sa := range p.rows.serviceAccounts {
+		if o := sa.Meta.Owner; o.Kind == directory.OwnerTeam && gone[rbac.Scope(o)] && !deleted[sa.Meta.ID] {
+			return fmt.Errorf("manifest: service account %q: %w", sa.Meta.Name, ErrTeamOwnsServiceAccount)
 		}
 	}
 	return nil

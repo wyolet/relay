@@ -88,6 +88,10 @@ func TestSpecGolden(t *testing.T) {
 			write: func() ([]byte, error) {
 				return encodeSpec(serviceAccountSpecDoc{TeamID: "t-1"}, nil, serviceAccountSpecKeys)
 			}},
+		{name: "user-owned service account", want: `{"userId":"u-1"}`,
+			write: func() ([]byte, error) {
+				return encodeSpec(serviceAccountSpecDoc{UserID: "u-1"}, nil, serviceAccountSpecKeys)
+			}},
 		{name: "service account with product field", want: `{"projectId":"p-1","enabled":false,"policyId":"pol-1"}`,
 			product: `{"projectId":"p-1","policyId":"pol-1","enabled":false}`,
 			write: func() ([]byte, error) {

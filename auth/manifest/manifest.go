@@ -23,7 +23,7 @@ const (
 
 // Kinds returns every kind in the order Apply writes them: each kind only refers to kinds before it.
 func Kinds() []string {
-	return []string{KindTeam, KindProject, KindServiceAccount, KindRole, KindUser, KindGroup, KindRoleBinding}
+	return []string{KindTeam, KindProject, KindRole, KindUser, KindServiceAccount, KindGroup, KindRoleBinding}
 }
 
 // IsKind reports whether kind is one of this package's kinds.
@@ -81,10 +81,11 @@ type ProjectSpec struct {
 	Enabled *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
-// ServiceAccountSpec names the account's owner: exactly one of the project and the team.
+// ServiceAccountSpec names the account's owner: exactly one of the project, the team and the user (a username).
 type ServiceAccountSpec struct {
 	Project string `yaml:"project,omitempty" json:"project,omitempty"`
 	Team    string `yaml:"team,omitempty"    json:"team,omitempty"`
+	User    string `yaml:"user,omitempty"    json:"user,omitempty"`
 	Enabled *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 

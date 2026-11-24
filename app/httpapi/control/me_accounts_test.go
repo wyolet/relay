@@ -13,14 +13,18 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// The personal account first, then member accounts and provider accounts, each by name; another user's accounts, the team's and project's own, and revoked keys are left out.
+// The personal account first, then member accounts and provider accounts, each by name; another user's accounts, the team's and project's own, the accounts of the user's own service accounts, and revoked keys are left out.
 func TestMyAccounts(t *testing.T) {
 	aw := newAccountsWorld()
 	// A closed member account opened on first use, which no role binding follows, and a provider account u1 owns.
 	tokenOnly := account.Member(aw.u1.ID, aw.u1.Username, meta.Owner{Kind: meta.OwnerTeam, ID: aw.team.Meta.ID}, aw.team.Meta.Name, "")
 	tokenOnly.Meta.ID, tokenOnly.Meta.Name, tokenOnly.Spec.Closed = meta.NewID(), aw.m1.Meta.Name+"-z", true
 	prov := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "u1-provider", Owner: meta.Owner{Kind: meta.OwnerUser, ID: aw.u1.ID}}, Spec: account.Spec{HostID: aw.w.Hosts[0].Meta.ID}}
-	aw.w.Accounts = append(aw.w.Accounts, tokenOnly, prov)
+	// u1's service account, its account and a share it holds: all owned by u1, none of them u1's own.
+	bot := aw.w.UserServiceAccount(aw.u1)
+	botShare := account.Share(prov, account.Receiver{Kind: account.ReceiverServiceAccount, ID: bot.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: aw.u1.ID}, bot.Meta.Name)
+	botShare.Meta.ID = meta.NewID()
+	aw.w.Accounts = append(aw.w.Accounts, tokenOnly, prov, botShare)
 	revoked := aw.w.KeyIn(aw.u1, aw.m1, "sk-revoked")
 	revoked.Spec.RevokedAt = &time.Time{}
 	personal := aw.w.PersonalAccount(aw.u1)

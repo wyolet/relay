@@ -198,6 +198,9 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	for _, k := range rks {
 		snap.indexUserKeyHashes(k)
 	}
+	for _, sa := range sas {
+		snap.indexServiceAccountOwner(sa)
+	}
 	if tokenVersions != nil {
 		snap.tokenVersionByUser = tokenVersions
 		snap.disabledUsers = disabledUsers

@@ -112,6 +112,41 @@ func TestBuild_ServiceAccountAndKeyMembership(t *testing.T) {
 	}
 }
 
+// A service account a user owns is kept and indexed under the user, carries no group of its owner, and its keys resolve; deleting it takes it from the index.
+func TestBuild_UserServiceAccount(t *testing.T) {
+	f := newSubjectsFixture()
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.alice}}}
+	bot.StampOwner()
+	k := &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-bot-key", Owner: bot.Meta.Owner},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: bot.Meta.ID}, KeyHash: hash("c")},
+	}
+	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{f.k, k}, rcList{}, bndList{})
+	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa, bot}, grpList{f.group}, roleList{}, rbList{}, pbList{})
+	must(t, c.Reload(context.Background()))
+	s := c.Current()
+
+	if got := namesOf(s.ServiceAccountsForUser(f.alice), func(sa *serviceaccount.ServiceAccount) string { return sa.Meta.Name }); !slices.Equal(got, []string{"alice-bot"}) {
+		t.Errorf("ServiceAccountsForUser = %v, want [alice-bot]", got)
+	}
+	want := []string{"serviceaccount:" + bot.Meta.ID, SubjectServiceAccounts, SubjectAuthenticated}
+	if got := s.SubjectsForServiceAccount(bot.Meta.ID); !slices.Equal(got, want) {
+		t.Errorf("SubjectsForServiceAccount = %v, want %v", got, want)
+	}
+	if got, _ := s.KeyByHash(hash("c")); got == nil {
+		t.Error("key of a user's service account should be in the hash index")
+	}
+	must(t, c.ApplyServiceAccountDelete(bot.Meta.ID))
+	if got := c.Current().ServiceAccountsForUser(f.alice); len(got) != 0 {
+		t.Errorf("ServiceAccountsForUser after its delete = %v, want none", got)
+	}
+}
+
+// teamRows is a team source whose rows a test changes after the catalog loads, as the store's would.
+type teamRows []*team.Team
+
+func (r *teamRows) List(context.Context) ([]*team.Team, error) { return *r, nil }
+
 // A service account a team owns directly is kept while its team is, indexed under the team and not under any project, carries the team's group subject, and its keys resolve; one whose team is absent is dropped. Deleting the team evicts it as a fresh build without the team would.
 func TestBuild_TeamServiceAccount(t *testing.T) {
 	f := newSubjectsFixture()
@@ -165,6 +200,53 @@ func TestBuild_TeamServiceAccount(t *testing.T) {
 		t.Error("service account of a deleted team is still in the snapshot")
 	}
 	assertSameMembership(t, c.Current(), load(teamList{}).Current())
+}
+
+// Renaming a team reaches the keys of the service accounts it owns, whose subjects carry its slug; a new team taking the old name gets no key's subject. The reconciled snapshot matches a build from the same rows.
+func TestApplyTeamRename_ReindexesItsServiceAccountKeys(t *testing.T) {
+	f := newSubjectsFixture()
+	deployer := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: f.team.Meta.ID}}}
+	deployer.StampOwner()
+	k := &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer-prod", Owner: deployer.Meta.Owner},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: deployer.Meta.ID}, KeyHash: hash("b")},
+	}
+	load := func(teams TeamLister) *Catalog {
+		c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{f.k, k}, rcList{}, bndList{})
+		c.UseTenancy(teams, projList{f.project}, saList{f.sa, deployer}, grpList{f.group}, roleList{}, rbList{}, pbList{})
+		must(t, c.Reload(context.Background()))
+		return c
+	}
+	subjects := func(c *Catalog) []string { return c.Current().SubjectsForKey(k.Meta.ID) }
+	other := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "staging", Owner: meta.Global}}
+	stored := &teamRows{f.team, other}
+	c := load(stored)
+
+	renamed := *f.team
+	renamed.Meta.Name = "infra"
+	*stored = teamRows{&renamed, other}
+	must(t, c.ApplyTeamUpsert(&renamed))
+	want := []string{"serviceaccount:" + deployer.Meta.ID, SubjectServiceAccounts, SubjectServiceAccounts + ":team:infra", SubjectAuthenticated}
+	if got := subjects(c); !slices.Equal(got, want) {
+		t.Errorf("subjects after the rename = %v, want %v", got, want)
+	}
+	if got, built := subjects(c), subjects(load(teamList{&renamed, other})); !slices.Equal(got, built) {
+		t.Errorf("subjects after the rename = %v, a build from the same rows gives %v", got, built)
+	}
+
+	// The source keeps the old row: a reload would undo this rename, so only the incremental path shows it.
+	taker := *other
+	taker.Meta.Name = f.team.Meta.Name
+	must(t, c.ApplyTeamUpsert(&taker))
+	if got, ok := c.Current().Team(other.Meta.ID); !ok || got.Meta.Name != f.team.Meta.Name {
+		t.Fatalf("team after the rename = %+v, want it applied incrementally as %q", got, f.team.Meta.Name)
+	}
+	if got := subjects(c); !slices.Equal(got, want) {
+		t.Errorf("subjects after another team took the old name = %v, want %v", got, want)
+	}
+	if got, built := subjects(c), subjects(load(teamList{&renamed, &taker})); !slices.Equal(got, built) {
+		t.Errorf("subjects after another team took the old name = %v, a build from the same rows gives %v", got, built)
+	}
 }
 
 func TestBuild_KeyDroppedWhenPrincipalAbsent(t *testing.T) {

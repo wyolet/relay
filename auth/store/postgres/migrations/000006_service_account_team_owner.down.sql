@@ -8,9 +8,11 @@ DECLARE
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_constraint
                 WHERE contype = 'f' AND confrelid = 'service_accounts'::regclass
-                  AND conrelid <> 'role_binding_subjects'::regclass) THEN
+                  AND conrelid::regclass::text <> 'role_binding_subjects') THEN
         RETURN;
     END IF;
+    -- Holds off a service account written while the rows are counted; the ALTERs below take it anyway.
+    LOCK TABLE service_accounts IN ACCESS EXCLUSIVE MODE;
     SELECT count(*) INTO team_owned FROM service_accounts WHERE project_id IS NULL;
     IF team_owned > 0 THEN
         RAISE EXCEPTION 'auth migration 000006 down: % service accounts are owned by a team; delete them first', team_owned;

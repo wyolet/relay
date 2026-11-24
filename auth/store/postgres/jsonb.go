@@ -141,10 +141,11 @@ var projectSpecKeys = []string{"teamId", "enabled"}
 type serviceAccountSpecDoc struct {
 	ProjectID string `json:"projectId,omitempty"`
 	TeamID    string `json:"teamId,omitempty"`
+	UserID    string `json:"userId,omitempty"`
 	Enabled   *bool  `json:"enabled,omitempty"`
 }
 
-var serviceAccountSpecKeys = []string{"projectId", "teamId", "enabled"}
+var serviceAccountSpecKeys = []string{"projectId", "teamId", "userId", "enabled"}
 
 type roleSpecDoc struct {
 	Rules   []ruleDoc `json:"rules"`

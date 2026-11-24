@@ -108,8 +108,9 @@ func (r *Registry) specSchema(kind string) (map[string]any, bool) {
 		props, required = map[string]any{"team": described(str(), "The team's name."), "enabled": boolean()}, []string{"team"}
 	case KindServiceAccount:
 		props = map[string]any{
-			"project": described(str(), "The owning project's name. Exactly one of project and team is set."),
-			"team":    described(str(), "The owning team's name. Exactly one of project and team is set."),
+			"project": described(str(), "The owning project's name. Exactly one of project, team and user is set."),
+			"team":    described(str(), "The owning team's name. Exactly one of project, team and user is set."),
+			"user":    described(str(), "The owning user's username. Exactly one of project, team and user is set."),
 			"enabled": boolean(),
 		}
 	case KindRole:
@@ -146,7 +147,7 @@ func (r *Registry) specSchema(kind string) (map[string]any, bool) {
 	}
 	o := objectSchema(props, required...)
 	if kind == KindServiceAccount {
-		o["oneOf"] = []any{map[string]any{"required": []string{"project"}}, map[string]any{"required": []string{"team"}}}
+		o["oneOf"] = []any{map[string]any{"required": []string{"project"}}, map[string]any{"required": []string{"team"}}, map[string]any{"required": []string{"user"}}}
 	}
 	return o, true
 }

@@ -6,7 +6,11 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -92,6 +96,99 @@ spec: {policy: ml-default, accounts: [sa-deployer]}
 	sa := entryFor(t, b, "ServiceAccount", "deployer")
 	if sa.Action != ActionCreate || sa.owner != team {
 		t.Errorf("service account entry = %+v, want a create owned by the team", sa)
+	}
+}
+
+// A bundle declaring a user and their service account writes the user first, and plans the service account's account owned by the user, so a personal binding in the same bundle can name it.
+// A document declaring a user's service account is applied by that user, the admin token or a loader with no caller; anyone else, whatever rights they hold, is refused as CRUD's create refuses them. A stored one is left to the owner check.
+func TestApplyDeclaresAUsersServiceAccountForThatUserOnly(t *testing.T) {
+	stored := []*user.User{{ID: "u-alice", Username: "alice"}, {ID: "u-bob", Username: "bob"}}
+	doc := docHeader + "kind: ServiceAccount\nmetadata: {name: bob-bot}\nspec: {user: bob}\n"
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{"bob", actor.WithActor(context.Background(), &actor.Actor{UserID: "u-bob"}), ""},
+		{"the admin token", actor.WithActor(context.Background(), &actor.Actor{AdminToken: true}), ""},
+		{"a loader", context.Background(), ""},
+		{"alice", actor.WithActor(context.Background(), &actor.Actor{UserID: "u-alice"}), "spec.user: owner.id must be empty or match the calling user"},
+	} {
+		b := usersBuilder(stored, &builder{admin: true})
+		err := b.run(tc.ctx, userDocs(t, doc))
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s declares bob's service account: %v, want %q", tc.name, err, tc.want)
+		}
+	}
+	b := usersBuilder(stored, &builder{admin: true})
+	b.rows.ServiceAccounts = []*serviceaccount.ServiceAccount{{Meta: meta.Metadata{ID: meta.NewID(), Name: "bob-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}}, Spec: serviceaccount.Spec{UserID: "u-bob"}}}
+	b.idx = newIndex(b.rows)
+	if err := b.run(actor.WithActor(context.Background(), &actor.Actor{UserID: "u-alice"}), userDocs(t, doc)); err != nil {
+		t.Errorf("alice applies bob's stored service account unchanged: %v", err)
+	}
+}
+
+func TestApplyBindsTheAccountOfAUsersServiceAccount(t *testing.T) {
+	b := &builder{opts: Options{Stores: &Stores{}}, rows: &Rows{}, idx: newIndex(&Rows{}), admin: true}
+	doc := userYAML("alice", "", "false") + "---\n" + docHeader + `kind: ServiceAccount
+metadata: {name: alice-bot}
+spec: {user: alice}
+---
+` + docHeader + `kind: Policy
+metadata: {name: alice-default, owner: {kind: user, name: alice}}
+spec: {}
+---
+` + docHeader + `kind: PolicyBinding
+metadata: {name: alice-bot-binding, owner: {kind: user, name: alice}}
+spec: {policy: alice-default, accounts: [sa-alice-bot]}
+`
+	if err := b.run(context.Background(), userDocs(t, doc)); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	var order []string
+	for _, e := range b.entries {
+		if e.Kind == "User" || e.Kind == "ServiceAccount" {
+			order = append(order, e.Kind)
+		}
+	}
+	if strings.Join(order, ",") != "User,ServiceAccount" {
+		t.Errorf("write order = %v, want the user before their service account", order)
+	}
+	var pb *policybinding.PolicyBinding
+	for _, v := range b.declared {
+		if x, ok := v.(*policybinding.PolicyBinding); ok {
+			pb = x
+		}
+	}
+	if pb == nil || len(pb.Spec.AccountIDs) != 1 {
+		t.Fatalf("binding = %+v, want one account", pb)
+	}
+	alice := meta.Owner{Kind: meta.OwnerUser, ID: b.idx.Users["alice"]}
+	if a := b.callerAccounts[pb.Spec.AccountIDs[0]]; a == nil || a.DerivedKind() != account.KindService || a.Meta.Owner != alice {
+		t.Errorf("account = %+v, want the service account's account owned by alice", a)
+	}
+	if sa := entryFor(t, b, "ServiceAccount", "alice-bot"); sa.owner != alice {
+		t.Errorf("service account entry owner = %+v, want alice", sa.owner)
+	}
+}
+
+// An Account document cannot make an account a user owns and their service account holds: without a host it is a caller account, which relay alone makes, and with one but no sourceAccount it is no share, which no holder fits.
+func TestApplyAccountDocumentMakesNoUserServiceAccountAccount(t *testing.T) {
+	for name, tc := range map[string]struct{ spec, want string }{
+		"no host":   {"{serviceAccount: alice-bot}", "spec.host is required"},
+		"no source": {"{host: acme-api, serviceAccount: alice-bot}", "has no holder, except a service account's share"},
+	} {
+		rows := tenancyRows(false)
+		alice := &user.User{ID: meta.NewID(), Username: "alice"}
+		bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: alice.ID}}}
+		bot.StampOwner()
+		rows.Users, rows.ServiceAccounts = []*user.User{alice}, append(rows.ServiceAccounts, bot)
+		rows.Hosts = []*host.Host{{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-api", Owner: meta.Owner{Kind: meta.OwnerSystem}}}}
+		b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows), admin: true}
+		doc := docHeader + "kind: Account\nmetadata: {name: alice-bot-acct, owner: {kind: user, name: alice}}\nspec: " + tc.spec + "\n"
+		if err := b.run(context.Background(), userDocs(t, doc)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want a refusal containing %q", name, err, tc.want)
+		}
 	}
 }
 

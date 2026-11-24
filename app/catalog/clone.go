@@ -51,6 +51,9 @@ func (s *Snapshot) clone() *Snapshot {
 		subjectsByKey: shallowMap(s.subjectsByKey),
 		// Replaced wholesale by the index helpers, never appended in place.
 		hashesByUser: shallowMap(s.hashesByUser),
+		// Replaced wholesale by the index helpers, never appended in place.
+		serviceAccountIDsByOwner: shallowMap(s.serviceAccountIDsByOwner),
+		serviceAccountOwners:     shallowMap(s.serviceAccountOwners),
 
 		tokenVersionByUser: shallowMap(s.tokenVersionByUser),
 		usersLoaded:        s.usersLoaded,
