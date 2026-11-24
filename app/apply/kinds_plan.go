@@ -95,6 +95,12 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		}
 
 		prev, found := existing[name]
+		// A user's service account is declared by that user, as CRUD's create allows: its keys run under the user's personal account.
+		if !found && route.Singular == "service-account" && m.Owner.Kind == meta.OwnerUser {
+			if err := refcheck.StampOwnerID(ctx, &m.Owner); err != nil {
+				return &InvalidError{Kind: k.Kind, Name: name, Err: fmt.Errorf("spec.user: %w", err)}
+			}
+		}
 		if found && b.opts.CatalogSeed {
 			if po := k.Meta(prev).Owner; po.Kind == meta.OwnerOrganization || po.Tenant() {
 				slog.Warn("seed: a stored row of this name is not the catalog's; left alone",

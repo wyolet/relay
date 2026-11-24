@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/user"
@@ -99,6 +100,34 @@ spec: {policy: ml-default, accounts: [sa-deployer]}
 }
 
 // A bundle declaring a user and their service account writes the user first, and plans the service account's account owned by the user, so a personal binding in the same bundle can name it.
+// A document declaring a user's service account is applied by that user, the admin token or a loader with no caller; anyone else, whatever rights they hold, is refused as CRUD's create refuses them. A stored one is left to the owner check.
+func TestApplyDeclaresAUsersServiceAccountForThatUserOnly(t *testing.T) {
+	stored := []*user.User{{ID: "u-alice", Username: "alice"}, {ID: "u-bob", Username: "bob"}}
+	doc := docHeader + "kind: ServiceAccount\nmetadata: {name: bob-bot}\nspec: {user: bob}\n"
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{"bob", actor.WithActor(context.Background(), &actor.Actor{UserID: "u-bob"}), ""},
+		{"the admin token", actor.WithActor(context.Background(), &actor.Actor{AdminToken: true}), ""},
+		{"a loader", context.Background(), ""},
+		{"alice", actor.WithActor(context.Background(), &actor.Actor{UserID: "u-alice"}), "spec.user: owner.id must be empty or match the calling user"},
+	} {
+		b := usersBuilder(stored, &builder{admin: true})
+		err := b.run(tc.ctx, userDocs(t, doc))
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s declares bob's service account: %v, want %q", tc.name, err, tc.want)
+		}
+	}
+	b := usersBuilder(stored, &builder{admin: true})
+	b.rows.ServiceAccounts = []*serviceaccount.ServiceAccount{{Meta: meta.Metadata{ID: meta.NewID(), Name: "bob-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}}, Spec: serviceaccount.Spec{UserID: "u-bob"}}}
+	b.idx = newIndex(b.rows)
+	if err := b.run(actor.WithActor(context.Background(), &actor.Actor{UserID: "u-alice"}), userDocs(t, doc)); err != nil {
+		t.Errorf("alice applies bob's stored service account unchanged: %v", err)
+	}
+}
+
 func TestApplyBindsTheAccountOfAUsersServiceAccount(t *testing.T) {
 	b := &builder{opts: Options{Stores: &Stores{}}, rows: &Rows{}, idx: newIndex(&Rows{}), admin: true}
 	doc := userYAML("alice", "", "false") + "---\n" + docHeader + `kind: ServiceAccount
