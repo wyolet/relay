@@ -19,9 +19,15 @@ func mergeHostKeyPreserveValue(existing, incoming *hostkey.HostKey) {
 		// Re-supply the existing secret so the store re-encrypts it unchanged.
 		incoming.Spec.Value = existing.Resolved
 	case hostkey.ValueKindOAuth:
+		// Only an oauth key has a stored oauth blob to keep; a key switching
+		// to oauth must bring its value.
+		if existing.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
+			return
+		}
 		// existing.Resolved is the access token, NOT the stored token blob, so
-		// it can't be re-encrypted as the value. Carry Resolved so Validate
-		// passes; the store preserves the existing blob ciphertext as-is.
+		// it can't be re-encrypted as the value, and it is empty while the
+		// credential has no token. The store keeps the existing blob as-is.
 		incoming.Resolved = existing.Resolved
+		incoming.KeepStoredValue = true
 	}
 }

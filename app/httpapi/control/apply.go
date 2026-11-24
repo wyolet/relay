@@ -18,6 +18,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
@@ -132,14 +133,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			var se *apply.StoreError
 			if errors.As(err, &se) {
 				recordApplied(ctx, d, se.Applied, &se.Entry)
-				status, msg := http.StatusInternalServerError, se.Error()
-				if me, ok := errors.AsType[*directory.ManagedError](err); ok {
-					status, msg = http.StatusConflict, managedMessage(me)
-				} else if errors.Is(err, directory.ErrStaleResourceVersion) {
-					status = http.StatusConflict
-				} else if errors.Is(err, authz.ErrForbidden) {
-					status = http.StatusForbidden
-				}
+				status, msg := storeFailure(se)
 				return nil, &applyFailure{
 					status: status, Message: msg,
 					Plan: plan.Entries, Applied: se.Applied,
@@ -155,6 +149,21 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		out.Body.Applied = true
 		return out, nil
 	})
+}
+
+// storeFailure is the status and message for a write that failed during Execute.
+func storeFailure(se *apply.StoreError) (int, string) {
+	status, msg := http.StatusInternalServerError, se.Error()
+	if me, ok := errors.AsType[*directory.ManagedError](se); ok {
+		status, msg = http.StatusConflict, managedMessage(me)
+	} else if errors.Is(se, directory.ErrStaleResourceVersion) {
+		status = http.StatusConflict
+	} else if errors.Is(se, authz.ErrForbidden) {
+		status = http.StatusForbidden
+	} else if _, ok := errors.AsType[*hostkey.ValueRefusedError](se); ok {
+		status = http.StatusBadRequest
+	}
+	return status, msg
 }
 
 // planFailure maps a Plan error to the response. A row or reference the

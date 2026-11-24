@@ -27,9 +27,10 @@ const catalogSeedLock int64 = 0x52454C41595F5345
 
 func catalogBootOptions(cfg *config.Config, st *storagemod.Storage) appcatalog.BootstrapOptions {
 	bootOpts := appcatalog.BootstrapOptions{
-		Pool:           st.Pool(),
-		MasterKey:      cfg.MasterKey,
-		MasterKeyExtra: cfg.MasterKeyExtra,
+		Pool:            st.Pool(),
+		MasterKey:       cfg.MasterKey,
+		MasterKeyExtra:  cfg.MasterKeyExtra,
+		OAuthTokenHosts: cfg.OAuthTokenHosts,
 		// Boot waits for a seed running on another pod, then re-reads the
 		// marker inside the lock; the follower skips the round instead.
 		SeedLock: func(ctx context.Context, fn func(context.Context) error) error {

@@ -29,6 +29,7 @@ import (
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/meta"
+	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	"github.com/wyolet/relay/secret"
 )
 
@@ -40,13 +41,24 @@ type Store struct {
 	q        *gen.Queries
 	resolver *secret.Registry
 	stored   *stored.Backend
+	oauth    ValuePreparer
+}
+
+// ValuePreparer checks a new oauth value and returns what to store; see pkg/secret/oauth.Resolver.PrepareValue.
+type ValuePreparer interface {
+	PrepareValue(ctx context.Context, id string, raw []byte) ([]byte, error)
 }
 
 // NewStore constructs a Store over db. Pass the shared secret Registry + the
 // stored backend (see app/secret.Wire); backend may be nil to run env-only.
+// New oauth values are checked by a resolver with the default exchange client
+// until UseOAuth names the one the registry resolves with.
 func NewStore(db storage.DB, resolver *secret.Registry, backend *stored.Backend) *Store {
-	return &Store{db: db, q: gen.New(db), resolver: resolver, stored: backend}
+	return &Store{db: db, q: gen.New(db), resolver: resolver, stored: backend, oauth: pkgoauth.NewResolver(nil, nil)}
 }
+
+// UseOAuth makes p check new oauth values.
+func (s *Store) UseOAuth(p ValuePreparer) { s.oauth = p }
 
 // SecretScope is the scope a key's stored value is sealed under: its owner.
 func SecretScope(o meta.Owner) string {
@@ -126,8 +138,15 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 		// value is kept, only moved to the owner's scope if the owner changed.
 		// It is the only way to edit an oauth key without re-supplying its
 		// token blob (its Resolved is the access token, not the stored blob).
-		if k.Spec.Value == "" && k.Resolved == "" && !keepValue {
+		if k.Spec.Value == "" && k.Resolved == "" && !keepValue && !k.KeepStoredValue {
 			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
+		}
+		if k.Spec.ValueFrom.Kind == ValueKindOAuth && k.Spec.Value != "" {
+			prepared, err := s.oauth.PrepareValue(ctx, k.Meta.ID, []byte(k.Spec.Value))
+			if err != nil {
+				return &ValueRefusedError{Err: err}
+			}
+			k.Spec.Value = string(prepared)
 		}
 		scope := SecretScope(k.Meta.Owner)
 		// The row and its value commit together, so a stale conditional write
@@ -149,6 +168,12 @@ func (s *Store) upsert(ctx context.Context, k *HostKey, keepValue bool) error {
 			}
 			if _, err := backend.CreateScoped(ctx, scope, k.Meta.ID, []byte(k.Spec.Value)); err != nil {
 				return fmt.Errorf("hostkey.Upsert store secret: %w", err)
+			}
+			// A new credential starts with no renewal history, so a revoked one is renewed again.
+			if k.Spec.ValueFrom.Kind == ValueKindOAuth {
+				if err := q.UpdateSecretStatus(ctx, gen.UpdateSecretStatusParams{ID: k.Meta.ID}); err != nil {
+					return fmt.Errorf("hostkey.Upsert clear status: %w", err)
+				}
 			}
 			return nil
 		})
@@ -293,8 +318,8 @@ func marshalSpec(s *Spec) ([]byte, error) {
 }
 
 // SetCredentialStatus persists the observed credential state on the
-// hostkey row (the refresher's renewed/revoked reports). A later value
-// update (operator re-auth) clears it — see UpdateSecretStored.
+// hostkey row (the refresher's renewed/revoked reports). A later write of a
+// new oauth value (operator re-auth) clears it.
 func (s *Store) SetCredentialStatus(ctx context.Context, id string, cs CredentialStatus) error {
 	st, err := json.Marshal(Status{Credential: &cs})
 	if err != nil {

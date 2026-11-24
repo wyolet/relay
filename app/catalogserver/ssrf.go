@@ -10,6 +10,8 @@ import (
 	"net/netip"
 	"net/url"
 	"time"
+
+	"github.com/wyolet/relay/pkg/publicaddr"
 )
 
 const (
@@ -17,33 +19,7 @@ const (
 	maxHookURL  = 2048
 )
 
-var errRefusedAddr = errors.New("address is not a public unicast address")
-
-// refusedPrefixes are the non-public ranges netip has no predicate for.
-var refusedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	// NAT64 embeds an IPv4 address the gateway would route to.
-	netip.MustParsePrefix("64:ff9b::/96"),
-	netip.MustParsePrefix("64:ff9b:1::/48"),
-}
-
-// refusedAddr reports whether a receiver at a is refused: loopback, RFC 1918,
-// link-local, CGNAT, IPv6 ULA, unspecified, multicast and reserved ranges.
-func refusedAddr(a netip.Addr) bool {
-	a = a.Unmap()
-	if !a.IsValid() || a.IsLoopback() || a.IsPrivate() || a.IsUnspecified() || a.IsMulticast() ||
-		a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsInterfaceLocalMulticast() {
-		return true
-	}
-	for _, p := range refusedPrefixes {
-		if p.Contains(a) {
-			return true
-		}
-	}
-	return false
-}
+var errRefusedAddr = publicaddr.ErrRefused
 
 type resolver interface {
 	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
@@ -59,7 +35,7 @@ type receiverPolicy struct {
 
 func (p receiverPolicy) refused(a netip.Addr) bool {
 	a = a.Unmap()
-	return refusedAddr(a) && !(p.allowLoopback && a.IsLoopback())
+	return publicaddr.Refused(a) && !(p.allowLoopback && a.IsLoopback())
 }
 
 // parseURL accepts an absolute https URL without credentials.
