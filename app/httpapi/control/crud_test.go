@@ -527,6 +527,14 @@ func TestCRUDCreate(t *testing.T) {
 	t.Run("an unknown spec field is a 422 naming it", func(t *testing.T) {
 		wantFieldError(t, scopeReq(t, h, "root", "POST", "/teams", `{"metadata":{"name":"capped"},"spec":{"budget":{"amount":"100"}}}`), "body.spec.budget", "unexpected property")
 	})
+	// Only create may omit spec: an update without it would store an empty spec and re-enable the team.
+	t.Run("an update needs spec, so a disabled team stays disabled", func(t *testing.T) {
+		got := decodeMeta(t, scopeReq(t, h, "root", "POST", "/teams", `{"metadata":{"name":"paused"},"spec":{"enabled":false}}`), 201)
+		wantFieldError(t, scopeReq(t, h, "root", "PUT", "/teams/by-id/"+got.ID, `{"metadata":{"name":"paused"}}`), "body", "expected required property spec to be present")
+		if tm := teams.items[got.ID]; tm == nil || tm.IsEnabled() {
+			t.Fatalf("team after a refused update = %+v, want it stored disabled", tm)
+		}
+	})
 }
 
 // An update keeps what the body may not change: the path id, the stored owner unless the body names another, and the detach mark. A stale version is the caller's conflict.
