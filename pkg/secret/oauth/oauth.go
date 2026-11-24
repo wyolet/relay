@@ -18,6 +18,7 @@ package oauth
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync"
 	"syscall"
 	"time"
 
@@ -58,9 +60,61 @@ type Resolver struct {
 	skew  time.Duration
 	// client carries every JWT-bearer exchange; see exchangeClient.
 	client *http.Client
+
+	failuresMu sync.Mutex
+	failures   map[string]exchangeFailure
 }
 
 var _ secret.Resolver = (*Resolver)(nil)
+
+// Reads resolve every key in turn and the token URL is caller-chosen, so a
+// failing JWT-bearer exchange is retried on reads only after a backoff, and
+// each read exchange is short.
+const (
+	firstBackoff = 30 * time.Second
+	maxBackoff   = 10 * time.Minute
+	readWait     = 5 * time.Second
+)
+
+// exchangeFailure is the last failed read exchange of one credential, as
+// stored in blob (a new value starts over).
+type exchangeFailure struct {
+	blob  [sha256.Size]byte
+	err   error
+	wait  time.Duration
+	until time.Time
+}
+
+// backedOff returns the remembered error while the credential stored as blob
+// is inside its backoff.
+func (r *Resolver) backedOff(id string, blob [sha256.Size]byte) error {
+	r.failuresMu.Lock()
+	defer r.failuresMu.Unlock()
+	f, ok := r.failures[id]
+	if !ok || f.blob != blob || !r.now().Before(f.until) {
+		return nil
+	}
+	return f.err
+}
+
+// recordExchange forgets the credential's failures on success and otherwise
+// doubles its backoff, from firstBackoff up to maxBackoff.
+func (r *Resolver) recordExchange(id string, blob [sha256.Size]byte, err error) {
+	r.failuresMu.Lock()
+	defer r.failuresMu.Unlock()
+	if err == nil {
+		delete(r.failures, id)
+		return
+	}
+	wait := firstBackoff
+	if f, ok := r.failures[id]; ok && f.blob == blob {
+		wait = min(2*f.wait, maxBackoff)
+	}
+	if r.failures == nil {
+		r.failures = map[string]exchangeFailure{}
+	}
+	r.failures[id] = exchangeFailure{blob: blob, err: err, wait: wait, until: r.now().Add(wait)}
+}
 
 // Option configures a Resolver.
 type Option func(*Resolver)
@@ -122,7 +176,7 @@ func (r *Resolver) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) 
 	if ref.Kind != secret.KindOAuth {
 		return nil, fmt.Errorf("secret/oauth: wrong kind %q", ref.Kind)
 	}
-	cred, err := r.load(ctx, ref.ID)
+	cred, _, err := r.load(ctx, ref.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -132,14 +186,24 @@ func (r *Resolver) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) 
 	v, err, _ := r.sf.Do(ref.ID, func() (any, error) {
 		// Re-load inside the flight: a concurrent refresh may have already
 		// written a fresh blob while we waited for the lock.
-		cur, err := r.load(ctx, ref.ID)
+		cur, blob, err := r.load(ctx, ref.ID)
 		if err != nil {
 			return nil, err
 		}
 		if r.valid(&cur.Token) {
 			return cur.AccessToken, nil
 		}
+		if cur.JWTBearer == nil {
+			access, _, err := r.refresh(ctx, ref, cur)
+			return access, err
+		}
+		if err := r.backedOff(ref.ID, blob); err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(ctx, readWait)
+		defer cancel()
 		access, _, err := r.refresh(ctx, ref, cur)
+		r.recordExchange(ref.ID, blob, err)
 		return access, err
 	})
 	if err != nil {
@@ -148,16 +212,17 @@ func (r *Resolver) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) 
 	return []byte(v.(string)), nil
 }
 
-func (r *Resolver) load(ctx context.Context, id string) (*sdkoauth.Credential, error) {
+// load reads the stored credential and the digest of its blob.
+func (r *Resolver) load(ctx context.Context, id string) (*sdkoauth.Credential, [sha256.Size]byte, error) {
 	raw, err := r.vault.Resolve(ctx, secret.Ref{Kind: secret.KindStored, ID: id})
 	if err != nil {
-		return nil, fmt.Errorf("secret/oauth: load %q: %w", id, err)
+		return nil, [sha256.Size]byte{}, fmt.Errorf("secret/oauth: load %q: %w", id, err)
 	}
 	var cred sdkoauth.Credential
 	if err := json.Unmarshal(raw, &cred); err != nil {
-		return nil, fmt.Errorf("secret/oauth: parse stored token %q: %w", id, err)
+		return nil, [sha256.Size]byte{}, fmt.Errorf("secret/oauth: parse stored token %q: %w", id, err)
 	}
-	return &cred, nil
+	return &cred, sha256.Sum256(raw), nil
 }
 
 func (r *Resolver) refresh(ctx context.Context, ref secret.Ref, cur *sdkoauth.Credential) (string, bool, error) {
@@ -222,7 +287,7 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 	due := func(tok *sdkoauth.Token) bool {
 		return !tok.Expiry.IsZero() && tok.Expiry.Before(r.now().Add(lead))
 	}
-	cred, err := r.load(ctx, ref.ID)
+	cred, _, err := r.load(ctx, ref.ID)
 	if err != nil {
 		return false, time.Time{}, err
 	}
@@ -234,7 +299,7 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 		expiry  time.Time
 	}
 	v, err, _ := r.sf.Do("renew:"+ref.ID, func() (any, error) {
-		cur, err := r.load(ctx, ref.ID)
+		cur, _, err := r.load(ctx, ref.ID)
 		if err != nil {
 			return renewed{}, err
 		}
