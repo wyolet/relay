@@ -36,7 +36,7 @@ In proxy mode `Authorization` belongs to the upstream, so the relay key goes in 
 
 | Header | Meaning |
 | --- | --- |
-| `X-Relay-Request-ID` | Set on every response: the id Relay generated for this request. It is the `request_id` for `GET /api/logs/{request_id}` on the control API. |
+| `X-Relay-Request-ID` | Set on every response: the id Relay generated for this request. It is the `request_id` for `GET /api/logs/{request_id}` on the control API. Control API responses carry one too, with `X-Request-ID` echoed the same way. |
 | `X-Request-ID` | Your `X-Request-ID`, echoed when you sent a valid one. |
 | `X-WR-Origin` | `relay` when Relay wrote the response, `upstream` when the status and body came from the provider. Use it to tell a relay-key `401` from a provider `401`. |
 | `X-WR-Upstream-Status` | On an error that reports an upstream failure: the provider's HTTP status. |
