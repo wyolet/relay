@@ -244,7 +244,7 @@ type serviceAccountKeyFile struct {
 // ParseCredential reads a stored or submitted credential in one of three
 // forms, told apart by its exact top-level members: the Credential shape
 // (jwtBearer), a token blob (access_token or refresh_token; nothing else in it
-// is decoded), or a service-account key file ("type": "service_account") with
+// is decoded), or a service-account key file (type service_account) with
 // an added scopes array. A JWT-bearer grant is validated; errors never include
 // the input.
 func ParseCredential(raw []byte) (*Credential, error) {
