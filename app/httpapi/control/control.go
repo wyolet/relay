@@ -26,6 +26,7 @@ import (
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/payloadlog"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
@@ -152,6 +153,12 @@ type Deps struct {
 	// PlanView returns the plan engine's current view: plan issues, the caller's accounts and their limits are read from it. nil answers the issues read with an empty list and the account reads 503.
 	PlanView func() *engine.View
 
+	// PlanCheck checks the rows of a pseudo object against PlanView before they are written. nil answers the pseudo routes 503.
+	PlanCheck *plan.Check
+
+	// PseudoKinds are the pseudo kinds whose routes are registered (RELAY_PSEUDO_KINDS: kind names such as agents, or all); the others have no route.
+	PseudoKinds []string
+
 	// Counters reads current counts for the limits reads; the data plane's limiter. nil answers them 503.
 	Counters CounterReader
 
@@ -264,6 +271,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerUsers(api, d, protect)
 	registerAccessReview(api, d, protect, rows)
 	registerSCIMClients(api, d, protect) // the /scim/v2 endpoint itself is MountSCIM, outside /api
+	registerPseudoKinds(api, d, protect)
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types
 	// deliberately don't carry (no huma tags in pkg/catalogkind/ratelimit). The spec is

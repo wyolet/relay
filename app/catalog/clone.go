@@ -26,6 +26,7 @@ func (s *Snapshot) clone() *Snapshot {
 		modelsByName:    copySliceMap(s.modelsByName),
 		snapshotsByName: shallowMap(s.snapshotsByName),
 		snapshotAliases: shallowMap(s.snapshotAliases),
+		unservedPins:    shallowMap(s.unservedPins),
 		aliasExact:      shallowMap(s.aliasExact),
 		// The reconciler filters this slice in place (deindexModelAliases),
 		// so the clone needs its own backing array.
@@ -51,6 +52,9 @@ func (s *Snapshot) clone() *Snapshot {
 		subjectsByKey: shallowMap(s.subjectsByKey),
 		// Replaced wholesale by the index helpers, never appended in place.
 		hashesByUser: shallowMap(s.hashesByUser),
+		// Replaced wholesale by the index helpers, never appended in place.
+		serviceAccountIDsByOwner: shallowMap(s.serviceAccountIDsByOwner),
+		serviceAccountOwners:     shallowMap(s.serviceAccountOwners),
 
 		tokenVersionByUser: shallowMap(s.tokenVersionByUser),
 		usersLoaded:        s.usersLoaded,
@@ -83,9 +87,9 @@ func (s *Snapshot) clone() *Snapshot {
 		projectsByName: shallowMap(s.projectsByName),
 		projectsByTeam: copySliceMap(s.projectsByTeam),
 
-		serviceAccountsByID:      shallowMap(s.serviceAccountsByID),
-		serviceAccountsByName:    shallowMap(s.serviceAccountsByName),
-		serviceAccountsByProject: copySliceMap(s.serviceAccountsByProject),
+		serviceAccountsByID:    shallowMap(s.serviceAccountsByID),
+		serviceAccountsByName:  shallowMap(s.serviceAccountsByName),
+		serviceAccountsByOwner: copySliceMap(s.serviceAccountsByOwner),
 
 		groupsByID:   shallowMap(s.groupsByID),
 		groupsByName: shallowMap(s.groupsByName),

@@ -65,8 +65,8 @@ func TestApplyCreatesEveryKindInDependencyOrder(t *testing.T) {
 	e := newEnv(t)
 	p := e.apply(t, bundle, manifest.Options{})
 	wantLines(t, actions(p), []string{
-		"create Team/platform", "create Project/search", "create ServiceAccount/indexer", "create Role/model-reader",
-		"create User/alice", "create User/bob", "create Group/eng", "create RoleBinding/search-readers",
+		"create Team/platform", "create Project/search", "create Role/model-reader",
+		"create User/alice", "create User/bob", "create ServiceAccount/indexer", "create Group/eng", "create RoleBinding/search-readers",
 	})
 	ctx := context.Background()
 	s := e.store.Stores()

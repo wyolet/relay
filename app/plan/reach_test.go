@@ -31,6 +31,24 @@ func TestReach_WithoutCallerPolicyServiceAccountReachesOwnScopesAndSystem(t *tes
 	}
 }
 
+// Without a caller policy a service account a team owns reaches the team's credentials and the system's, and nothing a project of the team or another team owns.
+func TestReach_WithoutCallerPolicyTeamServiceAccountReachesItsTeamAndSystem(t *testing.T) {
+	o := newOrg()
+	sys := o.w.Credential(o.host, nil, plantest.System, "sk-system")
+	tm := o.w.Credential(o.host, nil, ownedBy(meta.OwnerTeam, o.team.Meta.ID), "sk-team")
+	o.w.Credential(o.host, nil, ownedBy(meta.OwnerProject, o.proj.Meta.ID), "sk-project")
+	otherTeam := o.w.Team()
+	o.w.Credential(o.host, nil, ownedBy(meta.OwnerTeam, otherTeam.Meta.ID), "sk-other-team")
+	bot := o.w.TeamServiceAccount(o.team)
+	k := o.w.ServiceAccountKey(bot, "sk-bot")
+	cp := keyCaller(t, o.w.Load(t), k)
+
+	want := []string{tm.Meta.Name, sys.Meta.Name}
+	if got := routeCredentials(mustRoute(t, cp, "m1")); !slices.Equal(got, want) {
+		t.Fatalf("route reaches %v, want %v (team, system)", got, want)
+	}
+}
+
 // Without a caller policy a personal key reaches its user's own credentials and the system's, nothing another user or a team owns.
 func TestReach_WithoutCallerPolicyUserReachesOwnAndSystem(t *testing.T) {
 	o := newOrg()

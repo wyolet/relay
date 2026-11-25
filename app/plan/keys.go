@@ -279,9 +279,9 @@ func (c *controllers) laneIndex(tx *engine.Txn, _ string) error {
 	return nil
 }
 
-// HeldBy reports whether principal ("user:<id>" or "serviceaccount:<id>") may run requests in this lane: it holds the account, or owns the provider account.
+// HeldBy reports whether principal ("user:<id>" or "serviceaccount:<id>") may run requests in this lane: it holds the account, or owns the provider account no service account holds. A share made with a user's service account is that service account's, not the user's.
 func (p *CallerPlan) HeldBy(principal string) bool {
-	if p.Lane.IsProvider() {
+	if p.Lane.IsProvider() && p.Lane.Spec.Holder == nil {
 		return ownerRef(p.Lane.Meta.Owner) == principal
 	}
 	return p.Holder == principal

@@ -166,6 +166,12 @@ type Config struct {
 	// PlanResync is how often the plans are listed again from Postgres and compared with what they hold (RELAY_PLAN_RESYNC_S, default 600; 0 disables), the safety net for a catalog notification that never arrived. It publishes only when a row differs.
 	PlanResync time.Duration
 
+	// PlanCheckTimeout bounds how long the control plane checks a set of rows against the plans before writing it, the wait for another check included (RELAY_PLAN_CHECK_TIMEOUT_MS, default 5000); past it the write answers 503.
+	PlanCheckTimeout time.Duration
+
+	// PseudoKinds are the pseudo kinds whose control routes are served (RELAY_PSEUDO_KINDS: comma-separated kind names such as agents, or all; empty serves none), lowercased.
+	PseudoKinds []string
+
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
@@ -224,6 +230,11 @@ type Config struct {
 	// separated list of exact origin strings (no wildcards — credentialed
 	// CORS forbids them). Empty disables CORS entirely.
 	ControlAllowOrigins []string
+
+	// OAuthTokenHosts are the token URL hosts a service-account host key may
+	// name (RELAY_OAUTH_TOKEN_HOSTS): lowercase hostnames, matched exactly.
+	// Empty refuses service-account credentials.
+	OAuthTokenHosts []string
 
 	// UIDisable suppresses serving the embedded admin UI on the control
 	// listener (RELAY_UI_DISABLE=1). Off by default; the UI is same-origin
@@ -547,6 +558,16 @@ func Load() (*Config, error) {
 	} else {
 		cfg.PlanResync = time.Duration(v) * time.Second
 	}
+	if v, err := envPositiveInt("RELAY_PLAN_CHECK_TIMEOUT_MS", 5000); err != nil {
+		return nil, err
+	} else {
+		cfg.PlanCheckTimeout = time.Duration(v) * time.Millisecond
+	}
+	for _, k := range strings.Split(os.Getenv("RELAY_PSEUDO_KINDS"), ",") {
+		if t := strings.ToLower(strings.TrimSpace(k)); t != "" {
+			cfg.PseudoKinds = append(cfg.PseudoKinds, t)
+		}
+	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they take a floor of 0 rather than envPositiveInt.
 	if v, err := envIntMin("RELAY_STREAM_KEEPALIVE_S", 15, 0); err != nil {
@@ -638,8 +659,27 @@ func Load() (*Config, error) {
 			}
 		}
 	}
+	if err := loadOAuthTokenHosts(cfg); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
+}
+
+// loadOAuthTokenHosts reads RELAY_OAUTH_TOKEN_HOSTS: hostnames only, since a
+// match is on the token URL's exact hostname.
+func loadOAuthTokenHosts(cfg *Config) error {
+	for _, h := range strings.Split(os.Getenv("RELAY_OAUTH_TOKEN_HOSTS"), ",") {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if strings.ContainsAny(h, "/:@*[] \t") {
+			return fmt.Errorf("RELAY_OAUTH_TOKEN_HOSTS takes hostnames such as token.example.com, without scheme, port or wildcard, got %q", h)
+		}
+		cfg.OAuthTokenHosts = append(cfg.OAuthTokenHosts, h)
+	}
+	return nil
 }
 
 // multiUserOn reports whether the deprecated RELAY_MULTI_USER flag is set to

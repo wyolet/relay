@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // System group subjects every data-plane principal carries. They are not
@@ -28,12 +29,19 @@ func keySubjects(s *Snapshot, k *key.Key) []string {
 	return []string{SubjectAuthenticated}
 }
 
-// SubjectsForServiceAccount renders the subjects a service account acts under: its own, the all-accounts group, its project's group when the project is known, then the catch-all.
+// SubjectsForServiceAccount renders the subjects a service account acts under: its own, the all-accounts group, its owner's group when the owner is known (group:system:serviceaccounts:<project> for a project, group:system:serviceaccounts:team:<team> for a team; slugs carry no ':', so the two never collide; none for a user's), then the catch-all.
 func (s *Snapshot) SubjectsForServiceAccount(id string) []string {
 	subs := []string{"serviceaccount:" + id, SubjectServiceAccounts}
 	if sa, ok := s.serviceAccountsByID[id]; ok {
-		if p, ok := s.projectsByID[sa.Spec.ProjectID]; ok {
-			subs = append(subs, SubjectServiceAccounts+":"+p.Meta.Name)
+		switch o := sa.Meta.Owner; o.Kind {
+		case meta.OwnerProject:
+			if p, ok := s.projectsByID[o.ID]; ok {
+				subs = append(subs, SubjectServiceAccounts+":"+p.Meta.Name)
+			}
+		case meta.OwnerTeam:
+			if t, ok := s.teamsByID[o.ID]; ok {
+				subs = append(subs, SubjectServiceAccounts+":team:"+t.Meta.Name)
+			}
 		}
 	}
 	return append(subs, SubjectAuthenticated)

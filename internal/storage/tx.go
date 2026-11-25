@@ -54,6 +54,12 @@ func IsUniqueViolation(err error, constraint string) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == sqlstateUniqueViolation && pgErr.ConstraintName == constraint
 }
 
+// IsDuplicate reports whether err is Postgres refusing a write that would break any unique constraint or index.
+func IsDuplicate(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == sqlstateUniqueViolation
+}
+
 // sqlstateForeignKeyViolation is the SQLSTATE of a write a foreign key refused.
 const sqlstateForeignKeyViolation = "23503"
 

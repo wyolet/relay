@@ -22,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/ids"
@@ -201,6 +202,155 @@ func viewerFixture(t *testing.T) (cat *appcatalog.Catalog, viewer *actor.Actor, 
 		RoleBindings: []*rolebinding.RoleBinding{rb},
 	}.Load(t)
 	return cat, &actor.Actor{UserID: viewerUserID, Subjects: appcatalog.UserSubjects(viewerUserID, nil, nil)}, p1
+}
+
+// A user reads the traffic of the service accounts they own, their bots, by principal; another user does not.
+func TestScopeOf_UserServiceAccounts(t *testing.T) {
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: "alice-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}}
+	bot.StampOwner()
+	cat := catalogtest.Catalog{ServiceAccounts: []*serviceaccount.ServiceAccount{bot}}.Load(t)
+	botEvent := usagelog.Event{PrincipalKind: "serviceaccount", PrincipalID: bot.Meta.ID, LaneAccountID: ids.New()}
+	for who, want := range map[string]readScope{
+		"alice": {principalIDs: []string{"u-alice", bot.Meta.ID}},
+		"bob":   {principalIDs: []string{"u-bob"}},
+	} {
+		got, err := scopeOf(actor.WithActor(context.Background(), scopeActors[who]), testRBAC(), cat, "usage")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(want, got, cmp.AllowUnexported(readScope{}), cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("scope of %s (-want +got):\n%s", who, diff)
+		}
+		if got.allows(botEvent) != (who == "alice") {
+			t.Errorf("%s reads alice's bot's event: %v", who, got.allows(botEvent))
+		}
+	}
+}
+
+// A service account a team owns itself carries no project, so its traffic reads by principal: a reader at the team gets it, a reader at one of the team's projects does not.
+func TestScopeOf_TeamServiceAccounts(t *testing.T) {
+	builtins, err := role.Builtins()
+	if err != nil {
+		t.Fatalf("built-in roles: %v", err)
+	}
+	yes := true
+	roleID := map[string]string{}
+	for _, r := range builtins {
+		r.Meta.ID = ids.New()
+		r.Spec.Enabled = &yes
+		roleID[r.Meta.Name] = r.Meta.ID
+	}
+	teamID, p1, teamReader, projectReader := ids.New(), ids.New(), ids.New(), ids.New()
+	tm := &team.Team{Meta: meta.Metadata{ID: teamID, Name: "t1", Owner: meta.Global}, Spec: team.Spec{Enabled: &yes}}
+	proj := &project.Project{Meta: meta.Metadata{ID: p1, Name: "p1"}, Spec: project.Spec{TeamID: teamID, Enabled: &yes}}
+	proj.StampOwner()
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: "t1-bot", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}}
+	bot.StampOwner()
+	bind := func(scope meta.Owner, roleName, userID string) *rolebinding.RoleBinding {
+		b := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: ids.New(), Name: roleName + "-" + userID[len(userID)-6:]}}
+		b.Spec.RoleID, b.Spec.Scope, b.Spec.Enabled = roleID[roleName], scope, &yes
+		b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: userID}}
+		b.StampOwner()
+		return b
+	}
+	cat := catalogtest.Catalog{
+		Teams: []*team.Team{tm}, Projects: []*project.Project{proj}, ServiceAccounts: []*serviceaccount.ServiceAccount{bot}, Roles: builtins,
+		RoleBindings: []*rolebinding.RoleBinding{
+			bind(meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, "viewer", teamReader),
+			bind(meta.Owner{Kind: meta.OwnerProject, ID: p1}, "viewer", projectReader),
+		},
+	}.Load(t)
+	bound := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	botEvent := usagelog.Event{TeamID: teamID, PrincipalID: bot.Meta.ID, RelayKeyHash: "hash-bot"}
+
+	for _, tc := range []struct {
+		who      string
+		want     readScope
+		readsBot bool
+	}{
+		{teamReader, readScope{projectIDs: []string{p1}, principalIDs: []string{bot.Meta.ID, teamReader}}, true},
+		{projectReader, readScope{projectIDs: []string{p1}, principalIDs: []string{projectReader}}, false},
+	} {
+		who := &actor.Actor{UserID: tc.who, Subjects: appcatalog.UserSubjects(tc.who, nil, nil)}
+		got, err := scopeOf(actor.WithActor(context.Background(), who), bound, cat, "usage")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(readScope{}), cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("scope of %s (-want +got):\n%s", tc.who, diff)
+		}
+		if got.allows(botEvent) != tc.readsBot {
+			t.Errorf("reader %s reads the team service account's event: %v, want %v", tc.who, got.allows(botEvent), tc.readsBot)
+		}
+	}
+}
+
+// Disabling a team's or a user's service account leaves its past usage and logs to its readers, whether the snapshot loads it disabled or sees it disabled later; deleting one drops it.
+func TestScopeOf_DisabledServiceAccounts(t *testing.T) {
+	builtins, err := role.Builtins()
+	if err != nil {
+		t.Fatalf("built-in roles: %v", err)
+	}
+	yes, no := true, false
+	var teamAdminRole string
+	for _, r := range builtins {
+		r.Meta.ID = ids.New()
+		r.Spec.Enabled = &yes
+		if r.Meta.Name == "team-admin" {
+			teamAdminRole = r.Meta.ID
+		}
+	}
+	teamID, teamAdmin := ids.New(), ids.New()
+	ofTeam := meta.Owner{Kind: meta.OwnerTeam, ID: teamID}
+	tm := &team.Team{Meta: meta.Metadata{ID: teamID, Name: "t1", Owner: meta.Global}, Spec: team.Spec{Enabled: &yes}}
+	teamBot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: "t1-bot", Owner: ofTeam}, Spec: serviceaccount.Spec{Enabled: &yes}}
+	userBot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: "alice-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}, Spec: serviceaccount.Spec{Enabled: &no}}
+	for _, sa := range []*serviceaccount.ServiceAccount{teamBot, userBot} {
+		sa.StampOwner()
+	}
+	b := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: ids.New(), Name: "t1-admin"}}
+	b.Spec.RoleID, b.Spec.Scope, b.Spec.Enabled = teamAdminRole, ofTeam, &yes
+	b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: teamAdmin}}
+	b.StampOwner()
+	cat := catalogtest.Catalog{Teams: []*team.Team{tm}, ServiceAccounts: []*serviceaccount.ServiceAccount{teamBot, userBot}, Roles: builtins, RoleBindings: []*rolebinding.RoleBinding{b}}.Load(t)
+	disabled := *teamBot
+	disabled.Spec.Enabled = &no
+	if err := cat.ApplyServiceAccountUpsert(&disabled); err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Current().ServiceAccountsForTeam(teamID)) != 0 || len(cat.Current().ServiceAccountsForUser("u-alice")) != 0 {
+		t.Fatal("a disabled service account still serves")
+	}
+	bound := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	readers := map[string]*actor.Actor{
+		"the team's admin": {UserID: teamAdmin, Subjects: appcatalog.UserSubjects(teamAdmin, nil, nil)},
+		"the bot's user":   {UserID: "u-alice", Subjects: appcatalog.UserSubjects("u-alice", nil, nil)},
+	}
+	reads := func(who, kind string, sa *serviceaccount.ServiceAccount) bool {
+		t.Helper()
+		sc, err := scopeOf(actor.WithActor(context.Background(), readers[who]), bound, cat, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sc.allows(usagelog.Event{PrincipalKind: "serviceaccount", PrincipalID: sa.Meta.ID})
+	}
+	for _, kind := range []string{"usage", "logs"} {
+		if !reads("the team's admin", kind, teamBot) {
+			t.Errorf("%s: the team's admin cannot read the disabled team service account", kind)
+		}
+		if !reads("the bot's user", kind, userBot) {
+			t.Errorf("%s: the user cannot read their disabled service account", kind)
+		}
+		if reads("the bot's user", kind, teamBot) || reads("the team's admin", kind, userBot) {
+			t.Errorf("%s: a reader reads a service account that is not theirs", kind)
+		}
+	}
+	if err := cat.ApplyServiceAccountDelete(userBot.Meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	if reads("the bot's user", "usage", userBot) {
+		t.Error("the user still reads a deleted service account")
+	}
 }
 
 // A caller reads the whole stream only with a grant at the global scope. Otherwise the scope is the projects a binding lets them read, their own principal, and their own key hashes, so their traffic stays theirs across a key rotation and for events that carry a hash alone.

@@ -1,11 +1,13 @@
 package catalog
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Team returns the enabled Team with this id, or false.
@@ -73,7 +75,61 @@ func (s *Snapshot) ServiceAccountByName(name string) (*serviceaccount.ServiceAcc
 // ServiceAccountsForProject returns the project's accounts, sorted by name.
 // The returned slice must not be mutated.
 func (s *Snapshot) ServiceAccountsForProject(projectID string) []*serviceaccount.ServiceAccount {
-	return s.serviceAccountsByProject[projectID]
+	return s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerProject, ID: projectID}]
+}
+
+// ServiceAccountsForTeam returns the accounts the team owns itself, not
+// those of its projects, sorted by name. The returned slice must not be
+// mutated.
+func (s *Snapshot) ServiceAccountsForTeam(teamID string) []*serviceaccount.ServiceAccount {
+	return s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerTeam, ID: teamID}]
+}
+
+// ServiceAccountsForUser returns the accounts the user owns, their personal
+// bots, sorted by name. The returned slice must not be mutated.
+func (s *Snapshot) ServiceAccountsForUser(userID string) []*serviceaccount.ServiceAccount {
+	return s.serviceAccountsByOwner[meta.Owner{Kind: meta.OwnerUser, ID: userID}]
+}
+
+// ServiceAccountIDsOwnedBy returns the ids of the service accounts a team or a user owns, disabled ones included, sorted: whose traffic the owner's usage readers read. The returned slice must not be mutated.
+func (s *Snapshot) ServiceAccountIDsOwnedBy(owner meta.Owner) []string {
+	return s.serviceAccountIDsByOwner[owner]
+}
+
+// indexServiceAccountOwner records sa under its owner when a team or a user owns it, whether or not it is enabled.
+func (s *Snapshot) indexServiceAccountOwner(sa *serviceaccount.ServiceAccount) {
+	owner, id := sa.Meta.Owner, sa.Meta.ID
+	if owner.Kind != meta.OwnerTeam && owner.Kind != meta.OwnerUser {
+		return
+	}
+	if prev, ok := s.serviceAccountOwners[id]; ok {
+		if prev == owner {
+			return
+		}
+		s.dropServiceAccountOwner(id)
+	}
+	if s.serviceAccountOwners == nil {
+		s.serviceAccountIDsByOwner, s.serviceAccountOwners = map[meta.Owner][]string{}, map[string]meta.Owner{}
+	}
+	have := s.serviceAccountIDsByOwner[owner]
+	at, _ := slices.BinarySearch(have, id)
+	s.serviceAccountIDsByOwner[owner] = slices.Insert(slices.Clone(have), at, id)
+	s.serviceAccountOwners[id] = owner
+}
+
+// dropServiceAccountOwner removes a deleted service account from its owner's ids.
+func (s *Snapshot) dropServiceAccountOwner(id string) {
+	owner, ok := s.serviceAccountOwners[id]
+	if !ok {
+		return
+	}
+	delete(s.serviceAccountOwners, id)
+	rest := slices.DeleteFunc(slices.Clone(s.serviceAccountIDsByOwner[owner]), func(have string) bool { return have == id })
+	if len(rest) == 0 {
+		delete(s.serviceAccountIDsByOwner, owner)
+		return
+	}
+	s.serviceAccountIDsByOwner[owner] = rest
 }
 
 // AllServiceAccounts returns every ServiceAccount in the snapshot, sorted by slug.

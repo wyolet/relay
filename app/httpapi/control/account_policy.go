@@ -25,7 +25,7 @@ import (
 type setAccountPolicyInput struct {
 	Ref  string `path:"ref" doc:"Slug or id of the account."`
 	Body struct {
-		PolicyID *string `json:"policyId" doc:"Id of the policy to bind the account to; null unbinds it."`
+		PolicyID *string `json:"policyId" doc:"Id of the policy to bind the account to; null unbinds it. An empty string is refused."`
 	}
 }
 
@@ -52,6 +52,9 @@ func registerAccountPolicy(api huma.API, d Deps, protect huma.Middlewares) {
 		Errors:      []int{400, 401, 403, 404, 500},
 		Responses:   map[string]*huma.Response{"409": conflictResponse(api, "conflict: another change touched the account's binding at the same time, retry; duplicate_binding: another binding took the account first.")},
 	}, func(ctx context.Context, in *setAccountPolicyInput) (*accountPolicyOutput, error) {
+		if in.Body.PolicyID != nil && *in.Body.PolicyID == "" {
+			return nil, huma.Error400BadRequest("policyId is empty: send a policy id, or null to unbind the account")
+		}
 		return d.setAccountPolicy(ctx, in.Ref, in.Body.PolicyID)
 	})
 }
@@ -213,6 +216,11 @@ func (d Deps) createAccountBinding(ctx context.Context, acc *account.Account, po
 		Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{acc.Meta.ID}},
 	}
 	b.Meta.Name = slug.Unique(slug.From(name+"-"+acc.Meta.Name), slugTakenFn(d.Stores.PolicyBinding, pbmeta))
+	return d.createBinding(ctx, b)
+}
+
+// createBinding runs the checks POST /policy-bindings runs on b, which has its id, name and owner, and writes it.
+func (d Deps) createBinding(ctx context.Context, b *policybinding.PolicyBinding) (*policybinding.PolicyBinding, audit.Row, error) {
 	checks := policyBindingChecks(d)
 	if err := checks.guarded(ctx, "create", nil, b); err != nil {
 		return nil, audit.Row{}, err

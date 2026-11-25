@@ -42,6 +42,7 @@ func dependentRows() Rows {
 	}
 	r.ServiceAccounts = []*serviceaccount.ServiceAccount{
 		{Meta: meta.Metadata{ID: "sa-p", Name: "sa-p", Owner: p}, Spec: serviceaccount.Spec{ProjectID: "p"}},
+		{Meta: meta.Metadata{ID: "sa-t", Name: "sa-t", Owner: tm}, Spec: serviceaccount.Spec{TeamID: "t"}},
 		{Meta: meta.Metadata{ID: "sa-other", Name: "sa-other", Owner: other}, Spec: serviceaccount.Spec{ProjectID: "other"}},
 	}
 	r.Keys = append(r.Keys, &key.Key{Meta: meta.Metadata{ID: "key-p", Name: "key-p", Owner: p}, Spec: key.Spec{AccountID: "caller-p"}})
@@ -74,9 +75,12 @@ func TestDependents(t *testing.T) {
 			func(kind, _ string) bool { return kind != "Budget" }, func(string, meta.Metadata) bool { return false }, "", 1},
 		{"a project with nothing under it", func(g Gone, v Visible) ([]string, int) { return r.Dependents("empty", g, v) }, nil, nil, "", 0},
 		{"team", func(g Gone, v Visible) ([]string, int) { return r.TeamDependents("t", projects, g, v) }, nil, nil,
+			"Project/p ServiceAccount/sa-t Policy/policy-t HostKey/hostkey-t RateLimit/ratelimit-t Account/provider-t Key/lane-t Pool/pool-t Budget/budget-t PolicyBinding/binding-t", 0},
+		{"team, its service account going in the same operation", func(g Gone, v Visible) ([]string, int) { return r.TeamDependents("t", projects, g, v) },
+			func(kind, id string) bool { return kind == "ServiceAccount" && id == "sa-t" }, nil,
 			"Project/p Policy/policy-t HostKey/hostkey-t RateLimit/ratelimit-t Account/provider-t Key/lane-t Pool/pool-t Budget/budget-t PolicyBinding/binding-t", 0},
 		{"team, its project going and the rest hidden", func(g Gone, v Visible) ([]string, int) { return r.TeamDependents("t", projects, g, v) },
-			func(kind, id string) bool { return kind == "Project" && id == "p" }, func(string, meta.Metadata) bool { return false }, "", 8},
+			func(kind, id string) bool { return kind == "Project" && id == "p" }, func(string, meta.Metadata) bool { return false }, "", 9},
 	} {
 		named, hidden := tc.run(tc.gone, tc.visible)
 		if diff := cmp.Diff(strings.Fields(tc.want), named, cmpEmptyNil); diff != "" || hidden != tc.wantHidden {

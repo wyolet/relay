@@ -16,7 +16,8 @@
         },
         {
           "type": "input_file",
-          "file_url": "https://example.com/q3.pdf"
+          "file_url": "https://example.com/q3.pdf",
+          "media_type": "application/pdf"
         }
       ]
     }

@@ -103,16 +103,33 @@ func mergeAccountServerFields(existing, incoming *account.Account) {
 	}
 }
 
-// guardKeyAccount checks a key's lane when an update changes it.
+// guardKeyAccount refuses an update that moves a key to an owner other than its principal's, and checks a key's lane when an update changes it.
 func guardKeyAccount(d Deps) mutationGuard[key.Key] {
 	return func(ctx context.Context, action string, existing, incoming *key.Key) error {
-		if action != "update" || incoming.Spec.AccountID == existing.Spec.AccountID {
+		if action != "update" {
+			return nil
+		}
+		if incoming.Meta.Owner != existing.Meta.Owner {
+			if err := refs(d).KeyOwnedByPrincipal(ctx, incoming); err != nil {
+				return refErr(err)
+			}
+		}
+		if incoming.Spec.AccountID == existing.Spec.AccountID {
 			return nil
 		}
 		if err := refs(d).KeyAccount(ctx, incoming); err != nil {
 			return refErr(err)
 		}
 		return nil
+	}
+}
+
+// poolChecks are the checks the pools routes run; a pool takes its defaults before it is validated.
+func poolChecks(d Deps) kindChecks[pool.Pool] {
+	return kindChecks[pool.Pool]{
+		plural: "pools", singular: "pool", authz: d.Authz, gov: d.Catalog,
+		validate: func(p *pool.Pool) error { p.Default(); return p.Validate() },
+		guard:    guardPool(d),
 	}
 }
 
@@ -134,6 +151,15 @@ func guardPool(d Deps) mutationGuard[pool.Pool] {
 		return refuseStrandingMove(ctx, d, "pool", incoming.Meta.ID, incoming.Meta.Name, incoming.Meta.Owner, func(it referenceItem) bool {
 			return it.Kind == "policy" && c.PoolRefs(ctx, []string{incoming.Meta.ID}, it.owner) == nil
 		})
+	}
+}
+
+// budgetChecks are the checks the budgets routes run; a budget takes its defaults before it is validated.
+func budgetChecks(d Deps) kindChecks[budget.Budget] {
+	return kindChecks[budget.Budget]{
+		plural: "budgets", singular: "budget", authz: d.Authz, gov: d.Catalog,
+		validate: func(b *budget.Budget) error { b.Default(); return b.Validate() },
+		guard:    guardBudgetUpdate(d),
 	}
 }
 

@@ -19,20 +19,28 @@ Relay keys and host keys never meet on the wire: a caller presents a relay key, 
 Tenancy has three levels:
 
 - A **team** is the outer scope. It has no member list: a user belongs to a team through a role binding at team scope.
-- A **project** belongs to one team. Policies, policy bindings, rate limits, budgets, host keys, accounts, pools, service accounts and service-account keys can be owned by a project. A team can own policies, policy bindings, rate limits, budgets, host keys, accounts and pools.
-- A **principal** is who a request acts as: a **user** (a person, from local config, [SSO](/concepts/sso) or [SCIM](/concepts/scim)) or a **service account** (a machine principal that lives in one project).
+- A **project** belongs to one team. Policies, policy bindings, rate limits, budgets, host keys, accounts, pools, service accounts and service-account keys can be owned by a project. A team can own the same kinds directly, with no project in between.
+- A **principal** is who a request acts as: a **user** (a person, from local config, [SSO](/concepts/sso) or [SCIM](/concepts/scim)) or a **service account** (a machine principal owned by one project, by one team directly, or by one user as their personal bot).
 
 Principals act and hold roles. What policies bind to and what usage is charged to is an [account](/concepts/accounts): each team and project has one, a service account has one, and a user has a personal account plus a member account for each team or project they belong to.
 
 A relay key is a credential of one principal, named in `spec.principal` (`{kind: serviceaccount | user, ...}`), and runs in one of that principal's accounts by default, named in `spec.accountId`. Rotating, revoking or deleting a key leaves the principal and its accounts untouched.
 
-- A **service account's key** runs in the service account's account, inside its project and team.
+- A **service account's key** runs in the service account's account, inside its project and team, inside its team alone when the team owns it, or under its owner's personal account when a user owns it.
 - A **user's key** runs in the user's personal account unless it is created in one of the user's member accounts or personal provider accounts.
 - An **inference token** is minted for a user in one project and runs in the user's member account there.
 
 Keys and tokens hold no policy. A request is governed by the [policy ladder](/concepts/policies#the-ladder): the policies bound to the team's account, the project's account and the request's own account on the caller side, and to each host key's provider account on the upstream side. A request can switch to another account its credential may use; see [Lanes](/concepts/accounts#lanes). An account with no policy on its ladder still reaches the host keys its scopes own; see [Reach without a linking rung](/concepts/policies#reach-without-a-linking-rung).
 
 Teams, projects, service accounts, keys and bindings are ordinary resources: create them through the [control API](/reference/control-api) or declare them as manifests and [apply them from git](/concepts/gitops).
+
+A service account's owner is set when it is created and never changes. Set `metadata.owner` to `{kind: project, id}`, `{kind: team, id}` or `{kind: user}`; a body that sets only `spec.projectId` is owned by that project. `spec.projectId`, or the read-only `spec.teamId` or `spec.userId`, repeats the owner. To move a service account to another owner, create a new one there. A team cannot be deleted while it owns a service account (`409 resource_in_use`), the same as while it holds projects.
+
+### Personal bots
+
+A user may own service accounts of their own: `metadata.owner: {kind: user}` makes the caller the owner. Another user's id is refused unless the admin token writes it. A user's service account, its account and its keys are the user's personal rows: the user holds every verb on them, and other users reach them only through a binding at the global scope, as with every personal row. A key of the service account is created and rotated only by its user or an admin; anyone else, a global binding included, gets `403`, as for a key of the user's own. Its group subjects are `system:serviceaccounts` and `system:authenticated`; it is in no owner group.
+
+Its key climbs the owner's personal account, then its own: the policy bound to the personal account governs the user's bots too. For counting, a user and all their bots are one lane, the personal account: a rate limit or budget linked with `shared` off counts once for all of them, on every rung and on every provider account they reach, so creating, or deleting and creating again, a bot adds no allowance. The bot keeps its own lane for its policy, what it reaches and its usage rows. While the user's [personal accounts are turned off](/concepts/accounts#turning-personal-accounts-off), their service accounts' keys answer `403 personal_account_off`, and creating a key for one is refused the same way. A disabled user's service accounts answer `403 subject_disabled`. Deleting the user, through SCIM or the directory, deletes their service accounts with their accounts and keys.
 
 ## Relay keys
 
@@ -197,7 +205,7 @@ spec:
   subjects:
     - {kind: group, name: platform-eng}          # IdP or local group
     - {kind: user, name: alice}
-    - {kind: serviceaccount, name: ci-deployer}  # service account name; project inferred
+    - {kind: serviceaccount, name: ci-deployer}  # service account name; its owner is inferred
 ```
 
 A custom role, when the built-ins don't fit, needs a [license](/concepts/license) with `custom-roles`. Its name must not be a built-in role's name:
@@ -223,11 +231,11 @@ spec:
 
 ### Groups
 
-A binding names a group by name. The name is matched by a local `Group` row and by a group claim your identity provider asserts at sign-in; the two combine, so bindings keep working when you move from local groups to SSO. Three virtual groups always exist without a row: `system:authenticated`, `system:serviceaccounts`, and `system:serviceaccounts:<project>`. Changing a local group's `metadata.name` through the control API is refused with `409 resource_in_use` while a role or policy binding names the old name; remove the group from those bindings or point them at the new name first. Its `displayName` can change freely.
+A binding names a group by name. The name is matched by a local `Group` row and by a group claim your identity provider asserts at sign-in; the two combine, so bindings keep working when you move from local groups to SSO. Four virtual groups always exist without a row: `system:authenticated`, `system:serviceaccounts`, `system:serviceaccounts:<project>` for the service accounts a project owns, and `system:serviceaccounts:team:<team>` for those a team owns directly. Changing a local group's `metadata.name` through the control API is refused with `409 resource_in_use` while a role or policy binding names the old name; remove the group from those bindings or point them at the new name first. Its `displayName` can change freely.
 
 ### Reads
 
-List endpoints return only the rows the caller could `get`, and a row they may not see answers `404`, not `403`, so its existence is not revealed. Usage and request logs narrow the same way: a caller with a global binding reads every event; everyone else reads the events of the projects they can see and the events their own keys produced.
+List endpoints return only the rows the caller could `get`, and a row they may not see answers `404`, not `403`, so its existence is not revealed. Usage and request logs narrow the same way: a caller with a global binding reads every event; everyone else reads the events of the projects they can see, of the service accounts the teams they can see own directly and of the service accounts they own, disabled ones included, and the events their own keys produced.
 
 ### Checking access
 

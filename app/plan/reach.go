@@ -1,10 +1,14 @@
-// What an account's lane may use, worked out by the caller fold and route fill the request path runs, so a preview cannot drift from routing. The fold reads the published plans, optionally with one rung's policy replaced by a draft or by a saved policy read as if bound there; nothing is written and no plan is replaced.
+// What an account's lane may use, worked out by the caller fold and the route fill the request path runs for each snapshot name a request can send, so a preview cannot drift from routing. The fold reads the published plans, optionally with one rung's policy replaced by a draft or by a saved policy read as if bound there; nothing is written and no plan is replaced.
 
 package plan
 
 import (
+	"slices"
+
 	"github.com/wyolet/relay/app/account"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
@@ -30,7 +34,7 @@ type Reach struct {
 	Dropped []DroppedLink
 }
 
-// ModelReach is one model and how the lane reaches it, or, with Refused set, why it does not.
+// ModelReach is one model and how the lane reaches it through any of its snapshot names, or, with Refused set, why none of them reaches anything: the pointer snapshot's refusal, or model_not_found for a model with no snapshot.
 type ModelReach struct {
 	Model    *model.Model
 	Provider *provider.Provider
@@ -39,9 +43,42 @@ type ModelReach struct {
 	// Hosts serve it for the lane, in failover order; for an excluded model, the reached hosts that bind it.
 	Hosts []*host.Host
 	// Via is what brings it, hop by hop: the pool (nil for a key reached by ownership) and the account each key draws on.
-	Via      []ReachVia
-	Upstream []UpstreamCheck
-	Refused  *Refusal
+	Via []ReachVia
+	// Snapshots are the route fill's answer for each of the model's snapshot names.
+	Snapshots []SnapshotReach
+	Upstream  []UpstreamCheck
+	Refused   *Refusal
+}
+
+// SnapshotReach is where a request naming one snapshot goes: the hosts and what brings them, or, with Refused set, why it is refused. Aliases are the model's declared exact aliases that resolve to the snapshot.
+type SnapshotReach struct {
+	Name    string
+	Aliases []string
+	Hosts   []*host.Host
+	Via     []ReachVia
+	Refused *Refusal
+}
+
+// SnapshotsAt names the snapshots whose requests h serves.
+func (m *ModelReach) SnapshotsAt(h *host.Host) []string {
+	var out []string
+	for _, s := range m.Snapshots {
+		if containsHost(s.Hosts, h) {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
+// SnapshotsVia names the snapshots whose requests v brings.
+func (m *ModelReach) SnapshotsVia(v ReachVia) []string {
+	var out []string
+	for _, s := range m.Snapshots {
+		if containsVia(s.Via, v) {
+			out = append(out, s.Name)
+		}
+	}
+	return out
 }
 
 // ReachVia is one pool and account a model is reached through; either may be nil.
@@ -136,7 +173,7 @@ func overridePolicy(v *engine.View, p *policy.Policy) *ExpandedPolicy {
 // foldFor folds acc's ladder as callerPlan does, from r, with over standing in for one rung's policy; nil when acc heads no ladder.
 func foldFor[R *engine.Txn | *engine.View](r R, acc *account.Account, over *rungOverride) *CallerPlan {
 	switch acc.DerivedKind() {
-	case account.KindPersonal, account.KindProvider:
+	case account.KindPersonal, account.KindProvider, account.KindService:
 		if off := personalAccountOff(r, acc.Meta.Owner); off != nil {
 			return refusedPlan(acc, personalOffRefusal(off, accountSubject(acc.Meta.ID)))
 		}
@@ -165,7 +202,7 @@ func foldSystem[R *engine.Txn | *engine.View](r R, over *rungOverride) *CallerPl
 	return cp
 }
 
-// walkReach runs the route fill for every model bound at a host the lane's pools are at.
+// walkReach runs the route fill for each snapshot of every model bound at a host the lane's pools are at.
 func walkReach(cp *CallerPlan, acc *account.Account) *Reach {
 	out := &Reach{Account: acc, Refused: cp.Refused}
 	if cp.Refused != nil || cp.Routes.idx == nil {
@@ -211,32 +248,105 @@ func boundAt(idx *CatalogIndex, m *model.Model, hosts map[string]bool) bool {
 	return false
 }
 
-// reachModel is the route fill's answer for m in this lane, with what brings it and each upstream account's verdict.
+// reachModel is the route fill's answer for each snapshot of m in this lane, with what brings it and each upstream account's verdict. The model's hosts and ways are those of its snapshots, in the lane's pool order.
 func (cp *CallerPlan) reachModel(m *model.Model) ModelReach {
 	snap := cp.Routes.idx.Snap
 	mr := ModelReach{Model: m}
 	if p, ok := snap.Provider(m.Meta.Owner.ID); ok {
 		mr.Provider = p
 	}
-	route := cp.Routes.route([]*model.Model{m}, nil, "")
-	mr.Refused = route.Refused
-	for i := range route.Hops {
-		hop := &route.Hops[i]
-		if !containsHost(mr.Hosts, hop.Host) {
-			mr.Hosts = append(mr.Hosts, hop.Host)
+	pointer := m.PointerSnapshot()
+	aliases := aliasesBySnapshot(snap, m)
+	hopAt := map[*PoolPlan]*RouteHop{}
+	for i, route := range cp.Routes.snapshotRoutes(m) {
+		sn := &m.Spec.Snapshots[i]
+		sr := SnapshotReach{Name: sn.Name, Aliases: aliases[sn.Name], Refused: route.Refused}
+		for j := range route.Hops {
+			hop := &route.Hops[j]
+			hopAt[hop.Pool] = hop
+			sr.Hosts, sr.Via = addHop(sr.Hosts, sr.Via, hop)
 		}
-		for _, s := range hop.Slots {
-			v := ReachVia{Pool: hop.Pool.Pool, Account: drawsOnAccount(s)}
-			if !containsVia(mr.Via, v) {
-				mr.Via = append(mr.Via, v)
-			}
+		if route.Refused != nil && (mr.Refused == nil || sn == pointer) {
+			mr.Refused = route.Refused
 		}
+		mr.Snapshots = append(mr.Snapshots, sr)
+	}
+	for _, p := range cp.Pools {
+		if hop := hopAt[p]; hop != nil {
+			mr.Hosts, mr.Via = addHop(mr.Hosts, mr.Via, hop)
+		}
+	}
+	switch {
+	case len(mr.Hosts) > 0:
+		mr.Refused = nil
+	case len(m.Spec.Snapshots) == 0:
+		mr.Refused = &Refusal{Code: CodeModelNotFound, Message: "model " + m.Meta.Name + " has no snapshot a request can name"}
 	}
 	mr.Upstream = cp.upstreamChecks(m)
 	return mr
 }
 
-// upstreamChecks asks each provider account whose keys sit in the lane's pools at a host serving m whether its tier lets m through, as the route fill does per key.
+// snapshotRoutes is the route fill's answer for each of m's snapshots, in snapshot order. While no binding of m lists snapshots every name gets the same answer, so the fill runs once and the answer is shared.
+func (t *RouteTable) snapshotRoutes(m *model.Model) []*Route {
+	narrowed := slices.ContainsFunc(t.idx.Snap.BindingsForModel(m.Meta.ID), func(b *binding.Binding) bool { return len(b.Spec.Snapshots) > 0 })
+	out := make([]*Route, len(m.Spec.Snapshots))
+	for i := range m.Spec.Snapshots {
+		switch {
+		case narrowed:
+			out[i] = t.route([]*model.Model{m}, &m.Spec.Snapshots[i], "")
+		case i == 0:
+			out[i] = t.route([]*model.Model{m}, nil, "")
+		default:
+			out[i] = out[0]
+		}
+	}
+	return out
+}
+
+// aliasesBySnapshot maps the snapshots of m to its declared exact aliases that resolve to them, as a request naming the alias resolves; an alias a catalog name or another model's alias shadows is left out.
+func aliasesBySnapshot(snap *appcatalog.Snapshot, m *model.Model) map[string][]string {
+	var out map[string][]string
+	for _, a := range m.Spec.Aliases {
+		if _, _, pattern := model.AliasPattern(a); pattern {
+			continue
+		}
+		res := snap.ResolveModelRef(a)
+		if res.Alias == nil || res.Models[0].Meta.ID != m.Meta.ID {
+			continue
+		}
+		if out == nil {
+			out = map[string][]string{}
+		}
+		out[res.Snapshot.Name] = append(out[res.Snapshot.Name], a)
+	}
+	return out
+}
+
+// addHop adds the hop's host and the pool and account each of its keys draws on, those not listed yet.
+func addHop(hosts []*host.Host, via []ReachVia, hop *RouteHop) ([]*host.Host, []ReachVia) {
+	if !containsHost(hosts, hop.Host) {
+		hosts = append(hosts, hop.Host)
+	}
+	for _, s := range hop.Slots {
+		v := ReachVia{Pool: hop.Pool.Pool, Account: drawsOnAccount(s)}
+		if !containsVia(via, v) {
+			via = append(via, v)
+		}
+	}
+	return hosts, via
+}
+
+// servesSnapshotOf reports whether b serves one of m's snapshots, so that a request naming it can route through b.
+func servesSnapshotOf(b *binding.Binding, m *model.Model) bool {
+	for _, s := range m.Spec.Snapshots {
+		if b.Serves(s.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+// upstreamChecks asks each provider account whose keys sit in the lane's pools at a host serving a snapshot of m whether its tier lets m through, as the route fill does per key.
 func (cp *CallerPlan) upstreamChecks(m *model.Model) []UpstreamCheck {
 	snap := cp.Routes.idx.Snap
 	prov, _ := snap.ProviderSlug(m.Meta.Owner.ID)
@@ -244,7 +354,7 @@ func (cp *CallerPlan) upstreamChecks(m *model.Model) []UpstreamCheck {
 	seen := map[[2]string]bool{}
 	for _, b := range snap.BindingsForModel(m.Meta.ID) {
 		h, ok := snap.Host(b.Spec.HostID)
-		if !b.IsEnabled() || !ok || !servesRequests(h) {
+		if !b.IsEnabled() || !ok || !servesRequests(h) || !servesSnapshotOf(b, m) {
 			continue
 		}
 		_, priced := snap.PricingForBinding(b)

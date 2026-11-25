@@ -6,6 +6,7 @@ package authz_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
@@ -14,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -32,6 +34,7 @@ var (
 	carolID, daveID = ids.New(), ids.New()
 	erinID, frankID = ids.New(), ids.New()
 	ginaID, sa1ID   = ids.New(), ids.New()
+	halID           = ids.New()
 
 	globalScope = meta.Owner{Kind: meta.OwnerSystem}
 	yes         = true
@@ -134,6 +137,7 @@ func newFixture(t *testing.T) *catalog.Catalog {
 			mkBinding("ml-project-admin", roleID["project-admin"], projectScope(p2ID), groupSubject("ml")),
 			mkBinding("sa1-developer", roleID["developer"], projectScope(p1ID), saSubject(sa1ID)),
 			mkBinding("gina-project-admin", roleID["project-admin"], projectScope(p4ID), userSubject(ginaID)),
+			mkBinding("hal-global-developer", roleID["developer"], globalScope, userSubject(halID)),
 		},
 	}.Load(t)
 }
@@ -221,6 +225,68 @@ func TestRBACTable(t *testing.T) {
 	}
 	if rbac.Visible(ctxOf(bob), "usage", "", *projectOwner(p2ID)) {
 		t.Error("bob sees a sibling project's usage")
+	}
+}
+
+// A user's service account, its account and its keys are the user's personal rows: the user holds every verb on them, and no other user does through a team or project role, the team admin included; the admin token and a global admin do. A role at the global scope reaches them as it reaches every personal row, but minting or rotating a key of the service account stays with its user and an admin.
+func TestRBACUserServiceAccountRows(t *testing.T) {
+	cat := newFixture(t)
+	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	bobs := userOwner(bobID)
+	bob := actorOf(bobID, subjectsOf(bobID))
+	others := map[string]*actor.Actor{
+		"a team admin":   actorOf(aliceID, subjectsOf(aliceID)),
+		"a team viewer":  actorOf(carolID, subjectsOf(carolID)),
+		"a group admin":  actorOf(frankID, subjectsOf(frankID, "ml")),
+		"a stranger":     actorOf(ids.New(), subjectsOf(ids.New())),
+		"a service acct": actorOf(sa1ID, []string{"serviceaccount:" + sa1ID, catalog.SubjectServiceAccounts, catalog.SubjectAuthenticated}),
+	}
+	for _, kind := range []string{"service-accounts", "accounts", "keys"} {
+		res := authz.Resource{Kind: strings.TrimSuffix(kind, "s"), Owner: bobs}
+		for _, verb := range []string{"get", "list", "create", "update", "delete"} {
+			if err := rbac.Authorize(ctxOf(bob), kind+"."+verb, res); err != nil {
+				t.Errorf("owner %s.%s = %v, want allowed", kind, verb, err)
+			}
+			for name, who := range others {
+				if err := rbac.Authorize(ctxOf(who), kind+"."+verb, res); !errors.Is(err, authz.ErrForbidden) {
+					t.Errorf("%s %s.%s = %v, want forbidden", name, kind, verb, err)
+				}
+			}
+			for name, who := range map[string]*actor.Actor{"the admin token": {AdminToken: true}, "an admin": actorOf(ids.New(), nil, user.RoleAdmin)} {
+				if err := rbac.Authorize(ctxOf(who), kind+"."+verb, res); err != nil {
+					t.Errorf("%s %s.%s = %v, want allowed", name, kind, verb, err)
+				}
+			}
+		}
+		if rbac.Visible(ctxOf(others["a team admin"]), strings.TrimSuffix(kind, "s"), "", *bobs) {
+			t.Errorf("a team admin sees a %s of another user", kind)
+		}
+	}
+
+	hal := actorOf(halID, subjectsOf(halID))
+	for _, tc := range []struct {
+		action string
+		want   error
+	}{
+		{"service-accounts.get", nil}, {"service-accounts.update", nil}, {"service-accounts.delete", nil},
+		{"keys.get", nil}, {"keys.create", nil}, {"keys.rotate", nil}, {"keys.delete", nil},
+		{"accounts.get", nil}, {"accounts.update", authz.ErrForbidden},
+	} {
+		kind := strings.TrimSuffix(strings.Split(tc.action, ".")[0], "s")
+		if err := rbac.Authorize(ctxOf(hal), tc.action, authz.Resource{Kind: kind, Owner: bobs}); !errors.Is(err, tc.want) {
+			t.Errorf("a global developer %s = %v, want %v", tc.action, err, tc.want)
+		}
+	}
+	mint := refcheck.Checker{Authz: rbac}
+	for name, who := range map[string]*actor.Actor{"a global developer": hal, "a team admin": others["a team admin"]} {
+		if err := mint.UserServiceAccountKey(ctxOf(who), *bobs); !errors.Is(err, authz.ErrForbidden) {
+			t.Errorf("%s mints a key of bob's service account: %v, want forbidden", name, err)
+		}
+	}
+	for name, who := range map[string]*actor.Actor{"bob": bob, "the admin token": {AdminToken: true}, "an admin": actorOf(ids.New(), nil, user.RoleAdmin)} {
+		if err := mint.UserServiceAccountKey(ctxOf(who), *bobs); err != nil {
+			t.Errorf("%s mints a key of bob's service account: %v, want allowed", name, err)
+		}
 	}
 }
 

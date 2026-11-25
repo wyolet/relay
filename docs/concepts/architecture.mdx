@@ -55,7 +55,7 @@ From the same rows each pod folds the [policy ladder](/concepts/policies#the-lad
     The credential points at the plan of its default account, or of the account the request names: the [policy ladder](/concepts/policies#the-ladder) folded ahead of time from the policies bound to that account and to its project's and team's accounts, and the pools and host keys it can reach. A disabled policy, team or project on the way, or a closed account, is a `403`.
   </Step>
   <Step title="Route">
-    The `model` resolves to a catalog model. Relay keeps the caller's pools, in order, that are at a host serving the model and whose rungs allow it; each becomes a hop. The binding at the hop's host supplies the wire adapter (`openai`, `openai_responses`, `anthropic` or `gemini`) and the upstream model name. Routes are cached per account.
+    The `model` resolves to a catalog model. Relay keeps the caller's pools, in order, that are at a host serving the model and whose rungs allow it; each becomes a hop. The binding at the hop's host supplies the wire adapter (`openai`, `openai_responses`, `anthropic`, `vertex_anthropic`, `gemini` or `vertex_gemini`) and the upstream model name. Routes are cached per account.
   </Step>
   <Step title="Reserve and pick a key">
     The caller's rate limits and budgets are reserved in the state backend. A host key is then picked from the first hop's pool, skipping keys whose circuit breaker is open or whose account is cooling, and the key's upstream limits are reserved. See [Key pooling](/concepts/key-pooling) and [Rate limits](/concepts/rate-limits).

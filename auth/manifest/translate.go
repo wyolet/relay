@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/rbac"
@@ -56,20 +57,40 @@ func (r *Registry) ToProject(d *Document, refs Resolver) (*directory.Project, er
 	return p, nil
 }
 
-// ToServiceAccount translates a ServiceAccount document; spec.project must resolve.
+// ToServiceAccount translates a ServiceAccount document; exactly one of spec.project, spec.team and spec.user names its owner and must resolve.
 func (r *Registry) ToServiceAccount(d *Document, refs Resolver) (*directory.ServiceAccount, error) {
 	if d.ServiceAccount == nil {
 		return nil, wrongKind(d, KindServiceAccount)
 	}
-	projectID, ok := lookup(refs, KindProject, d.ServiceAccount.Project)
-	if !ok {
-		return nil, docError(d, "spec.project", &RefError{Kind: "project", Name: d.ServiceAccount.Project})
+	spec := directory.ServiceAccountSpec{Enabled: d.ServiceAccount.Enabled}
+	switch s := d.ServiceAccount; {
+	case len(slices.DeleteFunc([]string{s.Project, s.Team, s.User}, func(n string) bool { return n == "" })) != 1:
+		return nil, docError(d, "spec", errServiceAccountOwner)
+	case s.User != "":
+		userID, ok := lookup(refs, KindUser, s.User)
+		if !ok {
+			return nil, docError(d, "spec.user", &RefError{Kind: "user", Name: s.User})
+		}
+		spec.UserID = userID
+	case s.Team != "":
+		teamID, ok := lookup(refs, KindTeam, s.Team)
+		if !ok {
+			return nil, docError(d, "spec.team", &RefError{Kind: "team", Name: s.Team})
+		}
+		spec.TeamID = teamID
+	default:
+		projectID, ok := lookup(refs, KindProject, s.Project)
+		if !ok {
+			return nil, docError(d, "spec.project", &RefError{Kind: "project", Name: s.Project})
+		}
+		spec.ProjectID = projectID
 	}
 	attrs, err := r.toAttributes(d, refs)
 	if err != nil {
 		return nil, err
 	}
-	sa := &directory.ServiceAccount{Meta: rowMeta(d), Spec: directory.ServiceAccountSpec{ProjectID: projectID, Enabled: d.ServiceAccount.Enabled, Attributes: attrs}}
+	spec.Attributes = attrs
+	sa := &directory.ServiceAccount{Meta: rowMeta(d), Spec: spec}
 	sa.StampOwner()
 	return sa, nil
 }

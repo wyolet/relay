@@ -1,0 +1,3 @@
+{
+  "error": "gemini serialize_request: not supported by the upstream API: file URL with no media type and no known file extension"
+}

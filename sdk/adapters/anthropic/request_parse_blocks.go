@@ -23,7 +23,8 @@ func documentSourceToPart(src blockSource) *v1.FilePart {
 	case "base64":
 		return &v1.FilePart{FileData: src.Data, MediaType: src.MediaType}
 	case "url":
-		return &v1.FilePart{FileURL: src.URL}
+		// The API defines a document url source as a URLPDFSource: it names a PDF.
+		return &v1.FilePart{FileURL: src.URL, MediaType: "application/pdf"}
 	case "file":
 		return &v1.FilePart{FileID: src.FileID}
 	}

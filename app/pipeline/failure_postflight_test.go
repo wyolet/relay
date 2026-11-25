@@ -20,7 +20,7 @@ import (
 // serverErrorAdapter answers every call with a retryable 503.
 type serverErrorAdapter struct{ reservationTestAdapter }
 
-func (serverErrorAdapter) Call(context.Context, string, *string, string, []byte, http.Header, string, bool, bool) (*http.Response, error) {
+func (serverErrorAdapter) Call(context.Context, Upstream, string, []byte, http.Header, string, bool, bool) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(`{}`)), Header: http.Header{}}, nil
 }
 

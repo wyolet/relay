@@ -8,6 +8,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -42,9 +43,9 @@ func TestValidate(t *testing.T) {
 		{"responses adapter", func(b *Binding) { b.Spec.Adapter = adapters.OpenAIResponses }, nil, adapters.OpenAIResponses},
 		{"priced", func(b *Binding) { b.Spec.PricingID = meta.NewID() }, nil, adapters.OpenAI},
 		{"embeddings are not an upstream binding", func(b *Binding) { b.Spec.Adapter = adapters.OpenAIEmbeddings },
-			[]string{`binding "m-on-h": adapter "openai_embeddings" is not a valid upstream binding (want one of [openai anthropic gemini openai_responses])`}, adapters.OpenAIEmbeddings},
+			[]string{`binding "m-on-h": adapter "openai_embeddings" is not a valid upstream binding (want one of [openai anthropic vertex_anthropic gemini vertex_gemini openai_responses])`}, adapters.OpenAIEmbeddings},
 		{"unknown adapter", func(b *Binding) { b.Spec.Adapter = "cohere" },
-			[]string{`binding "m-on-h": adapter "cohere" is not a valid upstream binding (want one of [openai anthropic gemini openai_responses])`}, "cohere"},
+			[]string{`binding "m-on-h": adapter "cohere" is not a valid upstream binding (want one of [openai anthropic vertex_anthropic gemini vertex_gemini openai_responses])`}, "cohere"},
 		{"missing ids", func(b *Binding) { b.Spec.ModelID, b.Spec.HostID = "", "" },
 			[]string{"Binding.Spec.ModelID required", "Binding.Spec.HostID required"}, adapters.OpenAI},
 		{"ids are not UUIDs", func(b *Binding) { b.Spec.ModelID, b.Spec.PricingID = "gpt-4o", "sheet" },
@@ -53,6 +54,14 @@ func TestValidate(t *testing.T) {
 		{"user owner without an id", func(b *Binding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser} }, []string{sharedData + `"user"`}, adapters.OpenAI},
 		{"team owner", func(b *Binding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"} }, []string{sharedData + `"team"`}, adapters.OpenAI},
 		{"project owner", func(b *Binding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: "p-1"} }, []string{sharedData + `"project"`}, adapters.OpenAI},
+		{"upstream name for its one snapshot", func(b *Binding) {
+			b.Spec.UpstreamName, b.Spec.Snapshots = "global.acme.m-v1:0", []string{"m-2026-01-01"}
+		}, nil, adapters.OpenAI},
+		// Routing applies it only when the model has one snapshot; a stored row of this shape stays editable.
+		{"upstream name listing no snapshot", func(b *Binding) { b.Spec.UpstreamName = "global.acme.m-v1:0" }, nil, adapters.OpenAI},
+		{"upstream name for two snapshots", func(b *Binding) {
+			b.Spec.UpstreamName, b.Spec.Snapshots = "acme/m", []string{"m-2026-01-01", "m-2026-02-01"}
+		}, []string{`binding "m-on-h": upstreamName "acme/m" names one upstream model, so snapshots may list at most one snapshot (got 2)`}, adapters.OpenAI},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &Binding{Meta: meta.Metadata{Name: "m-on-h"}, Spec: Spec{ModelID: meta.NewID(), HostID: meta.NewID()}}
@@ -64,6 +73,30 @@ func TestValidate(t *testing.T) {
 				t.Errorf("adapter after Validate = %q, want %q", b.Spec.Adapter, tc.wantAdapter)
 			}
 		})
+	}
+}
+
+// An upstreamName applies only while the binding serves one snapshot of the model.
+func TestUpstreamNameFor(t *testing.T) {
+	one := &model.Model{Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m"}}}}
+	several := &model.Model{Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m"}, {Name: "m-2026-01-01"}}}}
+	for _, tc := range []struct {
+		name         string
+		upstreamName string
+		snapshots    []string
+		m            *model.Model
+		want         string
+	}{
+		{"no upstream name", "", nil, one, "fallback"},
+		{"lists none, model has one snapshot", "wire", nil, one, "wire"},
+		{"lists one", "wire", []string{"m"}, several, "wire"},
+		{"lists none, model has several", "wire", nil, several, "fallback"},
+		{"lists several", "wire", []string{"m", "m-2026-01-01"}, several, "fallback"},
+	} {
+		b := &Binding{Spec: Spec{UpstreamName: tc.upstreamName, Snapshots: tc.snapshots}}
+		if got := b.UpstreamNameFor(tc.m, "fallback"); got != tc.want {
+			t.Errorf("%s: UpstreamNameFor = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

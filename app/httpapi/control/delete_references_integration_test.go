@@ -189,7 +189,7 @@ func (f policyDeleteFixture) policyBinding(t *testing.T, ctx context.Context, na
 // accountOf is the id of the service account's own account, made as relay makes it.
 func (f policyDeleteFixture) accountOf(t *testing.T, ctx context.Context, sa *serviceaccount.ServiceAccount) string {
 	t.Helper()
-	id, err := f.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID))
+	id, err := f.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner))
 	must(t, "ensure the service account's account", err)
 	return id
 }
@@ -433,6 +433,57 @@ func TestDeleteTeam_ProjectsAndScopedBindingsBlock(t *testing.T) {
 	empty := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "empty-team", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	must(t, "upsert team", f.stores.Team.Upsert(ctx, empty))
 	wantStatus(t, f.deleteRow(t, "teams", empty.Meta.ID, false), http.StatusNoContent)
+}
+
+// A service account a team owns blocks the team's delete as its projects do; without the references scan the store refuses it too.
+func TestDeleteTeam_ItsServiceAccountsBlock(t *testing.T) {
+	f, ctx := newPolicyDeleteFixture(t)
+	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "bot-team", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	must(t, "upsert team", f.stores.Team.Upsert(ctx, tm))
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "team-bot", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}}}
+	must(t, "upsert service account", f.stores.ServiceAccount.Upsert(ctx, bot))
+
+	wantBlockers(t, f.deleteRow(t, "teams", tm.Meta.ID, false),
+		wantGroup{"service-account", "metadata.owner.id", false, 1},
+	)
+	if err := f.stores.Team.Delete(ctx, tm.Meta.ID); err == nil {
+		t.Fatal("store deleted a team that owns a service account")
+	}
+	if got, err := f.stores.ServiceAccount.Get(ctx, bot.Meta.ID); err != nil || got == nil || got.Spec.TeamID != tm.Meta.ID || got.Meta.Owner != bot.Meta.Owner {
+		t.Fatalf("service account after refused deletes = %+v, %v", got, err)
+	}
+
+	must(t, "delete service account", f.stores.ServiceAccount.Delete(ctx, bot.Meta.ID))
+	wantStatus(t, f.deleteRow(t, "teams", tm.Meta.ID, false), http.StatusNoContent)
+}
+
+// A key's row stays with its principal's owner: an update naming another project or team is refused, even from a caller who may create keys there, and the stored owner is kept.
+func TestUpdateKey_OwnerStaysWithItsPrincipal(t *testing.T) {
+	f, ctx := newPolicyDeleteFixture(t)
+	k := f.projectKey(t, ctx, "key-c")
+	other := &project.Project{Meta: meta.Metadata{ID: meta.NewID(), Name: "other-project"}, Spec: project.Spec{TeamID: f.proj.Spec.TeamID}}
+	other.StampOwner()
+	must(t, "upsert project", f.stores.Project.Upsert(ctx, other))
+	put := func(owner string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/keys/by-id/"+k.Meta.ID, strings.NewReader(`{"metadata":{"name":"key-c"`+owner+`},"spec":{"principal":{"kind":"serviceaccount","id":"`+f.account.Meta.ID+`"}}}`))
+		req.Header.Set("Authorization", "Bearer test-admin-token")
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, req)
+		return w
+	}
+	for name, owner := range map[string]string{
+		"another project": `,"owner":{"kind":"project","id":"` + other.Meta.ID + `"}`,
+		"the team":        `,"owner":{"kind":"team","id":"` + f.proj.Spec.TeamID + `"}`,
+	} {
+		if w := put(owner); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "a key is owned by its principal's scope") {
+			t.Errorf("move to %s = %d %s, want 400", name, w.Code, w.Body)
+		}
+	}
+	if got, err := f.stores.Key.Get(ctx, k.Meta.ID); err != nil || got.Meta.Owner != k.Meta.Owner {
+		t.Fatalf("key after refused moves = %+v, %v; want owner %+v", got, err, k.Meta.Owner)
+	}
+	wantStatus(t, put(""), http.StatusOK)
 }
 
 func TestDeleteProject_RowsUnderItBlock(t *testing.T) {

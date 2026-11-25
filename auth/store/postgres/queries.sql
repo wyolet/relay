@@ -142,18 +142,20 @@ DELETE FROM projects WHERE id = $1;
 DELETE FROM role_bindings WHERE scope_kind = sqlc.arg('project_kind')::text AND scope_id = sqlc.arg('project_id')::text;
 
 -- name: ListServiceAccounts :many
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts ORDER BY name;
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version, team_id, user_id FROM service_accounts ORDER BY name;
 
 -- name: GetServiceAccount :one
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts WHERE id = $1;
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version, team_id, user_id FROM service_accounts WHERE id = $1;
 
 -- name: UpsertServiceAccount :execrows
-INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
+INSERT INTO service_accounts (id, name, display_name, project_id, team_id, user_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name         = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
     project_id   = EXCLUDED.project_id,
+    team_id      = EXCLUDED.team_id,
+    user_id      = EXCLUDED.user_id,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()

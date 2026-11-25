@@ -38,7 +38,7 @@ func defaults() *Config {
 		ConfigDir: "config", CatalogPollInterval: time.Hour, CatalogPrune: true, CatalogPruneIdle: 720 * time.Hour,
 		InflightSchedP99: 20 * time.Millisecond, BatchMaxItems: 50000, UpstreamDialTimeout: 10 * time.Second,
 		ConnQueue: 1024, ConnQueueTimeout: time.Second,
-		Limiter: "hybrid", LimiterSync: time.Second, PlanCellIdle: 10 * time.Minute, PlanResync: 10 * time.Minute,
+		Limiter: "hybrid", LimiterSync: time.Second, PlanCellIdle: 10 * time.Minute, PlanResync: 10 * time.Minute, PlanCheckTimeout: 5 * time.Second,
 		StreamKeepAlive: 15 * time.Second, ProxyBodyIdle: 30 * time.Second, StreamUsage: true, StreamIdleTimeout: 10 * time.Minute,
 		LastUsed: true, HealthzDeadlineMS: 500, ShutdownDeadlineS: 15,
 		Port: "8080", ControlPort: "8081",
@@ -149,6 +149,8 @@ func TestLoad_Values(t *testing.T) {
 		{"limiter lua in any case", map[string]string{"RELAY_LIMITER": " Lua ", "RELAY_LIMITER_SYNC_MS": "250"}, "", func(c *Config) { c.Limiter, c.LimiterSync = "lua", 250*time.Millisecond }},
 		{"limiter hybrid named", map[string]string{"RELAY_LIMITER": "hybrid"}, "", func(c *Config) {}},
 		{"plan cache", map[string]string{"RELAY_PLAN_CELL_IDLE_S": "1", "RELAY_PLAN_RESYNC_S": "0"}, "", func(c *Config) { c.PlanCellIdle, c.PlanResync = time.Second, 0 }},
+		{"plan check timeout", map[string]string{"RELAY_PLAN_CHECK_TIMEOUT_MS": "250"}, "", func(c *Config) { c.PlanCheckTimeout = 250 * time.Millisecond }},
+		{"pseudo kinds are split, trimmed and lowercased", map[string]string{"RELAY_PSEUDO_KINDS": " Agents , ,host-keys,"}, "", func(c *Config) { c.PseudoKinds = []string{"agents", "host-keys"} }},
 		{"stream timers at zero and usage off", map[string]string{"RELAY_STREAM_KEEPALIVE_S": "0", "RELAY_PROXY_BODY_IDLE_S": "0", "RELAY_STREAM_IDLE_TIMEOUT_S": "0", "RELAY_STREAM_USAGE": "False"}, "",
 			func(c *Config) {
 				c.StreamKeepAlive, c.ProxyBodyIdle, c.StreamIdleTimeout, c.StreamUsage = 0, 0, 0, false
@@ -158,6 +160,9 @@ func TestLoad_Values(t *testing.T) {
 				c.StreamKeepAlive, c.ProxyBodyIdle, c.StreamIdleTimeout = 5*time.Second, 7*time.Second, 9*time.Second
 			}},
 		{"last used off", map[string]string{"RELAY_LAST_USED": " Off "}, "", func(c *Config) { c.LastUsed = false }},
+		{"oauth token hosts are lowercased and trimmed", map[string]string{"RELAY_OAUTH_TOKEN_HOSTS": " Token.Example.com, ,auth.example.net "}, "", func(c *Config) {
+			c.OAuthTokenHosts = []string{"token.example.com", "auth.example.net"}
+		}},
 		{"account domain is lowercased and loses outer dots", map[string]string{"RELAY_ACCOUNT_DOMAIN": " .Accounts.Example.com. "}, "", func(c *Config) { c.AccountDomain = "accounts.example.com" }},
 		{"deadlines", map[string]string{"RELAY_HEALTHZ_DEADLINE_MS": "50", "RELAY_SHUTDOWN_DEADLINE_S": "30"}, "", func(c *Config) { c.HealthzDeadlineMS, c.ShutdownDeadlineS = 50, 30 }},
 		{"ui runtime URLs lose trailing slashes", map[string]string{"RELAY_CONTROL_API_URL": "https://c.example/api//", "RELAY_INFERENCE_API_URL": "https://i.example/", "RELAY_MODE": "cloud", "RELAY_UI_SENTRY_DSN": "https://k@sentry.example/1", "RELAY_UI_TELEMETRY_ENV": "prod", "RELAY_UI_DOCS_URL": "https://docs.example/", "RELAY_UI_SUPPORT_URL": "https://help.example"}, "",
@@ -229,6 +234,9 @@ func TestLoad_Rejects(t *testing.T) {
 		{"conn queue timeout zero", map[string]string{"RELAY_CONN_QUEUE_TIMEOUT": "0s"}, "RELAY_CONN_QUEUE_TIMEOUT must be a positive duration such as 1s or 500ms"},
 		{"conn queue timeout negative", map[string]string{"RELAY_CONN_QUEUE_TIMEOUT": "-1s"}, "RELAY_CONN_QUEUE_TIMEOUT must be a positive duration such as 1s or 500ms"},
 		{"conn queue timeout without a unit", map[string]string{"RELAY_CONN_QUEUE_TIMEOUT": "1"}, "RELAY_CONN_QUEUE_TIMEOUT must be a positive duration such as 1s or 500ms"},
+		{"oauth token host with a port", map[string]string{"RELAY_OAUTH_TOKEN_HOSTS": "token.example.com:443"}, `RELAY_OAUTH_TOKEN_HOSTS takes hostnames such as token.example.com, without scheme, port or wildcard, got "token.example.com:443"`},
+		{"oauth token host wildcard", map[string]string{"RELAY_OAUTH_TOKEN_HOSTS": "*.example.com"}, `RELAY_OAUTH_TOKEN_HOSTS takes hostnames such as token.example.com, without scheme, port or wildcard, got "*.example.com"`},
+		{"oauth token host URL", map[string]string{"RELAY_OAUTH_TOKEN_HOSTS": "https://token.example.com"}, `RELAY_OAUTH_TOKEN_HOSTS takes hostnames such as token.example.com, without scheme, port or wildcard, got "https://token.example.com"`},
 		{"account domain with a scheme", map[string]string{"RELAY_ACCOUNT_DOMAIN": "https://accounts.example.com"}, `RELAY_ACCOUNT_DOMAIN must be a bare domain such as accounts.example.com, got "https://accounts.example.com"`},
 		{"account domain with a port", map[string]string{"RELAY_ACCOUNT_DOMAIN": "accounts.example.com:8080"}, `RELAY_ACCOUNT_DOMAIN must be a bare domain such as accounts.example.com, got "accounts.example.com:8080"`},
 		{"account domain with a space", map[string]string{"RELAY_ACCOUNT_DOMAIN": "accounts example.com"}, `RELAY_ACCOUNT_DOMAIN must be a bare domain such as accounts.example.com, got "accounts example.com"`},

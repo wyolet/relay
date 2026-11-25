@@ -13,7 +13,7 @@ const skipThoughtSignature = "skip_thought_signature_validator"
 // System/developer text from LEADING items is returned separately for
 // systemInstruction; positional system items stay in contents as
 // marker-wrapped user turns.
-func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
+func (t GeminiTranslator) canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 	var contents []geminiContent
 	var sysExtra []string
 
@@ -157,14 +157,14 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 
 			switch v.Role {
 			case v1.RoleUser:
-				parts, err := canonicalPartsToGemini(v.Content)
+				parts, err := t.canonicalPartsToGemini(v.Content)
 				if err != nil {
 					return nil, "", err
 				}
 				contents = append(contents, geminiContent{Role: "user", Parts: parts})
 
 			case v1.RoleAssistant:
-				parts, err := canonicalPartsToGemini(v.Content)
+				parts, err := t.canonicalPartsToGemini(v.Content)
 				if err != nil {
 					return nil, "", err
 				}

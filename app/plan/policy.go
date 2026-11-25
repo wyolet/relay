@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/wyolet/relay/app/account"
@@ -32,9 +33,11 @@ type CatalogIndex struct {
 
 func (c *controllers) catalogIndex(tx *engine.Txn, _ string) error {
 	models := engine.Members[model.Model](tx)
+	// Disabled sheets are left out as the live catalog leaves them out, so a binding resolves the sheet it is costed with: a disabled one never shadows an enabled one, and a binding naming one falls back to the host's.
+	pricings := slices.DeleteFunc(engine.Members[pricing.Pricing](tx), func(p *pricing.Pricing) bool { return !p.IsEnabled() })
 	snap := appcatalog.BuildCatalog(
 		engine.Members[provider.Provider](tx), engine.Members[host.Host](tx), models,
-		engine.Members[pricing.Pricing](tx), engine.Members[binding.Binding](tx), engine.Members[overlay.Overlay](tx),
+		pricings, engine.Members[binding.Binding](tx), engine.Members[overlay.Overlay](tx),
 	)
 	idx := &CatalogIndex{Snap: snap, bindingsByHost: map[string][]*binding.Binding{}}
 	for _, b := range snap.AllBindings() {
@@ -174,7 +177,7 @@ func parseRefs(tx *engine.Txn, src engine.Ref, field string, raw []string) []mod
 	return refs
 }
 
-// warnUnpriced reports the bindings a budgeted policy allows that have no pricing: requests for them are refused while the budget applies. Limited to the hosts of the pools the policy links, when it links any.
+// warnUnpriced reports the bindings a budgeted policy allows that have no enabled pricing: requests for them are refused while the budget applies. Limited to the hosts of the pools the policy links, when it links any.
 func warnUnpriced(tx *engine.Txn, src engine.Ref, ep *ExpandedPolicy, hosts map[string]bool) {
 	idx := engine.Get[CatalogIndex](tx, "")
 	if idx == nil {
@@ -209,7 +212,7 @@ func warnUnpriced(tx *engine.Txn, src engine.Ref, ep *ExpandedPolicy, hosts map[
 	if n > 0 {
 		tx.Issue(engine.Issue{
 			Severity: engine.SeverityWarning, Code: CodeUnpricedUnderBudget, Source: src, Field: "spec.budgets",
-			Message: fmt.Sprintf("%d bindings this policy allows have no pricing (e.g. %s); requests for them are refused while a budget applies", n, first),
+			Message: fmt.Sprintf("%d bindings this policy allows have no enabled pricing (e.g. %s); requests for them are refused while a budget applies", n, first),
 		})
 	}
 }

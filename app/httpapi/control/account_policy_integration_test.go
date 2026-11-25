@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -175,6 +176,12 @@ func TestAccountPolicy_Refusals(t *testing.T) {
 	missing := ids.New()
 	if rec, _ := w.setPolicy("dave", acct, &missing); rec.Code != http.StatusBadRequest {
 		t.Fatalf("a policy that does not exist: %d %s, want 400", rec.Code, rec.Body)
+	}
+	unchanged(t)
+
+	empty := ""
+	if rec, _ := w.setPolicy("dave", acct, &empty); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "policyId is empty") {
+		t.Fatalf("an empty policy id: %d %s, want 400 naming policyId", rec.Code, rec.Body)
 	}
 	unchanged(t)
 

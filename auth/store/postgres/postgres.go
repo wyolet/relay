@@ -89,6 +89,8 @@ func mapErr(op string, err error) error {
 			return fmt.Errorf("%s: %w: %s", op, directory.ErrConflict, pgErr.ConstraintName)
 		case "23503":
 			return fmt.Errorf("%s: %w: %s", op, directory.ErrInvalid, pgErr.Detail)
+		case "23514":
+			return fmt.Errorf("%s: %w: %s", op, directory.ErrInvalid, pgErr.ConstraintName)
 		}
 	}
 	return fmt.Errorf("%s: %w", op, err)

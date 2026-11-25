@@ -133,7 +133,7 @@ func TestBudgetRefusal_AlertBudgetNeverRefuses(t *testing.T) {
 func TestBudgetRefusal_UnpricedModelIsRefused(t *testing.T) {
 	d, p, _, hits, policyID := ladderDeps(t, ladderCase{budget: &budget.Spec{AmountUSD: "100", Period: budget.PeriodMonth, Mode: budget.ModeHard}}, time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC))
 	w := chat(d, p, "free")
-	wantLadderRefusal(t, w, p, policyID, "unpriced_under_budget", "unpriced_under_budget: binding ", " has no pricing and a budget applies")
+	wantLadderRefusal(t, w, p, policyID, "unpriced_under_budget", "unpriced_under_budget: binding ", " has no enabled pricing and a budget applies")
 	if hits.Load() != 0 {
 		t.Fatal("the unpriced request reached the upstream")
 	}

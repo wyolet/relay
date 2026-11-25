@@ -31,8 +31,9 @@ import (
 //
 // A caller reads the whole stream only when a binding at the global scope
 // grants usage/logs read. Otherwise the stream narrows to what is
-// attributable to them: events in a project they may see, plus events they
-// are the principal of. Those two are a disjunction, carried on the query as
+// attributable to them: events in a project they may see, events of a
+// service account owned by a team they may see or by themselves, plus
+// events they are the principal of. These are a disjunction, carried on the query as
 // ScopeProjectID / ScopePrincipalID.
 
 // readScope is the slice of the usage/log stream a caller may read.
@@ -68,9 +69,16 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 	}
 	var sc readScope
 	if cat != nil {
-		for _, p := range cat.Current().AllProjects() {
+		snap := cat.Current()
+		for _, p := range snap.AllProjects() {
 			if s.Visible(ctx, kind, "", meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}) {
 				sc.projectIDs = append(sc.projectIDs, p.Meta.ID)
+			}
+		}
+		// A service account a team owns itself sits in no project, so its traffic carries none: it reads by principal, to whoever reads the team's, disabled ones included.
+		for _, t := range snap.AllTeams() {
+			if team := (meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}); s.Visible(ctx, kind, "", team) {
+				sc.principalIDs = append(sc.principalIDs, snap.ServiceAccountIDsOwnedBy(team)...)
 			}
 		}
 	}
@@ -82,7 +90,9 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 		// own key hashes (snapshot principal index, no Postgres) keep that
 		// history readable to them.
 		if cat != nil {
-			sc.keyHashes = cat.Current().KeyHashesForUser(a.UserID)
+			snap := cat.Current()
+			sc.keyHashes = snap.KeyHashesForUser(a.UserID)
+			sc.principalIDs = append(sc.principalIDs, snap.ServiceAccountIDsOwnedBy(meta.Owner{Kind: meta.OwnerUser, ID: a.UserID})...)
 		}
 	}
 	return sc, nil
@@ -128,7 +138,7 @@ type UsageFilterInput struct {
 	StatusMin     int      `query:"status_min" doc:"Minimum HTTP status to include."`
 	StatusMax     int      `query:"status_max" doc:"Maximum HTTP status to include."`
 
-	HostKeyID      []string `query:"host_key_id,explode" doc:"Match any of the given HostKey.metadata.id values."`
+	HostKeyID      []string `query:"host_key_id,explode" doc:"Match any of the given host_key_id values: hashes of the upstream credential's value, not HostKey.metadata.id."`
 	RequestedModel []string `query:"requested_model,explode" doc:"Match any of the model strings as the caller sent them."`
 	Model          []string `query:"model,explode" doc:"Match any of the given model slugs (event-time metadata.name, denormalized)."`
 	Host           []string `query:"host,explode" doc:"Match any of the given host slugs (event-time metadata.name, denormalized)."`

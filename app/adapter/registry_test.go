@@ -11,6 +11,60 @@ import (
 // stubTranslator is a translator the registry only stores, never calls.
 type stubTranslator struct{ v1.Translator }
 
+// uncomparableTranslator is not comparable: a struct with a slice field, even a blank one, is not.
+type uncomparableTranslator struct {
+	v1.Translator
+	_ []string
+}
+
+// otherTranslator is a second translator type the registry only stores.
+type otherTranslator struct{ v1.Translator }
+
+// Specs share a translator group when their translators are one value; a nil translator has none. A translator of a comparable type holding an uncomparable value, which == would panic on, shares with nothing.
+func TestRegistry_TranslatorGroup(t *testing.T) {
+	panicky := func() v1.Translator { return stubTranslator{Translator: uncomparableTranslator{}} }
+	if x, y := panicky(), panicky(); !func() (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		_ = x == y
+		return false
+	}() {
+		t.Fatal("== on the panicky translators did not panic; the test proves nothing")
+	}
+	spec := func(name adapters.Name, tr v1.Translator) *adapter.Spec {
+		return (&adapter.Spec{Name: name, Translator: tr}).Build()
+	}
+	reg := adapter.NewRegistry(spec("a", stubTranslator{}), spec("b", stubTranslator{}), spec("c", otherTranslator{}), spec("d", panicky()), spec("e", panicky()), spec("f", nil))
+	g := reg.TranslatorGroup
+	if g("a") == 0 || g("a") != g("b") {
+		t.Errorf("equal translators: groups %d, %d; want one non-zero group", g("a"), g("b"))
+	}
+	if g("c") == 0 || g("c") == g("a") {
+		t.Errorf("another translator type: group %d beside %d; want its own", g("c"), g("a"))
+	}
+	if g("d") == 0 || g("e") == 0 || g("d") == g("e") || g("d") == g("a") {
+		t.Errorf("uncomparable translators: groups %d, %d; want one each", g("d"), g("e"))
+	}
+	if g("f") != 0 || g("nope") != 0 {
+		t.Errorf("no translator: group %d, unregistered: %d; want 0", g("f"), g("nope"))
+	}
+}
+
+func TestSpec_FamilyName(t *testing.T) {
+	var none *adapter.Spec
+	for _, tc := range []struct {
+		spec *adapter.Spec
+		want adapters.Name
+	}{
+		{&adapter.Spec{Name: "member", Family: "base"}, "base"},
+		{&adapter.Spec{Name: "base"}, "base"},
+		{none, ""},
+	} {
+		if got := tc.spec.FamilyName(); got != tc.want {
+			t.Errorf("FamilyName() of %+v = %q, want %q", tc.spec, got, tc.want)
+		}
+	}
+}
+
 func TestRegistry_Lookups(t *testing.T) {
 	a, b := newBearerSpec("/a"), dualAuthSpec()
 	a.Translator = stubTranslator{}
@@ -85,6 +139,15 @@ func TestRegistry_AssertWired(t *testing.T) {
 		{"inbound spec with a translator", func(s []*adapter.Spec) []*adapter.Spec {
 			return append(s, (&adapter.Spec{Name: "extra", InboundPaths: inbound, Translator: stubTranslator{}}).Build())
 		}, ""},
+		{"family of a registered spec", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "extra", Family: first}).Build())
+		}, ""},
+		{"unknown family", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "extra", Family: "nope"}).Build())
+		}, `adapter.Registry: spec "extra" names unregistered family "nope"`},
+		{"family of a family member", func(s []*adapter.Spec) []*adapter.Spec {
+			return append(s, (&adapter.Spec{Name: "member", Family: first}).Build(), (&adapter.Spec{Name: "extra", Family: "member"}).Build())
+		}, `adapter.Registry: spec "extra" names family "member", which is itself in family "` + string(first) + `"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

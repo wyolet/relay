@@ -79,13 +79,16 @@ func (r Rows) Dependents(id string, gone Gone, visible Visible) (named []string,
 }
 
 // TeamDependents names, as "Kind/name", every project in projects under team
-// id and every row in rows the team owns that the caller may see, and counts
-// the rest.
+// id and every row in rows the team owns that the caller may see, its own
+// service accounts included, and counts the rest.
 func (r Rows) TeamDependents(id string, projects []*Project, gone Gone, visible Visible) (named []string, hidden int) {
 	d := &dependents{gone: gone, visible: visible}
 	owner := meta.Owner{Kind: meta.OwnerTeam, ID: id}
 	for _, x := range projects {
 		d.add("Project", x.Meta, x.Spec.TeamID == id)
+	}
+	for _, x := range r.ServiceAccounts {
+		d.add("ServiceAccount", x.Meta, x.Meta.Owner == owner)
 	}
 	r.addOwned(d, owner)
 	for _, x := range r.PolicyBindings {

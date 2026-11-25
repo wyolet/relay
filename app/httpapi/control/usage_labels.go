@@ -36,7 +36,7 @@ func lookupUsernames(ctx context.Context, users usernameLookup, ids []string) ma
 	return names
 }
 
-// catalogLabel names an id value of dim from the current catalog, for values whose events carry no slug (rows older than the slug, host keys). Users are not in the snapshot; lookupUsernames names them.
+// catalogLabel names an id value of dim from the current catalog, for values whose events carry no slug (rows older than the slug). A host_key_id is a hash of the key's value, not a row id, so it is never named. Users are not in the snapshot; lookupUsernames names them.
 func catalogLabel(snap *appcatalog.Snapshot, dim, id string) string {
 	if id == "" {
 		return ""
@@ -73,10 +73,6 @@ func catalogLabel(snap *appcatalog.Snapshot, dim, id string) string {
 	case "credential_id":
 		if k, ok := snap.Key(id); ok {
 			return k.Meta.Name
-		}
-	case "host_key_id":
-		if hk, ok := snap.HostKey(id); ok {
-			return hk.Meta.Name
 		}
 	}
 	return ""

@@ -2,8 +2,10 @@ package control
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -11,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/user"
 )
 
@@ -49,18 +52,25 @@ func TestConfigJSON(t *testing.T) {
 		Features: map[string]bool{"beta": true, "tokens": true}, Telemetry: &Telemetry{SentryDSN: "https://dsn.test/1", Environment: "prod"},
 		DocsURL: "https://docs.test", SupportURL: "https://support.test",
 	}
+	owners := []string{"project", "team", "user"}
 	wired := static
 	wired.Features = map[string]bool{"beta": true, "tokens": true, "users": true, "audit": true, "accessReview": true}
+	wired.PseudoKinds = []string{"agents"}
+	wired.ServiceAccountOwnerKinds = owners
+	off := map[string]bool{"tokens": false, "users": false, "audit": false, "accessReview": false}
 
 	for _, tc := range []struct {
 		name string
 		d    Deps
 		want RuntimeConfig
 	}{
-		{"nothing wired", Deps{}, RuntimeConfig{Version: httpapi.Version, Features: map[string]bool{"tokens": false, "users": false, "audit": false, "accessReview": false}}},
+		{"nothing wired", Deps{}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}, ServiceAccountOwnerKinds: owners}},
 		{"a signer without a key mints nothing", Deps{TokenSigner: &TokenSigner{}, RuntimeConfig: RuntimeConfig{Features: map[string]bool{"tokens": true}}},
-			RuntimeConfig{Version: httpapi.Version, Features: map[string]bool{"tokens": false, "users": false, "audit": false, "accessReview": false}}},
-		{"everything wired", Deps{RuntimeConfig: static, TokenSigner: signer, Users: &user.Store{}, AuditReader: staticAudit{}, Authz: audit.Authorizer{Inner: authz.RBAC{}}}, wired},
+			RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}, ServiceAccountOwnerKinds: owners}},
+		{"everything wired", Deps{RuntimeConfig: static, TokenSigner: signer, Users: &user.Store{}, AuditReader: staticAudit{}, Authz: audit.Authorizer{Inner: authz.RBAC{}}, PseudoKinds: []string{"agents"}}, wired},
+		{"every pseudo kind, a name no kind has left out", Deps{PseudoKinds: []string{"all", "gadgets"}}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{"access", "agent-removals", "agents", "host-keys", "limits"}, ServiceAccountOwnerKinds: owners}},
+		{"only names no kind has", Deps{PseudoKinds: []string{"gadgets"}}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}, ServiceAccountOwnerKinds: owners}},
+		{"a static list is replaced", Deps{RuntimeConfig: RuntimeConfig{ServiceAccountOwnerKinds: []string{"project"}}}, RuntimeConfig{Version: httpapi.Version, Features: off, PseudoKinds: []string{}, ServiceAccountOwnerKinds: owners}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if diff := cmp.Diff(tc.want, runtimeConfig(t, tc.d)); diff != "" {
@@ -70,6 +80,26 @@ func TestConfigJSON(t *testing.T) {
 	}
 	if diff := cmp.Diff(map[string]bool{"beta": true, "tokens": true}, static.Features); diff != "" {
 		t.Errorf("the static features map was written to (-want +got):\n%s", diff)
+	}
+}
+
+// serviceAccountOwnerKinds is always in the body, in the order a service account's owner kinds are listed, so a client tells a relay that takes team and user owners from one that takes projects only.
+func TestConfigJSONServiceAccountOwnerKinds(t *testing.T) {
+	rec := httptest.NewRecorder()
+	ConfigJSONHandler(Deps{})(rec, httptest.NewRequest(http.MethodGet, "/config.json", nil))
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body["serviceAccountOwnerKinds"]); got != `["project","team","user"]` {
+		t.Errorf("serviceAccountOwnerKinds = %s, want [\"project\",\"team\",\"user\"]", got)
+	}
+	want := make([]string, len(serviceaccount.OwnerKinds))
+	for i, k := range serviceaccount.OwnerKinds {
+		want[i] = string(k)
+	}
+	if got := runtimeConfig(t, Deps{}).ServiceAccountOwnerKinds; !slices.Equal(got, want) {
+		t.Errorf("serviceAccountOwnerKinds = %v, want serviceaccount.OwnerKinds %v", got, want)
 	}
 }
 

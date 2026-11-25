@@ -6,9 +6,12 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 func wantHops(t *testing.T, r *Route, want ...[]string) {
@@ -288,6 +291,77 @@ func TestRoute_UnpricedUnderBudgetIsRefusedAndFlagged(t *testing.T) {
 	}
 }
 
+// A disabled pricing costs nothing, so under a budget it is refused and flagged like no pricing at all, with or without the caller's own key.
+func TestRoute_DisabledPricingUnderBudgetIsRefusedAndFlagged(t *testing.T) {
+	b := newBasic()
+	m2 := b.w.model(b.prov, "m2")
+	b.w.bind(m2, b.hostA)
+	pr := b.w.price(m2, b.hostA)
+	pr.Spec.Enabled = boolp(false)
+	bud := b.w.budget("50")
+	p := b.w.policy("capped", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	pb := b.w.bindPolicy(p, b.w.teamAccount(b.team))
+	h := b.w.start(t)
+
+	_ = wantRefused(t, h.route(b.key, "m2"), CodeUnpricedUnderBudget, limits.RungTeam)
+	wantUnkeyedRefused(t, h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed("m2"), CodeUnpricedUnderBudget, limits.RungTeam)
+	h.wantIssue(KindPolicy, p.Meta.ID, CodeUnpricedUnderBudget, true)
+
+	on := clone(pr)
+	on.Spec.Enabled = boolp(true)
+	apply(h, on)
+	wantHops(t, h.route(b.key, "m2"), ids(b.a1), ids(b.a2))
+	h.wantIssue(KindPolicy, p.Meta.ID, CodeUnpricedUnderBudget, false)
+	if hop := h.route(b.key, "m2").Hops[0]; !hop.Priced || hop.Pricing == nil {
+		t.Fatal("an enabled pricing's hop is marked unpriced")
+	}
+
+	// Without a budget the disabled pricing's binding serves unpriced, naming no pricing.
+	apply(h, pr)
+	del(h, KindPolicyBinding, pb.Meta.ID)
+	if hop := h.route(b.key, "m2").Hops[0]; hop.Priced || hop.Pricing != nil {
+		t.Fatalf("a disabled pricing's hop: priced %v, pricing %v; want unpriced and none", hop.Priced, hop.Pricing)
+	}
+	if u := h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed("m2"); u.Refused != nil || u.Pricing != nil {
+		t.Fatalf("a disabled pricing's unkeyed route = %+v, want served naming no pricing", u)
+	}
+}
+
+// A disabled sheet never stands in for an enabled one: not when it is the later row covering the same model and host, nor when the binding names it while an enabled sheet covers the pair. Either binding is priced and charged under a budget.
+func TestRoute_DisabledPricingNeverShadowsAnEnabledOne(t *testing.T) {
+	b := newBasic()
+	shadowed, named := b.w.model(b.prov, "shadowed"), b.w.model(b.prov, "named")
+	b.w.bind(shadowed, b.hostA)
+	enabledShadowed := b.w.price(shadowed, b.hostA)
+	b.w.price(shadowed, b.hostA).Spec.Enabled = boolp(false)
+	draft := b.w.price(named, b.hostA)
+	draft.Spec.Enabled = boolp(false)
+	enabledNamed := b.w.price(named, b.hostA)
+	b.w.bind(named, b.hostA).Spec.PricingID = draft.Meta.ID
+	bud := b.w.budget("50")
+	p := b.w.policy("capped", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	b.w.bindPolicy(p, b.w.teamAccount(b.team))
+	h := b.w.start(t)
+
+	for ref, want := range map[string]*pricing.Pricing{"shadowed": enabledShadowed, "named": enabledNamed} {
+		r := h.route(b.key, ref)
+		if r.Refused != nil {
+			t.Fatalf("%s refused: %v", ref, r.Refused)
+		}
+		hop := r.Hops[0]
+		if !hop.Priced || hop.Pricing == nil || hop.Pricing.Meta.ID != want.Meta.ID {
+			t.Fatalf("%s: priced %v with %v, want the enabled sheet %s", ref, hop.Priced, hop.Pricing, want.Meta.Name)
+		}
+		if cost, _, ok := hop.Pricing.CostNanos(usage.Tokens{"input": 1_000_000}); !ok || cost == 0 {
+			t.Errorf("%s: cost %d (ok %v), want a charge", ref, cost, ok)
+		}
+		if u := h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed(ref); u.Refused != nil || u.Pricing == nil || u.Pricing.Meta.ID != want.Meta.ID {
+			t.Fatalf("%s unkeyed = %+v, want served with the enabled sheet", ref, u)
+		}
+	}
+	h.wantIssue(KindPolicy, p.Meta.ID, CodeUnpricedUnderBudget, false)
+}
+
 func TestRoute_UpstreamBudgetRefusesUnpricedOnThatSlotOnly(t *testing.T) {
 	b := newBasic()
 	m2 := b.w.model(b.prov, "m2")
@@ -411,6 +485,91 @@ func TestRoute_AliasCarriesItsWireName(t *testing.T) {
 	}
 	if r := h.route(b.key, "m1"); r.UpstreamModel != "m1" || r.ResolvedVia != "" {
 		t.Fatalf("plain route = upstream %q via %q", r.UpstreamModel, r.ResolvedVia)
+	}
+}
+
+// A binding's upstreamName is the wire model name through it, over the snapshot's name and over an alias the host does not know; ResolvedVia still tags the alias. A hop through a binding without one keeps the alias's or the snapshot's name. m1 has one snapshot, so the name applies whether the binding lists it or lists none.
+func TestRoute_BindingUpstreamNameIsTheWireName(t *testing.T) {
+	const wire = "global.acme/m1-v1:0"
+	for _, shape := range []struct {
+		name         string
+		upstreamName string
+		snapshots    []string
+	}{
+		{name: "no upstream name"},
+		{name: "lists the one snapshot", upstreamName: wire, snapshots: []string{"m1"}},
+		{name: "lists none", upstreamName: wire},
+	} {
+		named := shape.upstreamName != ""
+		b := newBasic()
+		b.m1.Spec.Aliases = []string{"m1-latest", "m1[*]"}
+		bd := b.w.bindingAt(b.m1, b.hostA)
+		bd.Spec.UpstreamName, bd.Spec.Snapshots = shape.upstreamName, shape.snapshots
+		h := b.w.start(t)
+		for _, tc := range []struct {
+			ref, fallback, via string
+			firstAtA           bool
+		}{
+			{ref: "m1", fallback: "m1", firstAtA: true},
+			{ref: "acme/m1", fallback: "m1", firstAtA: true},
+			{ref: "m1@host-a", fallback: "m1", firstAtA: true},
+			{ref: "m1@host-b", fallback: "m1"},
+			{ref: "m1-latest", fallback: "m1-latest", via: "alias:m1-latest", firstAtA: true},
+			{ref: "m1-latest@host-a", fallback: "m1-latest", via: "alias:m1-latest", firstAtA: true},
+			{ref: "m1[1m]", fallback: "m1[1m]", via: "alias:m1[*]", firstAtA: true},
+		} {
+			sentAtA := tc.fallback
+			if named {
+				sentAtA = wire
+			}
+			want := tc.fallback
+			if tc.firstAtA {
+				want = sentAtA
+			}
+			r := h.route(b.key, tc.ref)
+			if r.Refused != nil || r.UpstreamModel != want || r.ResolvedVia != tc.via {
+				t.Errorf("%s, %s: route sends %q via %q (refused %v), want %q via %q", shape.name, tc.ref, r.UpstreamModel, r.ResolvedVia, r.Refused, want, tc.via)
+			}
+			for i := range r.Hops {
+				hop := &r.Hops[i]
+				hopWant := tc.fallback
+				if hop.Host.Meta.ID == b.hostA.Meta.ID {
+					hopWant = sentAtA
+				}
+				if got := hop.UpstreamModel; got != hopWant {
+					t.Errorf("%s, %s: hop %d at %s sends %q, want %q", shape.name, tc.ref, i, hop.Host.Meta.Name, got, hopWant)
+				}
+			}
+		}
+	}
+}
+
+// One upstreamName names one upstream model. On a binding serving several snapshots (a row listing none, of a model with several) it is ignored and every snapshot is sent its own name, as without it; a binding listing one snapshot sends the name for that snapshot and serves no other.
+func TestRoute_UpstreamNameAppliesOnlyToOneServedSnapshot(t *testing.T) {
+	const wire = "global.acme/m1-v1:0"
+	for _, tc := range []struct {
+		name      string
+		snapshots []string
+		want      map[string][]string // ref → the name each hop is sent, host-a's first
+	}{
+		{"lists none", nil, map[string][]string{"m1": {"m1", "m1", "m1"}, "m1-2026-01-01": {"m1-2026-01-01", "m1-2026-01-01", "m1-2026-01-01"}}},
+		{"lists one", []string{"m1"}, map[string][]string{"m1": {wire, wire, "m1"}, "m1-2026-01-01": {"m1-2026-01-01"}}},
+	} {
+		b := newBasic()
+		b.m1.Spec.Snapshots = append(b.m1.Spec.Snapshots, model.Snapshot{Name: "m1-2026-01-01"})
+		bd := b.w.bindingAt(b.m1, b.hostA)
+		bd.Spec.UpstreamName, bd.Spec.Snapshots = wire, tc.snapshots
+		h := b.w.start(t)
+		for ref, want := range tc.want {
+			r := h.route(b.key, ref)
+			var got []string
+			for _, hop := range r.Hops {
+				got = append(got, hop.UpstreamModel)
+			}
+			if r.Refused != nil || !slices.Equal(got, want) || r.UpstreamModel != want[0] {
+				t.Errorf("%s, %s: hops send %v, route %q (refused %v); want %v", tc.name, ref, got, r.UpstreamModel, r.Refused, want)
+			}
+		}
 	}
 }
 

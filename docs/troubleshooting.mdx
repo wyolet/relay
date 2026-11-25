@@ -23,11 +23,11 @@ A `401` with `X-WR-Origin: upstream` is the provider rejecting a host key, not y
 | `model_not_allowed` | A policy on the caller's ladder does not allow the model; the message names the rung and the policy. | Add the model to that policy's `models`; see [Policies](/concepts/policies). `GET /api/plan-issues` lists configuration Relay found broken, such as a binding outside its owner's scope. |
 | `model_disabled` | The model is disabled in the catalog. | Enable it, or use another model. |
 | `policy_disabled` | The policy bound on the rung the message names is disabled. | Enable the policy, or bind the account to another one. |
-| `subject_disabled` | The caller's team or project is disabled. | Enable it. |
+| `subject_disabled` | The caller's team or project is disabled, or the user who owns the caller's service account. | Enable it. |
 | `duplicate_binding` | Two policy bindings name one account. | Remove the account from all but one binding. |
 | `account_closed` | The request runs in a member account whose membership ended. | Grant the user a role in that team or project again, or use another account. |
 | `account_not_held` | The request named an account its credential may not run in (by `X-WR-Account`, a `/a/<account>/` base URL or the account's host), or an inference token's user has no account in the token's project, as with a token minted before an upgrade or for a project that is gone. | Name an account the credential may use, see [Lanes](/concepts/accounts#lanes); for a token, mint a new one. |
-| `unpriced_under_budget` | A budget applies and the model's binding has no pricing. | Add pricing for the binding; see [Budgets](/concepts/budgets#models-without-pricing). |
+| `unpriced_under_budget` | A budget applies and the model's binding has no enabled pricing. | Add or enable pricing for the binding; see [Budgets](/concepts/budgets#models-without-pricing). |
 | `proxy_disabled` | A [proxy-mode](/concepts/proxy-mode) request arrived while proxy mode is off. | Enable the `proxy-mode` section, or drop the proxy-mode header. |
 | `passthrough_forbidden` | An authenticated proxy-mode request used a credential without `passthroughAllowed`. | Use a relay key with `spec.passthroughAllowed: true`. |
 
@@ -60,6 +60,7 @@ Each host key has a circuit breaker. A key that the upstream rejects with `401` 
 | The provider's own status and body, `X-WR-Origin: upstream` | Every key was tried and failed; this is the last provider response. |
 | `upstream_unavailable` | Every key failed and the provider sent no body. |
 | `upstream_unreachable` | Relay could not connect to the host at all (refused, DNS, TLS). This is the host's base URL or network, not a key. |
+| `host_misconfigured` | The host's `path`, or its `paths` entry for the request's wire shape, has a `{key}` placeholder that its `backend` does not set; the message names the key. Set it in the host's `backend`. A malformed placeholder, or one after `?`, is refused when the host is saved. |
 
 To recover:
 
@@ -95,7 +96,7 @@ In proxy mode `request_too_large` also means the first 32 MiB of the body hold n
 
 ## Wrong wire format from the upstream
 
-If a model returns a wire-format error from its provider, the host binding's `adapter` probably doesn't match how that endpoint speaks. Valid adapters are `openai` (Chat Completions and OpenAI-compatible servers such as Ollama), `openai_responses`, `anthropic` and `gemini` (Gemini's native `generateContent`). The adapter is set per binding, not per host, because one host can serve models over different wire shapes.
+If a model returns a wire-format error from its provider, the host binding's `adapter` probably doesn't match how that endpoint speaks. Valid adapters are `openai` (Chat Completions and OpenAI-compatible servers such as Ollama), `openai_responses`, `anthropic`, `vertex_anthropic` (Claude on Google Cloud Vertex AI, `rawPredict`), `gemini` (Gemini's native `generateContent`) and `vertex_gemini` (Gemini on Google Cloud Vertex AI, `generateContent`). The adapter is set per binding, not per host, because one host can serve models over different wire shapes.
 
 ## The admin UI won't sign you in
 

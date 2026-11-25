@@ -1,7 +1,8 @@
 // Package oauth provides minimal, vendor-neutral OAuth 2.0 flow helpers for
 // acquiring and refreshing provider credentials. It is a thin convenience
 // layer over golang.org/x/oauth2 covering the authorization-code grant with
-// PKCE (RFC 7636) and the device authorization grant (RFC 8628).
+// PKCE (RFC 7636), the device authorization grant (RFC 8628), and the
+// JWT-bearer grant for service-account credentials (RFC 7523).
 //
 // It is shared by SDK consumers driving an interactive login and by the relay
 // server doing server-side refresh. It owns flow *machinery* only — acquiring

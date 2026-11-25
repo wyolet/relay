@@ -12,13 +12,14 @@ Every request runs in one account, its [lane](/concepts/accounts#lanes), and cli
 | Lane | Rungs |
 | --- | --- |
 | Member or service account in project P of team T | T's account → P's account → the lane |
-| Member account in team T | T's account → the lane |
+| Member account in team T, or service account team T owns | T's account → the lane |
+| Service account user U owns | U's personal account → the lane |
 | Personal account | The lane |
 | Provider account used as a lane | None: its own policy applies as the upstream rung of its keys, which are all it reaches |
 
 On the upstream side, each host key's [provider account](/concepts/key-pooling#accounts) is a rung: its policy, usually a [tier preset](#tier-presets), applies to every request a key of that account serves, whoever the caller is. Every host key names its account; one that names none is refused.
 
-Refusals, usage and metrics name the rungs `team`, `project`, `lane` and, upstream, `account`.
+Refusals, usage and metrics name the rungs `team`, `project`, `lane` and, upstream, `account`. Above a user's service account the personal account's rung is named `personal`. A link with `shared` off counts once per lane, and a user's service accounts count in the user's personal lane, on every rung and upstream: a user and their bots share one bucket.
 
 Three rules hold on every rung:
 
@@ -33,7 +34,7 @@ Relay folds the ladder ahead of time, when a policy, binding or linked row chang
 - **Models.** A model is allowed only if every rung whose policy lists `models` allows it, upstream rungs included. A policy with `models: []` does not narrow models.
 - **Pools.** Only caller rungs link pools. The innermost caller rung whose policy links any decides which ones the request reaches and in what order; each outer rung that also links some narrows that list to the host keys it reaches too. A rung whose policy links none leaves reach to the others. When no rung links any, see [Reach without a linking rung](#reach-without-a-linking-rung).
 - **Rate limits and budgets.** Every rate limit and budget on every rung applies, and the request must fit all of them. See [Shared and per-lane counting](#shared-and-per-lane-counting), [Rate limits](/concepts/rate-limits) and [Budgets](/concepts/budgets).
-- **Disabled and closed rows.** A disabled policy on a caller rung refuses the request with `policy_disabled`; Relay never falls through to a broader rule. A disabled team or project refuses with `subject_disabled`, and a closed member account with `account_closed`. A disabled user or service account makes its keys answer `401`. On an upstream rung, a disabled policy takes that account's host keys out of every route, so they serve nothing rather than serving unmetered.
+- **Disabled and closed rows.** A disabled policy on a caller rung refuses the request with `policy_disabled`; Relay never falls through to a broader rule. A disabled team or project refuses with `subject_disabled`, as does a disabled user above the service accounts they own, and a closed member account with `account_closed`. A disabled user or service account makes its own keys answer `401`. On an upstream rung, a disabled policy takes that account's host keys out of every route, so they serve nothing rather than serving unmetered.
 
 A refusal names the rung, the account and the policy that decided it. The codes are listed in [Policy refusals](/reference/inference-api#policy-refusals).
 
@@ -44,8 +45,8 @@ When no caller rung links pools, the lane reaches the host keys its own scopes o
 | Lane | Host keys reached, in this order |
 | --- | --- |
 | Member or service account in a project | The project's, the team's, then the system's |
-| Member account in a team | The team's, then the system's |
-| Personal account | The user's own, then the system's |
+| Member account in a team, or service account a team owns | The team's, then the system's |
+| Personal account, or service account a user owns | The user's own, then the system's |
 | Provider account | That account's host keys |
 
 Within one scope they are tried in the order they were created. A keyless (`noAuth`) host is never reached this way: it takes a pool at that host, linked by a caller policy, because no key gates it.

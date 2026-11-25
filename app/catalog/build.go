@@ -31,6 +31,7 @@ import (
 	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Build assembles a Snapshot from entity slices using the same sanitize rules
@@ -97,7 +98,7 @@ func build(
 	s.addGroups(groups)
 	s.addRoles(roles)
 	// Keys sanitize against the service accounts.
-	s.addServiceAccounts(sas, snapIDs(s.projectsByID))
+	s.addServiceAccounts(sas, snapIDs(s.projectsByID), snapIDs(s.teamsByID))
 	s.addKeys(rks, snapIDs(s.serviceAccountsByID))
 	s.addPricings(pricings, hostIDs, memberModelIDs)
 	s.addBindings(bindings, memberModelIDs, hostIDs)
@@ -128,6 +129,7 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		modelsByName:         map[string][]*model.Model{},
 		snapshotsByName:      map[string]snapshotRef{},
 		snapshotAliases:      map[string]snapshotRef{},
+		unservedPins:         map[string]snapshotRef{},
 		aliasExact:           map[string]AliasRef{},
 		overlaysByTarget:     map[string]*overlay.Overlay{},
 		modelTemplates:       map[string]*model.Model{},
@@ -162,9 +164,9 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		refsByServiceAccount: map[string]refSet{},
 		refsByRole:           map[string]refSet{},
 
-		serviceAccountsByID:      make(map[string]*serviceaccount.ServiceAccount, nSAs),
-		serviceAccountsByName:    make(map[string]*serviceaccount.ServiceAccount, nSAs),
-		serviceAccountsByProject: map[string][]*serviceaccount.ServiceAccount{},
+		serviceAccountsByID:    make(map[string]*serviceaccount.ServiceAccount, nSAs),
+		serviceAccountsByName:  make(map[string]*serviceaccount.ServiceAccount, nSAs),
+		serviceAccountsByOwner: map[meta.Owner][]*serviceaccount.ServiceAccount{},
 
 		groupsByID:   make(map[string]*group.Group, nGroups),
 		groupsByName: make(map[string]*group.Group, nGroups),

@@ -176,7 +176,7 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 	fx.keyRow.Spec.PayloadLoggingEnabled = o.keyCaptures
 	var accounts []*account.Account
 	accountOf := func(sa *serviceaccount.ServiceAccount, k *key.Key) *account.Account {
-		a := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID)
+		a := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner)
 		a.Meta.ID = meta.NewID()
 		accounts = append(accounts, a)
 		k.Spec.AccountID = a.Meta.ID

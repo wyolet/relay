@@ -20,7 +20,7 @@ type tokensAdapter struct {
 	extracts  int
 }
 
-func (*tokensAdapter) Call(context.Context, string, *string, string, []byte, http.Header, string, bool, bool) (*http.Response, error) {
+func (*tokensAdapter) Call(context.Context, Upstream, string, []byte, http.Header, string, bool, bool) (*http.Response, error) {
 	return nil, nil
 }
 

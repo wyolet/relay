@@ -60,7 +60,7 @@ All are labelled by `source`, the runner that handled the request: `pipeline` (n
 | `relay_inference_conns_refused_total` | counter | `reason` | Inference connections refused for want of a slot. `queue_full` and `queue_timeout` were answered `503` with `Retry-After: 1`; `no_answer` were closed unanswered because 4096 refusals were already in progress. Their requests reach no other metric. |
 | `relay_inference_conns_idle_closed_total` | counter | _(none)_ | Idle keep-alive connections closed to give their slot to a waiting connection (`RELAY_CONN_CLOSE_IDLE=1`). |
 
-`relay_inflight_requests / relay_inflight_adaptive_limit` is a pod's headroom before it starts shedding. An adaptive limit below `relay_inflight_limit` means the pod is short of CPU rather than memory. A non-zero shed rate means the pod is at capacity, which a quota `429` (`error_kind` `rate_limited` in [usage](/concepts/usage#failed-requests)) is not.
+`relay_inflight_requests / relay_inflight_adaptive_limit` is a pod's headroom before it starts shedding. An adaptive limit below `relay_inflight_limit` means the pod is short of CPU rather than memory. A non-zero shed rate means the pod is at capacity, which a quota `429` (`error_kind` `rate_limited` or `budget_exceeded` in [usage](/concepts/usage#failed-requests)) is not.
 
 ### Auth rejection reasons
 
@@ -99,7 +99,7 @@ All are labelled by `source`, the runner that handled the request: `pipeline` (n
 
 | Metric | Type | Labels | What it answers |
 | --- | --- | --- | --- |
-| `relay_limits_budget_crossings_total` | counter | `rung` (`account` for a provider account, `team`, `project`, `lane`), `mode` (`hard`, `alert`) | Charges that took a [budget](/concepts/budgets) to its cap, counted once per budget, bound account and period, and per lane for a budget linked with `shared: false`. An `alert` budget is reported here and nowhere else. |
+| `relay_limits_budget_crossings_total` | counter | `rung` (`account` for a provider account, `team`, `project`, `personal`, `lane`), `mode` (`hard`, `alert`) | Charges that took a [budget](/concepts/budgets) to its cap, counted once per budget, bound account and period, and per lane for a budget linked with `shared: false`. An `alert` budget is reported here and nowhere else. |
 
 ## Hybrid limiter
 

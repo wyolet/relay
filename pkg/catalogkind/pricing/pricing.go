@@ -29,7 +29,7 @@ type Spec struct {
 	Currency       string   `json:"currency"             yaml:"currency"             validate:"required"         doc:"ISO 4217 currency of the amounts, such as USD."`
 	TargetModelIDs []string `json:"targetModels"         yaml:"targetModels"         validate:"required,min=1,dive,required" doc:"Ids of the models this rate sheet prices at its host."`
 	Rates          []Rate   `json:"rates"                yaml:"rates"                validate:"required,min=1,dive" doc:"One entry per priced meter, context tier and service tier."`
-	Enabled        *bool    `json:"enabled,omitempty"    yaml:"enabled,omitempty"    doc:"False stops costing traffic with this sheet, leaving it unpriced. Omitted means true."`
+	Enabled        *bool    `json:"enabled,omitempty"    yaml:"enabled,omitempty"    doc:"False stops costing traffic with this sheet, leaving it unpriced: while a budget applies, requests for its bindings are refused (403 unpriced_under_budget). A model meant to be free under a budget needs an enabled sheet with zero rates. Omitted means true."`
 }
 
 // Rate is one priced meter. AboveTokens=0 is the base tier; AboveTokens>0 is

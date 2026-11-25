@@ -62,6 +62,11 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := d.Authz.Authorize(ctx, "keys.rotate", authz.Resource{Kind: "key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
+		if existing.Spec.Principal.Kind == key.PrincipalServiceAccount {
+			if err := refs(d).UserServiceAccountKey(ctx, existing.Meta.Owner); err != nil {
+				return nil, refErr(err)
+			}
+		}
 		// Rotating a revoked key would hand out a token that still can't
 		// authenticate (RevokedAt survives rotation) — reject instead of
 		// minting a dead credential.

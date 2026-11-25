@@ -22,16 +22,23 @@ const (
 	OpenAI Name = "openai"
 
 	// Anthropic: the Anthropic Messages shape. Also used for Anthropic via
-	// AWS Bedrock (Claude on Bedrock keeps the Anthropic shape) and via
-	// GCP Vertex.
+	// AWS Bedrock (Claude on Bedrock keeps the Anthropic shape). Claude on
+	// GCP Vertex is VertexAnthropic.
 	Anthropic Name = "anthropic"
 
+	// VertexAnthropic is Claude on GCP Vertex (rawPredict and
+	// streamRawPredict): the Anthropic Messages body without model, which
+	// the URL path carries, and with anthropic_version in the body.
+	VertexAnthropic Name = "vertex_anthropic"
+
 	// Gemini: the Google Gemini native shape (POST /v1beta/models/{model}:
-	// generateContent). Unique among registered shapes: the upstream model
-	// name and the sync/stream choice live in the URL path, not the request
-	// body, so the Spec resolves its upstream path per request via
-	// UpstreamPathFn. Also used for Gemini via GCP Vertex.
+	// generateContent). The upstream model name and the sync/stream choice
+	// live in the URL path, not the request body, so the Spec resolves its
+	// upstream path per request via UpstreamPathFn.
 	Gemini Name = "gemini"
+
+	// VertexGemini: Gemini on Vertex AI (POST /v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent). It sends the Gemini body with a mimeType on every fileData part and authenticates with a bearer token; the host's backend fills {project} and {location}.
+	VertexGemini Name = "vertex_gemini"
 
 	// OpenAIResponses is the OpenAI Responses API shape (POST /v1/responses).
 	// Distinct from OpenAI (Chat Completions) because the upstream path differs.
@@ -54,7 +61,7 @@ const (
 // Valid reports whether n is one of the supported adapter names.
 func (n Name) Valid() bool {
 	switch n {
-	case OpenAI, Anthropic, Gemini, OpenAIResponses, OpenAIEmbeddings:
+	case OpenAI, Anthropic, VertexAnthropic, Gemini, VertexGemini, OpenAIResponses, OpenAIEmbeddings:
 		return true
 	}
 	return false
@@ -63,7 +70,7 @@ func (n Name) Valid() bool {
 // All returns every supported Name. Stable order: useful for tests and
 // CLI flag help text. Order does not imply preference.
 func All() []Name {
-	return []Name{OpenAI, Anthropic, Gemini, OpenAIResponses, OpenAIEmbeddings}
+	return []Name{OpenAI, Anthropic, VertexAnthropic, Gemini, VertexGemini, OpenAIResponses, OpenAIEmbeddings}
 }
 
 // UpstreamBinding reports whether n may appear as a HostBinding.Adapter —
@@ -77,7 +84,7 @@ func All() []Name {
 // registry assertion guarantees each one has a registered spec.
 func (n Name) UpstreamBinding() bool {
 	switch n {
-	case OpenAI, Anthropic, Gemini, OpenAIResponses:
+	case OpenAI, Anthropic, VertexAnthropic, Gemini, VertexGemini, OpenAIResponses:
 		return true
 	}
 	return false
@@ -86,7 +93,7 @@ func (n Name) UpstreamBinding() bool {
 // UpstreamBindingNames returns every Name valid as a HostBinding.Adapter,
 // in stable order. The single source of truth behind UpstreamBinding.
 func UpstreamBindingNames() []Name {
-	return []Name{OpenAI, Anthropic, Gemini, OpenAIResponses}
+	return []Name{OpenAI, Anthropic, VertexAnthropic, Gemini, VertexGemini, OpenAIResponses}
 }
 
 // DefaultBinding is the adapter assumed when a HostBinding omits one.

@@ -63,6 +63,13 @@ func serviceAccount(name, projectName string) manifest.Document {
 	}}
 }
 
+func teamServiceAccount(name, teamName string) manifest.Document {
+	return manifest.Document{ServiceAccount: &manifest.ServiceAccountDTO{
+		Metadata: manifest.WireMeta{Name: name, Owner: manifest.WireOwner{Kind: "team", Name: teamName}},
+		Spec:     manifest.ServiceAccountSpec{Team: teamName},
+	}}
+}
+
 func key(name, principalKind, principalName string) manifest.Document {
 	return manifest.Document{Key: &manifest.KeyDTO{
 		Metadata: manifest.WireMeta{Name: name},
@@ -173,6 +180,15 @@ var graphCases = []struct {
 		d[3].HostBinding.Spec.Pricing = "list"
 	}},
 	{name: "binding adapter that is no upstream shape", edit: func(d []manifest.Document) { d[3].HostBinding.Spec.Adapter = "canonical" }},
+	{name: "binding upstream name for a one-snapshot model", edit: func(d []manifest.Document) { d[3].HostBinding.Spec.UpstreamName = "global.openai.gpt-x-v1:0" }},
+	{name: "binding upstream name for several snapshots", edit: func(d []manifest.Document) {
+		d[2].Model.Spec.Snapshots = append(d[2].Model.Spec.Snapshots, model.Snapshot{Name: "gpt-x-2026-01-01"})
+		d[3].HostBinding.Spec.UpstreamName = "global.openai.gpt-x-v1:0"
+	}},
+	{name: "binding upstream name for the one snapshot it lists", edit: func(d []manifest.Document) {
+		d[2].Model.Spec.Snapshots = append(d[2].Model.Spec.Snapshots, model.Snapshot{Name: "gpt-x-2026-01-01"})
+		d[3].HostBinding.Spec.UpstreamName, d[3].HostBinding.Spec.Snapshots = "global.openai.gpt-x-v1:0", []string{"gpt-x"}
+	}},
 
 	// Pricing.
 	{name: "pricing for a missing model at a missing host", add: []manifest.Document{
@@ -197,6 +213,15 @@ var graphCases = []struct {
 		budget("bd", inSearch),
 	}},
 	{name: "service account in a missing project, and in none", add: []manifest.Document{serviceAccount("indexer", "ghost"), serviceAccount("drifter", "")}},
+	{name: "service account of a present team", add: []manifest.Document{teamServiceAccount("deployer", "platform")}},
+	{name: "service account of a user, and of a team and a user", add: []manifest.Document{
+		{ServiceAccount: &manifest.ServiceAccountDTO{Metadata: manifest.WireMeta{Name: "alice-bot"}, Spec: manifest.ServiceAccountSpec{User: "alice"}}},
+		{ServiceAccount: &manifest.ServiceAccountDTO{Metadata: manifest.WireMeta{Name: "both-owners"}, Spec: manifest.ServiceAccountSpec{Team: "platform", User: "alice"}}},
+	}},
+	{name: "service account of a missing team, and of a project and a team", add: []manifest.Document{
+		teamServiceAccount("deployer", "ghost-team"),
+		{ServiceAccount: &manifest.ServiceAccountDTO{Metadata: manifest.WireMeta{Name: "both"}, Spec: manifest.ServiceAccountSpec{Project: "ml-search", Team: "platform"}}},
+	}},
 	{name: "keys of a present, a missing and a user principal", add: []manifest.Document{
 		serviceAccount("indexer", "ml-search"),
 		key("indexer-prod", "serviceaccount", "indexer"),
@@ -335,7 +360,7 @@ var wantReports = map[string][]string{
 		"error ref_missing Account/acct.spec.host → Host/ghost-host: host \"ghost-host\" not found",
 	},
 	"binding adapter that is no upstream shape": {
-		"error invariant HostBinding/gpt-x-openai-host.spec.adapter: adapter \"canonical\" is not a valid upstream binding (want one of [openai anthropic gemini openai_responses])",
+		"error invariant HostBinding/gpt-x-openai-host.spec.adapter: adapter \"canonical\" is not a valid upstream binding (want one of [openai anthropic vertex_anthropic gemini vertex_gemini openai_responses])",
 	},
 	"binding naming neither model nor host": {
 		"error incomplete HostBinding/gpt-x-openai-host.spec.host: host is required",
@@ -355,7 +380,12 @@ var wantReports = map[string][]string{
 	"binding to missing pricing": {
 		"error ref_missing HostBinding/gpt-x-openai-host.spec.pricing → Pricing/ghost-price: pricing \"ghost-price\" not found",
 	},
-	"binding to present pricing": nil,
+	"binding to present pricing":                     nil,
+	"binding upstream name for a one-snapshot model": nil,
+	"binding upstream name for several snapshots": {
+		"warning invariant HostBinding/gpt-x-openai-host.spec.upstreamName: upstreamName \"global.openai.gpt-x-v1:0\" has no effect: the binding serves 2 snapshots of model \"gpt-x\"; list the one it names in spec.snapshots",
+	},
+	"binding upstream name for the one snapshot it lists": nil,
 	"binding: a binding in a missing project": {
 		"error ref_missing PolicyBinding/pb.metadata.owner → Project/ghost: project \"ghost\" not found",
 	},
@@ -482,8 +512,16 @@ var wantReports = map[string][]string{
 	},
 	"rows owned by a present project": nil,
 	"service account in a missing project, and in none": {
-		"error incomplete ServiceAccount/drifter.spec.project: project is required",
+		"error incomplete ServiceAccount/drifter.spec: exactly one of project, team and user is required",
 		"error ref_missing ServiceAccount/indexer.spec.project → Project/ghost: project \"ghost\" not found",
+	},
+	"service account of a present team": nil,
+	"service account of a user, and of a team and a user": {
+		"error incomplete ServiceAccount/both-owners.spec: exactly one of project, team and user is required",
+	},
+	"service account of a missing team, and of a project and a team": {
+		"error incomplete ServiceAccount/both.spec: exactly one of project, team and user is required",
+		"error ref_missing ServiceAccount/deployer.spec.team → Team/ghost-team: team \"ghost-team\" not found",
 	},
 	"tier policy linking pools": {
 		"error invariant Policy/tier.spec.pools: a host-owned tier policy links no pools",

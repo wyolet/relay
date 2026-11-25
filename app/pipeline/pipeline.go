@@ -37,18 +37,40 @@ import (
 
 // Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.
 //
-// upstreamModel is the resolved upstream model name (snapshot.Upstream());
+// upstreamModel is the model name the hop is sent (plan.RouteHop.UpstreamModel);
 // stream reports whether the caller requested a streamed response. Most
 // shapes ignore both (model + stream live in the request body), but shapes
 // that encode them in the URL path — Gemini's generateContent vs
 // streamGenerateContent — need them to build the upstream URL.
 type Adapter interface {
-	// hostPath is the host's upstream-path override (Host.Spec.PathFor): used
-	// verbatim when non-nil (explicit "" appends nothing to baseURL); nil
-	// keeps the adapter's shape default.
-	Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
+	Call(ctx context.Context, up Upstream, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
 	ExtractTokens(body []byte) sdkusage.Tokens
 	Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration)
+}
+
+// Upstream is the host's settings an Adapter.Call is addressed with.
+type Upstream struct {
+	BaseURL string
+	// Path is the host's upstream-path override (Host.Spec.PathFor): used when non-nil (explicit "" appends nothing to BaseURL); nil keeps the adapter's shape default.
+	Path *string
+	// Backend fills the {key} placeholders of the upstream path (Host.Spec.Backend).
+	Backend map[string]string
+}
+
+// PathPlaceholderError is an upstream path with a placeholder the host's backend does not fill, or a malformed one. No request was sent: the fault is the hop's configuration, not its credential or its reachability.
+type PathPlaceholderError struct {
+	// Host is the host's name, set by the caller that knows the host.
+	Host string
+	Path string
+	// Key is the placeholder's key; empty when the placeholder is malformed.
+	Key string
+}
+
+func (e *PathPlaceholderError) Error() string {
+	if e.Key == "" {
+		return fmt.Sprintf("upstream path %q has a malformed placeholder", e.Path)
+	}
+	return fmt.Sprintf("upstream path %q: host backend sets no value for {%s}", e.Path, e.Key)
 }
 
 // CallTimeouter is the optional capability of an Adapter that caps one call end to end, body read included; 0 means no cap. The runner sets that cap on the call context it derives anyway, so the adapter need not derive a second one.
@@ -73,25 +95,30 @@ type Request struct {
 	Body    []byte
 	Headers http.Header
 
+	// Adapter calls every hop, unless HopAdapters is set.
 	Adapter Adapter
+
+	// HopAdapters, when set, gives each hop the adapter of its binding's shape (plan.RouteHop.Binding.Spec.Adapter), which calls the hop, reads its response in post-flight (its TranslatorProvider's translator replacing Lifecycle.Translator once it serves), and names the shape handed to HopBody and Host.Spec.PathFor in place of BodyShape. Nil calls every hop with Adapter.
+	HopAdapters interface {
+		PipelineAdapter(adapters.Name) Adapter
+	}
 
 	Model    *model.Model
 	Provider string
 
-	// Hops are the route's pools in failover order, each with the credentials that may serve and the counters each one's request must fit. No slot in any hop → ErrNoKeys. Every hop must speak the Adapter's wire shape: the body is built once.
+	// Hops are the route's pools in failover order, each with the credentials that may serve and the counters each one's request must fit. No slot in any hop → ErrNoKeys. Body is built once, so every hop must accept it in the shape it is called with, after HopBody.
 	Hops []plan.RouteHop
 
-	// HopBody, when set, returns the body to send to hop: Body itself unless the hop's host rewrites a body in BodyShape, plus the top-level keys the rewrite dropped. It must not modify Body. Run calls it on the first attempt at each hop, so a failover sends each host its own form.
+	// HopBody, when set, returns the body to send to hop: Body itself unless the hop's host or the shape the hop is called with rewrites it, plus the top-level keys a host rename dropped. It must not modify Body. Run calls it on the first attempt at each hop, so a failover sends each host its own form.
 	HopBody func(hop *plan.RouteHop, shape adapters.Name, body []byte) ([]byte, []string)
-	// BodyShape is the wire shape Body is in, handed to HopBody. It also picks each hop's upstream path (Host.Spec.PathFor).
+	// BodyShape is the wire shape every hop is called with when HopAdapters is nil, handed to HopBody. It also picks each hop's upstream path (Host.Spec.PathFor).
 	BodyShape adapters.Name
 
 	ModelName string
 
-	// UpstreamModel is the resolved upstream wire name (routing's
-	// Plan.UpstreamModel() — the snapshot's upstream name, or the alias
-	// verbatim override when resolution matched a declared alias). Passed
-	// to Adapter.Call for shapes that put the model in the URL path.
+	// UpstreamModel is the model name Body carries. Adapter.Call, for
+	// shapes that put the model in the URL path, gets the hop's own
+	// plan.RouteHop.UpstreamModel instead when the hop has one.
 	UpstreamModel string
 
 	// Stream reports whether the caller requested a streamed response, passed
@@ -351,6 +378,10 @@ func (p *Pipeline) makeResult(req *Request, st *runState, resp *http.Response, c
 		// Stamp the outcome so the metrics stream observer (whose Fill fan-out
 		// a stream session skips) can read it at end-of-stream.
 		req.Lifecycle.ResponseStatus = status
+		// Hops called with their own adapters may read their wire differently: the stream session and the usage hook decode with the one that served.
+		if tp, ok := st.adapter.(TranslatorProvider); ok && req.HopAdapters != nil {
+			req.Lifecycle.Translator = tp.Translator()
+		}
 	}
 
 	// The first-byte reader stamps the upstream TTFT + response-end marks as
@@ -449,7 +480,7 @@ func (p *Pipeline) runPostFlight(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	tokens := chargedTokens(req.Lifecycle, req.Adapter, body)
+	tokens := chargedTokens(req.Lifecycle, st.adapter, body)
 	// A response cut short before its end may never have reported usage;
 	// the upstream still did the work, so the budgets are charged a floor
 	// rather than nothing. Usage records keep only what was reported.
@@ -491,6 +522,11 @@ func (p *Pipeline) runPostFlight(
 	if p.HostHealth != nil {
 		p.HostHealth.Reachable(ctx, st.cur.hop.Host.Meta.ID)
 	}
+}
+
+// TranslatorProvider is the optional capability of an Adapter that reads its wire shape through a canonical translator; nil when the shape has none.
+type TranslatorProvider interface {
+	Translator() v1.Translator
 }
 
 // ResponseSummarizer is the optional capability of an Adapter that reads the canonical Summary of a buffered response, so post-flight decodes the body once for the rate-limit commit and usage alike. false means it has no translator for the body; the caller then uses ExtractTokens.
@@ -571,6 +607,7 @@ func AnswerOf(err error) (a plan.Answer, ok bool) {
 	var refused *limits.Refused
 	var limited *UpstreamLimitedError
 	var unreachable *UpstreamUnreachableError
+	var unfilled *PathPlaceholderError
 	switch {
 	case errors.As(err, &limited):
 		// The caller's own limits had room; the upstream rules are the host's configuration and stay out of the message.
@@ -596,6 +633,16 @@ func AnswerOf(err error) (a plan.Answer, ok bool) {
 			a.Kind = plan.KindOf(plan.CodeUpstreamUnreachable)
 		}
 		return a, true
+	case errors.As(err, &unfilled):
+		// Like the dial target, the path template stays in the error; the caller is told the host by name and the key it lacks.
+		msg := fmt.Sprintf("upstream host %q is misconfigured: its upstream path has a malformed placeholder", unfilled.Host)
+		if unfilled.Key != "" {
+			msg = fmt.Sprintf("upstream host %q is misconfigured: its backend sets no value for the path placeholder {%s}", unfilled.Host, unfilled.Key)
+		}
+		return plan.Answer{
+			Status: http.StatusBadGateway, Type: "server_error", Code: plan.CodeHostMisconfigured, Kind: plan.KindOf(plan.CodeHostMisconfigured),
+			Message: msg,
+		}, true
 	case errors.Is(err, ErrNoKeys):
 		// No credential speaks the request's shape: as unreachable as a route with none.
 		return plan.Answer{
@@ -612,13 +659,18 @@ func AnswerOf(err error) (a plan.Answer, ok bool) {
 func classifyFailure(err error) (kind string, status int) {
 	var upstream *UpstreamFailureError
 	var unreachable *UpstreamUnreachableError
+	var unfilled *PathPlaceholderError
 	var refused *limits.Refused
 	var limited *UpstreamLimitedError
 	switch {
 	case errors.As(err, &unreachable):
 		return plan.CodeUpstreamUnreachable, 0
+	case errors.As(err, &unfilled):
+		return plan.CodeHostMisconfigured, 0
 	case errors.As(err, &upstream):
 		return "upstream_error", upstream.Status
+	case errors.As(err, &refused) && plan.LimitCode(refused) == plan.CodeBudgetExceeded:
+		return plan.CodeBudgetExceeded, 0
 	case errors.As(err, &refused), errors.As(err, &limited):
 		// Refused before any upstream call → status 0
 		// (the kind carries the 429 meaning; Status is the upstream status).

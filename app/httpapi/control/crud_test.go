@@ -301,7 +301,7 @@ func TestCRUDAccessByMode(t *testing.T) {
 		forbidden  = "forbidden"
 		sysEdit    = "rate-limit is system-owned: only an admin may edit it"
 		sysDelete  = "rate-limit is system-owned: only an admin may delete it"
-		govDelete  = "delete of rate-limit is disabled on this relay; enable it via the governance:rate-limit settings section"
+		govDelete  = "delete of rate-limit is disabled on this relay; the kind has no governance settings section to enable it"
 		byID       = "/rate-limits/by-id/"
 		collection = "/rate-limits"
 	)
@@ -484,6 +484,8 @@ func TestCRUDCreate(t *testing.T) {
 		{"an admin's group is the organization's", "root", "/groups", tenant, 201, "", "eng", org},
 		{"an admin's role is the organization's", "root", "/roles", customRole, 201, "", "release-manager", org},
 		{"a team written as the system's is the organization's", "root", "/teams", systemTeam, 201, "", "ops", org},
+		{"a team needs no spec", "root", "/teams", `{"metadata":{"name":"bare-team"}}`, 201, "", "bare-team", org},
+		{"a group needs no spec", "root", "/groups", `{"metadata":{"name":"bare-group"}}`, 201, "", "bare-group", org},
 		{"a custom role is not the system's", "root", "/roles", systemRole, 400, reserved, "", meta.Owner{}},
 		{"a team takes no personal owner", "alice", "/teams", personal, 400, "team owner.kind must be organization; omit metadata.owner", "", meta.Owner{}},
 		{"a team takes no personal owner from an admin", "root", "/teams", personal, 400, "team owner.kind must be organization; omit metadata.owner", "", meta.Owner{}},
@@ -524,6 +526,14 @@ func TestCRUDCreate(t *testing.T) {
 	// A team's cap is a Budget its policy links, so a stray spec.budget is refused rather than dropped.
 	t.Run("an unknown spec field is a 422 naming it", func(t *testing.T) {
 		wantFieldError(t, scopeReq(t, h, "root", "POST", "/teams", `{"metadata":{"name":"capped"},"spec":{"budget":{"amount":"100"}}}`), "body.spec.budget", "unexpected property")
+	})
+	// Only create may omit spec: an update without it would store an empty spec and re-enable the team.
+	t.Run("an update needs spec, so a disabled team stays disabled", func(t *testing.T) {
+		got := decodeMeta(t, scopeReq(t, h, "root", "POST", "/teams", `{"metadata":{"name":"paused"},"spec":{"enabled":false}}`), 201)
+		wantFieldError(t, scopeReq(t, h, "root", "PUT", "/teams/by-id/"+got.ID, `{"metadata":{"name":"paused"}}`), "body", "expected required property spec to be present")
+		if tm := teams.items[got.ID]; tm == nil || tm.IsEnabled() {
+			t.Fatalf("team after a refused update = %+v, want it stored disabled", tm)
+		}
 	})
 }
 
@@ -901,7 +911,7 @@ func TestUpdateIntoAnotherScopeNeedsCreateThere(t *testing.T) {
 		wantAPIError(t, scopeReq(t, f.h, "caller", "PUT", byID, `{"metadata":{"name":"bot"},"spec":{"projectId":"`+f.p2.ID+`"}}`), 400, "",
 			fmt.Sprintf("serviceaccount \"bot\": owner.id %q does not match spec.projectId %q", f.p1.ID, f.p2.ID))
 		wantAPIError(t, scopeReq(t, f.h, "caller", "PUT", byID, `{"metadata":{"name":"bot","owner":{"kind":"project","id":"`+f.p2.ID+`"}},"spec":{"projectId":"`+f.p2.ID+`"}}`), 409, "resource_in_use",
-			`service account "bot" stays in the project it was made in: its account and keys belong there; create a new service account in the other project`)
+			`service account "bot" stays with the project it was made under: its account and keys belong there; create a new service account for the other owner`)
 		if got := f.accounts.items[f.saAtP1.Meta.ID]; got != f.saAtP1 || got.Meta.Owner != f.p1 {
 			t.Fatalf("stored account moved to %+v", got.Meta.Owner)
 		}

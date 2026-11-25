@@ -86,19 +86,22 @@ func (w *World) Host(name, baseURL string) *host.Host {
 	return h
 }
 
-// Model adds a model of p with one snapshot named like it.
-func (w *World) Model(p *provider.Provider, name string) *model.Model {
+// Model adds a model of p with a snapshot named like it, the pointer, and one more snapshot per extra name.
+func (w *World) Model(p *provider.Provider, name string, snapshots ...string) *model.Model {
 	m := &model.Model{
 		Meta: md(name, meta.Owner{Kind: meta.OwnerProvider, ID: p.Meta.ID}),
 		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: slug.From(name)}}, Pointer: slug.From(name)},
+	}
+	for _, s := range snapshots {
+		m.Spec.Snapshots = append(m.Spec.Snapshots, model.Snapshot{Name: s})
 	}
 	w.Models = append(w.Models, m)
 	return m
 }
 
-// Bind serves m at h through the adapter.
-func (w *World) Bind(m *model.Model, h *host.Host, a adapters.Name) *binding.Binding {
-	b := &binding.Binding{Meta: md(m.Meta.Name+"-on-"+h.Meta.Name+"-"+seq(), System), Spec: binding.Spec{ModelID: m.Meta.ID, HostID: h.Meta.ID, Adapter: a}}
+// Bind serves m at h through the adapter: the snapshots named, or all of m's when none are.
+func (w *World) Bind(m *model.Model, h *host.Host, a adapters.Name, snapshots ...string) *binding.Binding {
+	b := &binding.Binding{Meta: md(m.Meta.Name+"-on-"+h.Meta.Name+"-"+seq(), System), Spec: binding.Spec{ModelID: m.Meta.ID, HostID: h.Meta.ID, Adapter: a, Snapshots: snapshots}}
 	w.Bindings = append(w.Bindings, b)
 	return b
 }
@@ -206,7 +209,23 @@ func (w *World) Project(t *team.Team) *project.Project {
 func (w *World) ServiceAccount(p *project.Project) *serviceaccount.ServiceAccount {
 	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: p.Meta.ID}}
 	w.ServiceAccounts = append(w.ServiceAccounts, s)
-	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", p.Meta.ID))
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", s.Meta.Owner))
+	return s
+}
+
+// TeamServiceAccount adds a service account t owns, with no project in between, and its account.
+func (w *World) TeamServiceAccount(t *team.Team) *serviceaccount.ServiceAccount {
+	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}), Spec: serviceaccount.Spec{TeamID: t.Meta.ID}}
+	w.ServiceAccounts = append(w.ServiceAccounts, s)
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", s.Meta.Owner))
+	return s
+}
+
+// UserServiceAccount adds a service account u owns, their personal bot, and its account.
+func (w *World) UserServiceAccount(u *user.User) *serviceaccount.ServiceAccount {
+	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerUser, ID: u.ID}), Spec: serviceaccount.Spec{UserID: u.ID}}
+	w.ServiceAccounts = append(w.ServiceAccounts, s)
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", s.Meta.Owner))
 	return s
 }
 

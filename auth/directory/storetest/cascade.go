@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/rbac"
 )
@@ -82,6 +83,78 @@ func testCascades(t *testing.T, s directory.Stores) {
 		}
 	}
 	must(t, s.Roles.Delete(ctx, f.role.Meta.ID))
+}
+
+// testTeamOwnedServiceAccounts: a team owns a service account with no project in between, and the team is not deleted while it does.
+func testTeamOwnedServiceAccounts(t *testing.T, s directory.Stores) {
+	ctx := context.Background()
+	f := seed(t, s)
+
+	bot := &directory.ServiceAccount{Meta: meta("bot", "", ""), Spec: directory.ServiceAccountSpec{TeamID: f.team.Meta.ID}}
+	must(t, s.ServiceAccounts.Upsert(ctx, bot))
+	if bot.Meta.Owner != (authz.Owner{Kind: directory.OwnerTeam, ID: f.team.Meta.ID}) {
+		t.Fatalf("service account owner = %+v, want its team", bot.Meta.Owner)
+	}
+	sameRow(t, "team-owned service account", fetch(t, get(s.ServiceAccounts, bot.Meta.ID)), bot, saMeta)
+
+	missing := directory.NewID()
+	wantErr(t, "service account in a missing team", s.ServiceAccounts.Upsert(ctx,
+		&directory.ServiceAccount{Meta: meta("orphan", "", ""), Spec: directory.ServiceAccountSpec{TeamID: missing}}), directory.ErrInvalid)
+	wantErr(t, "service account with a project and a team", s.ServiceAccounts.Upsert(ctx,
+		&directory.ServiceAccount{Meta: meta("both", "", ""), Spec: directory.ServiceAccountSpec{ProjectID: f.project.Meta.ID, TeamID: f.team.Meta.ID}}), directory.ErrInvalid)
+
+	wantErr(t, "delete of a team owning a service account", s.Teams.Delete(ctx, f.team.Meta.ID), directory.ErrInvalid)
+	if got := fetch(t, get(s.Teams, f.team.Meta.ID)); got == nil {
+		t.Fatal("a refused team delete took the team")
+	}
+	if got := fetch(t, get(s.Projects, f.project.Meta.ID)); got == nil {
+		t.Fatal("a refused team delete took its project")
+	}
+	if got := fetch(t, get(s.RoleBindings, f.binding.Meta.ID)); got == nil {
+		t.Fatal("a refused team delete took a binding at its project")
+	}
+
+	must(t, s.ServiceAccounts.Delete(ctx, bot.Meta.ID))
+	must(t, s.Teams.Delete(ctx, f.team.Meta.ID))
+	if got := fetch(t, get(s.Teams, f.team.Meta.ID)); got != nil {
+		t.Fatal("team delete left the team once it owned no service account")
+	}
+}
+
+// testUserOwnedServiceAccounts: a user owns a service account directly, and deleting the user deletes it and drops it from every binding.
+func testUserOwnedServiceAccounts(t *testing.T, s directory.Stores) {
+	ctx := context.Background()
+	f := seed(t, s)
+
+	bot := &directory.ServiceAccount{Meta: meta("ada-bot", "", ""), Spec: directory.ServiceAccountSpec{UserID: f.user.ID}}
+	must(t, s.ServiceAccounts.Upsert(ctx, bot))
+	if bot.Meta.Owner != (authz.Owner{Kind: directory.OwnerUser, ID: f.user.ID}) {
+		t.Fatalf("service account owner = %+v, want its user", bot.Meta.Owner)
+	}
+	sameRow(t, "user-owned service account", fetch(t, get(s.ServiceAccounts, bot.Meta.ID)), bot, saMeta)
+
+	wantErr(t, "service account of a missing user", s.ServiceAccounts.Upsert(ctx,
+		&directory.ServiceAccount{Meta: meta("orphan", "", ""), Spec: directory.ServiceAccountSpec{UserID: directory.NewID()}}), directory.ErrInvalid)
+	wantErr(t, "service account with a team and a user", s.ServiceAccounts.Upsert(ctx,
+		&directory.ServiceAccount{Meta: meta("both", "", ""), Spec: directory.ServiceAccountSpec{TeamID: f.team.Meta.ID, UserID: f.user.ID}}), directory.ErrInvalid)
+
+	b := fetch(t, get(s.RoleBindings, f.binding.Meta.ID))
+	b.Spec.Subjects = append(b.Spec.Subjects, directory.Subject{Kind: directory.SubjectServiceAccount, ID: bot.Meta.ID})
+	must(t, s.RoleBindings.Upsert(ctx, b))
+
+	must(t, s.Users.Delete(ctx, f.user.ID))
+	if got := fetch(t, get(s.ServiceAccounts, bot.Meta.ID)); got != nil {
+		t.Fatal("user delete left a service account the user owns")
+	}
+	if got := fetch(t, get(s.ServiceAccounts, f.sa.Meta.ID)); got == nil {
+		t.Fatal("user delete took a service account of a project")
+	}
+	b = fetch(t, get(s.RoleBindings, f.binding.Meta.ID))
+	for _, sub := range b.Spec.Subjects {
+		if sub.Kind == directory.SubjectServiceAccount && sub.ID == bot.Meta.ID {
+			t.Fatal("a deleted user's service account is still a binding subject")
+		}
+	}
 }
 
 // testScopeCascades: deleting a team or project deletes the bindings scoped to it, and a team's delete those of its projects; bindings at any other scope stay.

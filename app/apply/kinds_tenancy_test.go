@@ -235,7 +235,7 @@ func accountRoleBinding(rows *Rows, sa *serviceaccount.ServiceAccount, labels ma
 func accountPolicyBinding(rows *Rows, sa *serviceaccount.ServiceAccount, labels map[string]string) *policybinding.PolicyBinding {
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-policy", Owner: sa.Meta.Owner}}
 	rows.Policies = append(rows.Policies, pol)
-	acct := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID)
+	acct := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner)
 	acct.Meta.ID = meta.NewID()
 	rows.Accounts = append(rows.Accounts, acct)
 	pb := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-policy", Owner: sa.Meta.Owner, Labels: labels}}
@@ -371,6 +371,74 @@ func TestPruneRefusesATeamThatStillOwnsRows(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "delete or move them first") {
 		t.Fatalf("err = %v, want the dependents message", err)
+	}
+}
+
+// teamServiceAccountRows is a pruned team that owns a service account directly, with a key of it; saLabelled decides whether the account and its key match the prune selector too.
+func teamServiceAccountRows(saLabelled bool) *Rows {
+	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}, Labels: pruneLabels}}
+	owner := meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}
+	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer", Owner: owner}}
+	sa.StampOwner()
+	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer-key", Owner: owner},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID}, KeyHash: strings.Repeat("c", 64)}}
+	if saLabelled {
+		sa.Meta.Labels, k.Meta.Labels = pruneLabels, pruneLabels
+	}
+	return &Rows{Teams: []*team.Team{tm}, ServiceAccounts: []*serviceaccount.ServiceAccount{sa}, Keys: []*key.Key{k}}
+}
+
+// A team's prune is refused while it owns a service account the selector leaves out, as the control API's delete is.
+func TestPruneRefusesATeamThatOwnsAServiceAccount(t *testing.T) {
+	err := pruneAll(teamServiceAccountRows(false)).run(context.Background(), nil)
+	var deps *project.DependentsError
+	if !errors.As(err, &deps) || !slices.Equal(deps.Rows, []string{"ServiceAccount/deployer"}) || deps.Hidden != 0 {
+		t.Fatalf("err = %v, want the team refused naming its service account", err)
+	}
+	b := pruneAll(teamServiceAccountRows(true))
+	if err := b.run(context.Background(), nil); err != nil {
+		t.Fatalf("prune with the service account selected: %v", err)
+	}
+	if got := deleteOrder(b); got != "Key,ServiceAccount,Team" {
+		t.Fatalf("delete order = %s, want the key and service account before the team", got)
+	}
+}
+
+// A document the run writes for a service account of a team it prunes, or for such an account's key, is refused while planning.
+func TestPruneRefusesDocumentsOfAPrunedTeamsServiceAccount(t *testing.T) {
+	empty := teamServiceAccountRows(true)
+	empty.ServiceAccounts, empty.Keys = nil, nil
+	wantRefused(t, planPruned(t, empty, "kind: ServiceAccount\nmetadata: {name: crawler}\nspec: {team: platform}\n"),
+		"ServiceAccount", "crawler", authmanifest.ErrScopePruned)
+	keyDoc := "kind: Key\nmetadata: {name: deployer-key-2, owner: {kind: team, name: platform}}\n" +
+		"spec: {principal: {kind: serviceaccount, name: deployer}, keyHash: " + strings.Repeat("d", 64) + "}\n"
+	wantRefused(t, planPruned(t, teamServiceAccountRows(true), keyDoc), "Key", "deployer-key-2", authmanifest.ErrScopePruned)
+}
+
+// A service account keeps the owner it was made under: a document moving it between a team and a project is refused, either way.
+func TestApplyRefusesMovingAServiceAccountToAnotherOwner(t *testing.T) {
+	rows := tenancyRows(false)
+	tm := rows.Teams[0]
+	bot := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "deployer", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}}}
+	bot.StampOwner()
+	rows.ServiceAccounts = append(rows.ServiceAccounts, bot)
+	want := "spec.project, spec.team and spec.user cannot change: the service account's account and keys belong to the owner it was made under; declare a new service account"
+	for name, doc := range map[string]string{
+		"team to project": "kind: ServiceAccount\nmetadata: {name: deployer}\nspec: {project: ml-search}\n",
+		"project to team": "kind: ServiceAccount\nmetadata: {name: indexer}\nspec: {team: platform}\n",
+	} {
+		b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows), admin: true}
+		err := b.run(context.Background(), userDocs(t, docHeader+doc))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", name, err, want)
+		}
+	}
+	b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows), admin: true}
+	if err := b.run(context.Background(), userDocs(t, docHeader+"kind: ServiceAccount\nmetadata: {name: deployer, displayName: Deployer}\nspec: {team: platform}\n")); err != nil {
+		t.Fatalf("edit in the same team: %v", err)
+	}
+	if e := entryFor(t, b, "ServiceAccount", "deployer"); e.Action != ActionUpdate {
+		t.Errorf("edit in the same team planned %s, want an update", e.Action)
 	}
 }
 

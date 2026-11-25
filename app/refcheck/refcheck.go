@@ -347,7 +347,7 @@ func (c Checker) Key(ctx context.Context, k *key.Key) error {
 }
 
 // KeyOwner derives the key's owner from its principal — a service account's
-// project, or the user it names. An account the caller may not see is
+// owner, or the user it names. An account the caller may not see is
 // reported as absent.
 func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 	switch k.Spec.Principal.Kind {
@@ -359,7 +359,10 @@ func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 		if sa == nil || !Visible(ctx, c.Authz, "service-account", sa.Meta.ID, sa.Meta.Owner) {
 			return notVisible("service-account", k.Spec.Principal.ID)
 		}
-		k.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}
+		if err := c.UserServiceAccountKey(ctx, sa.Meta.Owner); err != nil {
+			return err
+		}
+		k.Meta.Owner = sa.Meta.Owner
 	case key.PrincipalUser:
 		k.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: k.Spec.Principal.ID}
 		if err := StampOwnerID(ctx, &k.Meta.Owner); err != nil {
@@ -378,11 +381,57 @@ func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 	return nil
 }
 
-// ServiceAccount re-derives the owner from spec.projectId and checks the
-// project.
+// UserServiceAccountKey refuses minting a credential of a service account owned by owner, a user, to anyone but that user and an admin: the key runs under the user's personal account and reaches what the user owns, as a key of the user's own, which no one else may create either.
+func (c Checker) UserServiceAccountKey(ctx context.Context, owner meta.Owner) error {
+	if owner.Kind != meta.OwnerUser {
+		return nil
+	}
+	if _, scoped := c.Authz.(authz.Scoper); !scoped || authz.Admin(ctx, c.Authz) {
+		return nil
+	}
+	if a := actor.From(ctx); a == nil || a.UserID == owner.ID {
+		return nil
+	}
+	return forbidden(fmt.Errorf("%w: a key of a user's service account is created and rotated by that user or an admin", authz.ErrForbidden))
+}
+
+// KeyOwnedByPrincipal refuses a key whose owner is not the one KeyOwner gives its principal: a write that would move a key's row out of its principal's scope while it keeps running in the principal's lane.
+func (c Checker) KeyOwnedByPrincipal(ctx context.Context, k *key.Key) error {
+	want := meta.Owner{Kind: meta.OwnerUser, ID: k.Spec.Principal.ID}
+	if k.Spec.Principal.Kind == key.PrincipalServiceAccount {
+		if c.Rows.ServiceAccount == nil {
+			return nil
+		}
+		sa := c.Rows.ServiceAccount(ctx, k.Spec.Principal.ID)
+		if sa == nil {
+			return notVisible("service-account", k.Spec.Principal.ID)
+		}
+		want = sa.Meta.Owner
+	}
+	if k.Meta.Owner != want {
+		from, to := c.scopeText(ctx, want), c.scopeText(ctx, k.Meta.Owner)
+		if to == from {
+			to = "a different " + string(k.Meta.Owner.Kind)
+		}
+		return badRequest("a key is owned by its principal's scope, %s; it cannot move to %s. Leave metadata.owner out, or create a key for another principal", from, to)
+	}
+	return nil
+}
+
+// ServiceAccount stamps the owner (metadata.owner, or the project
+// spec.projectId names) and checks the project, team or user it names.
 func (c Checker) ServiceAccount(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
 	sa.StampOwner()
-	return c.projectRef(ctx, sa.Spec.ProjectID)
+	if o := sa.Meta.Owner; o.Kind == meta.OwnerUser && c.Rows.MissingUsers != nil {
+		missing, err := c.Rows.MissingUsers(ctx, []string{o.ID})
+		if err != nil {
+			return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
+		}
+		if len(missing) > 0 {
+			return badRequest("user %q does not exist", o.ID)
+		}
+	}
+	return c.ownerScopeRef(ctx, sa.Meta.Owner)
 }
 
 // Project re-derives the owner from spec.teamId and checks the team.
@@ -452,8 +501,13 @@ func (c Checker) Account(ctx context.Context, a *account.Account) error {
 	return nil
 }
 
-// KeyAccount checks the key's default lane against account.TakesKeysOf, and refuses a closed one. An empty accountId takes the principal's own account (Rows.DefaultAccount), made on first use.
+// KeyAccount checks the key's default lane against account.TakesKeysOf, and refuses a closed one. An empty accountId takes the principal's own account (Rows.DefaultAccount), made on first use. A key of a user's service account is refused while that user's personal account is off, as a key in the personal account is: the service account's lane is closed then.
 func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
+	if k.Spec.Principal.Kind == key.PrincipalServiceAccount && k.Meta.Owner.Kind == meta.OwnerUser {
+		if off, name := c.personalAccountOff(ctx, k.Meta.Owner.ID); off {
+			return personalAccountOffError("personal accounts are turned off for %s, so a key of their service account cannot run; use a team or project key", name)
+		}
+	}
 	if k.Spec.AccountID == "" {
 		if c.Rows.DefaultAccount == nil {
 			return nil
@@ -519,6 +573,17 @@ func (c Checker) personalAccountOff(ctx context.Context, userID string) (bool, s
 	return off, name
 }
 
+// ServiceAccountOwnerOn refuses owner as a service account's owner while it is a user whose personal account is turned off: the service account's lane is closed then, as KeyAccount and a share with it find.
+func (c Checker) ServiceAccountOwnerOn(ctx context.Context, owner meta.Owner) error {
+	if owner.Kind != meta.OwnerUser {
+		return nil
+	}
+	if off, name := c.personalAccountOff(ctx, owner.ID); off {
+		return personalAccountOffError("personal accounts are turned off for %s, so a service account they own cannot run; let a team or project own it", name)
+	}
+	return nil
+}
+
 // PersonalProviderAccount refuses a provider account owned by a user whose personal account is turned off: it would serve nothing.
 func (c Checker) PersonalProviderAccount(ctx context.Context, a *account.Account) error {
 	if !a.IsProvider() || a.Meta.Owner.Kind != meta.OwnerUser {
@@ -543,7 +608,7 @@ func (c Checker) principalKeys(ctx context.Context, p key.Principal) string {
 	return c.userPossessive(ctx, p.ID) + " keys"
 }
 
-// AccountPayloadLogging refuses a change to a caller account's payloadLogging by the user it constrains, since it decides whether their request bodies are kept. A personal account's is an admin's to set; a team, project, member or service account's is its scope admin's (the caller already passed accounts.update there), never the member account's own holder.
+// AccountPayloadLogging refuses a change to a caller account's payloadLogging by the user it constrains, since it decides whether their request bodies are kept. A personal account's, and that of a service account a user owns, whose lane's value comes before the personal account's, is an admin's to set; a team, project, member or service account's is its scope admin's (the caller already passed accounts.update there), never the member account's own holder.
 func (c Checker) AccountPayloadLogging(ctx context.Context, existing, incoming *account.Account) error {
 	if existing.IsProvider() || existing.Spec.PayloadLogging == incoming.Spec.PayloadLogging {
 		return nil
@@ -555,6 +620,8 @@ func (c Checker) AccountPayloadLogging(ctx context.Context, existing, incoming *
 	switch kind := existing.DerivedKind(); {
 	case kind == account.KindPersonal:
 		return forbidden(fmt.Errorf("%w: spec.payloadLogging of a personal account is set by an admin", authz.ErrForbidden))
+	case kind == account.KindService && existing.Meta.Owner.Kind == meta.OwnerUser:
+		return forbidden(fmt.Errorf("%w: spec.payloadLogging of a personal service account's account is set by an admin", authz.ErrForbidden))
 	case kind == account.KindMember && a != nil && a.UserID == existing.Spec.Holder.ID:
 		return forbidden(fmt.Errorf("%w: spec.payloadLogging of your own member account is set by an admin of its %s", authz.ErrForbidden, existing.Meta.Owner.Kind))
 	}

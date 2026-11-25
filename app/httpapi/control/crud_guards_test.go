@@ -98,17 +98,43 @@ func TestMergeHostKeyPreserveValue(t *testing.T) {
 	}
 	mergeHostKeyPreserveValue(nil, &hostkey.HostKey{})
 	mergeHostKeyPreserveValue(&hostkey.HostKey{}, nil)
+
+	// An oauth key stored without a token resolves to nothing; the edit still keeps its credential.
+	tokenless := &hostkey.HostKey{
+		Meta: meta.Metadata{Name: "k", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: hostkey.Spec{HostID: "h", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindOAuth, Provider: "service-account"}},
+	}
+	edit := &hostkey.HostKey{Meta: tokenless.Meta, Spec: tokenless.Spec}
+	mergeHostKeyPreserveValue(tokenless, edit)
+	if err := edit.Validate(); err != nil || !edit.KeepStoredValue {
+		t.Fatalf("edit of a tokenless oauth key: %v (keeps value %v)", err, edit.KeepStoredValue)
+	}
+
+	// A key switching to oauth has no oauth blob to keep, so it must bring a value.
+	for _, from := range []hostkey.ValueFrom{{Kind: hostkey.ValueKindEnv, Env: "ACME_KEY"}, {Kind: hostkey.ValueKindStored}} {
+		t.Run(string(from.Kind)+" to oauth", func(t *testing.T) {
+			existing := &hostkey.HostKey{Meta: tokenless.Meta, Spec: hostkey.Spec{HostID: "h", ValueFrom: from}, Resolved: "sk-existing"}
+			switched := &hostkey.HostKey{Meta: tokenless.Meta, Spec: tokenless.Spec}
+			mergeHostKeyPreserveValue(existing, switched)
+			if err := switched.Validate(); err == nil || switched.KeepStoredValue || switched.Resolved != "" {
+				t.Fatalf("switch without a value: err %v, keeps value %v, resolved %q; want it refused", err, switched.KeepStoredValue, switched.Resolved)
+			}
+		})
+	}
 }
 
-// Spec is the source of truth for a scoped row's owner: a caller who sends a mismatched owner must not end up with a row filed under it.
+// Spec is the source of truth for a scoped row's owner: a caller who sends a mismatched owner must not end up with a row filed under it. A service account's owner is metadata.owner, completed from spec.projectId when the default project owner has no id; a mismatched one is refused instead.
 func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 	teamID, projectID := meta.NewID(), meta.NewID()
 	wrong := meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
 
 	proj := &project.Project{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: wrong}}
 	proj.Spec.TeamID = teamID
-	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "sa", Owner: wrong}}
+	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "sa", Owner: meta.Owner{Kind: meta.OwnerProject}}}
 	sa.Spec.ProjectID = projectID
+	teamSA := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "team-sa", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}}
+	mismatched := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "sa", Owner: wrong}}
+	mismatched.Spec.ProjectID = projectID
 	rb := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "rb", Owner: wrong}}
 	rb.Spec.RoleID = meta.NewID()
 	rb.Spec.Scope = meta.Owner{Kind: meta.OwnerTeam, ID: teamID}
@@ -124,11 +150,19 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 	}{
 		{"project takes its team", guardProject(Deps{})(ctx, "create", nil, proj), proj.Meta.Owner, meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, proj.Validate()},
 		{"service account takes its project", guardServiceAccount(Deps{})(ctx, "create", nil, sa), sa.Meta.Owner, meta.Owner{Kind: meta.OwnerProject, ID: projectID}, sa.Validate()},
+		{"service account keeps its team", guardServiceAccount(Deps{})(ctx, "create", nil, teamSA), teamSA.Meta.Owner, meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, teamSA.Validate()},
 		{"role binding takes its scope", guardRoleBinding(Deps{})(ctx, "create", nil, rb), rb.Meta.Owner, meta.Owner{Kind: meta.OwnerTeam, ID: teamID}, rb.Validate()},
 	} {
 		if tc.err != nil || tc.owner != tc.want || tc.valid != nil {
 			t.Errorf("%s: guard %v, owner %+v (want %+v), then Validate %v", tc.name, tc.err, tc.owner, tc.want, tc.valid)
 		}
+	}
+	if teamSA.Spec.TeamID != teamID || teamSA.Spec.ProjectID != "" {
+		t.Errorf("team-owned service account spec = %+v, want spec.teamId mirroring its team", teamSA.Spec)
+	}
+	err := guardServiceAccount(Deps{})(ctx, "create", nil, mismatched)
+	if want := `serviceaccount "sa": owner is user "u-alice" but spec.projectId names project "` + projectID + `"; a service account has one owner`; err != nil || mismatched.Validate() == nil || mismatched.Validate().Error() != want {
+		t.Errorf("service account with a mismatched owner: guard %v, then Validate %v; want Validate %q", err, mismatched.Validate(), want)
 	}
 }
 

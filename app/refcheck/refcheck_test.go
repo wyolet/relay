@@ -158,14 +158,64 @@ func TestPolicyRefAndRateLimitRef(t *testing.T) {
 	}
 }
 
-// keyRows has service account sa-1 of project p-1 and users u-1 and u-2.
+// A service account a user owns needs the user; a key of it is owned by that user.
+func TestUserServiceAccountOwner(t *testing.T) {
+	c, ctx := keyRows(nil), as("u-1")
+	for _, tc := range []struct{ user, want string }{
+		{"u-1", ""},
+		{"u-gone", `400: user "u-gone" does not exist`},
+		{"u-broken", "500: store down"},
+	} {
+		sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: tc.user}}}
+		wantRefused(t, "service account of "+tc.user, c.ServiceAccount(ctx, sa), tc.want)
+	}
+	k := &key.Key{Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: "sa-u"}, AccountID: "set"}}
+	wantRefused(t, "key of a user's service account", c.Key(ctx, k), "")
+	if want := (meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}); k.Meta.Owner != want {
+		t.Errorf("key owner = %+v, want %+v", k.Meta.Owner, want)
+	}
+	wantRefused(t, "the key moved to its user's team", c.KeyOwnedByPrincipal(ctx, &key.Key{Meta: meta.Metadata{Owner: teamOne}, Spec: k.Spec}),
+		`400: a key is owned by its principal's scope, your personal scope; it cannot move to another team. Leave metadata.owner out, or create a key for another principal`)
+}
+
+// A key stays owned by its principal's scope: a service account's owner, or the user it names.
+func TestKeyOwnedByPrincipal(t *testing.T) {
+	sa := func(id string, owner meta.Owner) *key.Key {
+		return &key.Key{Meta: meta.Metadata{Owner: owner}, Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: id}}}
+	}
+	usr := &key.Key{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}}, Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: "u-1"}}}
+	for _, tc := range []struct {
+		name string
+		k    *key.Key
+		want string
+	}{
+		{"a project's service account, in its project", sa("sa-1", projectOne), ""},
+		{"a project's service account, in another project", sa("sa-1", projectTwo), `400: a key is owned by its principal's scope, another project; it cannot move to a different project. Leave metadata.owner out, or create a key for another principal`},
+		{"a project's service account, in its team", sa("sa-1", teamOne), `400: a key is owned by its principal's scope, another project; it cannot move to another team. Leave metadata.owner out, or create a key for another principal`},
+		{"a team's service account, in its team", sa("sa-t", teamOne), ""},
+		{"a team's service account, in a project of the team", sa("sa-t", projectOne), `400: a key is owned by its principal's scope, another team; it cannot move to another project. Leave metadata.owner out, or create a key for another principal`},
+		{"a missing service account", sa("sa-gone", projectOne), `404: service-account "sa-gone" not found`},
+		{"a user's key, theirs", usr, ""},
+		{"a user's key, in a team", &key.Key{Meta: meta.Metadata{Owner: teamOne}, Spec: usr.Spec}, `400: a key is owned by its principal's scope, your personal scope; it cannot move to another team. Leave metadata.owner out, or create a key for another principal`},
+		{"a user's key, in another user's scope", &key.Key{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-2"}}, Spec: usr.Spec}, `400: a key is owned by its principal's scope, your personal scope; it cannot move to another user's personal scope. Leave metadata.owner out, or create a key for another principal`},
+	} {
+		wantRefused(t, tc.name, keyRows(nil).KeyOwnedByPrincipal(as("u-1"), tc.k), tc.want)
+	}
+}
+
+// keyRows has service account sa-1 of project p-1, service account sa-t of team t-1, and users u-1 and u-2.
 func keyRows(a authz.Authorizer) Checker {
 	return Checker{Authz: a, Rows: Lookup{
 		ServiceAccount: func(_ context.Context, id string) *serviceaccount.ServiceAccount {
-			if id != "sa-1" {
-				return nil
+			switch id {
+			case "sa-1":
+				return &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: "sa-1", Name: "ci", Owner: projectOne}, Spec: serviceaccount.Spec{ProjectID: "p-1"}}
+			case "sa-t":
+				return &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: "sa-t", Name: "deployer", Owner: teamOne}, Spec: serviceaccount.Spec{TeamID: "t-1"}}
+			case "sa-u":
+				return &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: "sa-u", Name: "u-1-bot", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}}, Spec: serviceaccount.Spec{UserID: "u-1"}}
 			}
-			return &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: "sa-1", Name: "ci", Owner: projectOne}, Spec: serviceaccount.Spec{ProjectID: "p-1"}}
+			return nil
 		},
 		MissingUsers: func(_ context.Context, ids []string) ([]string, error) {
 			var missing []string
@@ -182,7 +232,7 @@ func keyRows(a authz.Authorizer) Checker {
 	}}
 }
 
-// A key's owner follows its principal: a service account's project, or the user it names, who must be the caller unless the admin token writes it.
+// A key's owner follows its principal: a service account's owner, or the user it names, who must be the caller unless the admin token writes it.
 func TestKeyOwner(t *testing.T) {
 	sa := func(id string) key.Principal { return key.Principal{Kind: key.PrincipalServiceAccount, ID: id} }
 	usr := func(id string) key.Principal { return key.Principal{Kind: key.PrincipalUser, ID: id} }
@@ -197,6 +247,7 @@ func TestKeyOwner(t *testing.T) {
 		want      string
 	}{
 		{"service account", as("u-1"), keyRows(nil), sa("sa-1"), projectOne, "sa-1", ""},
+		{"service account of a team", as("u-1"), keyRows(nil), sa("sa-t"), teamOne, "sa-t", ""},
 		{"service account that does not exist", as("u-1"), keyRows(nil), sa("sa-gone"), meta.Owner{}, "sa-gone", `404: service-account "sa-gone" not found`},
 		{"service account the caller cannot see", as("u-1"), keyRows(hiding("sa-1")), sa("sa-1"), meta.Owner{}, "sa-1", `404: service-account "sa-1" not found`},
 		{"service account with no lookup", as("u-1"), Checker{}, sa("sa-1"), meta.Owner{}, "sa-1", "400: service accounts are not available on this relay"},
@@ -215,7 +266,7 @@ func TestKeyOwner(t *testing.T) {
 	}
 }
 
-// Owners that mirror a spec field are re-derived from it, and the row it names must exist and be visible.
+// Owners that mirror a spec field are re-derived from it, and the row it names must exist and be visible. A service account's owner is metadata.owner, or the project spec.projectId names when the owner names no kind.
 func TestOwnerFollowsSpec(t *testing.T) {
 	rows := newLinkRows()
 	ctx := as("u-1")
@@ -223,15 +274,22 @@ func TestOwnerFollowsSpec(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		authz     authz.Authorizer
-		id        string
+		owner     meta.Owner
+		projectID string
 		wantOwner meta.Owner
 		want      string
 	}{
-		{"p-1", nil, "p-1", projectOne, ""},
-		{"p-9", nil, "p-9", meta.Owner{Kind: meta.OwnerProject, ID: "p-9"}, `400: project "p-9" does not exist`},
-		{"p-1 hidden", hiding("p-1"), "p-1", projectOne, `404: project "p-1" not found`},
+		{"p-1 by spec.projectId", nil, meta.Owner{}, "p-1", projectOne, ""},
+		{"p-1 by owner kind and spec.projectId", nil, meta.Owner{Kind: meta.OwnerProject}, "p-1", projectOne, ""},
+		{"p-1 by owner", nil, projectOne, "", projectOne, ""},
+		{"p-9", nil, meta.Owner{}, "p-9", meta.Owner{Kind: meta.OwnerProject, ID: "p-9"}, `400: project "p-9" does not exist`},
+		{"p-1 hidden", hiding("p-1"), meta.Owner{}, "p-1", projectOne, `404: project "p-1" not found`},
+		{"t-1", nil, teamOne, "", teamOne, ""},
+		{"t-9", nil, meta.Owner{Kind: meta.OwnerTeam, ID: "t-9"}, "", meta.Owner{Kind: meta.OwnerTeam, ID: "t-9"}, `400: team "t-9" does not exist`},
+		{"t-1 hidden", hiding("t-1"), teamOne, "", teamOne, `404: team "t-1" not found`},
+		{"a user owner, its spec.projectId left for Validate", nil, stale, "p-1", stale, ""},
 	} {
-		sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{Owner: stale}, Spec: serviceaccount.Spec{ProjectID: tc.id}}
+		sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{Owner: tc.owner}, Spec: serviceaccount.Spec{ProjectID: tc.projectID}}
 		wantRefused(t, "service account in "+tc.name, rows.checker(tc.authz).ServiceAccount(ctx, sa), tc.want)
 		if sa.Meta.Owner != tc.wantOwner {
 			t.Errorf("service account in %s: owner %+v, want %+v", tc.name, sa.Meta.Owner, tc.wantOwner)
@@ -291,12 +349,16 @@ func personalOffRows() Checker {
 	}}
 }
 
-// While a user's personal account is off, a key of theirs must name a lane other than it, their own provider accounts take no keys, and nothing is shared with them.
+// While a user's personal account is off, a key of theirs must name a lane other than it, their own provider accounts take no keys, a key of a service account they own is refused, and nothing is shared with them.
 func TestPersonalAccountOff(t *testing.T) {
 	c := personalOffRows()
 	ctx := context.Background()
 	keyIn := func(userID, accountID string) error {
 		return c.KeyAccount(ctx, &key.Key{Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: userID}, AccountID: accountID}})
+	}
+	botKeyOf := func(userID, accountID string) error {
+		return c.KeyAccount(ctx, &key.Key{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
+			Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: "sa-of-" + userID}, AccountID: accountID}})
 	}
 	providerOf := func(o meta.Owner, hostID string) error {
 		return c.PersonalProviderAccount(ctx, &account.Account{Meta: meta.Metadata{Owner: o}, Spec: account.Spec{HostID: hostID}})
@@ -313,12 +375,19 @@ func TestPersonalAccountOff(t *testing.T) {
 		{"key in the personal lane", keyIn("u-bob", "acct-bob"), `403 personal_account_off: personal accounts are turned off for bob, so a key cannot run in another user's personal account "bob"; use a team or project key`},
 		{"key in a provider account he owns", keyIn("u-bob", "acct-bob-org"), `403 personal_account_off: personal accounts are turned off for bob, so a key cannot run in another user's personal account "bob-org"; use a team or project key`},
 		{"key in a member lane", keyIn("u-bob", "acct-bob-member"), ""},
+		{"a key of his service account", botKeyOf("u-bob", ""), "403 personal_account_off: personal accounts are turned off for bob, so a key of their service account cannot run; use a team or project key"},
+		{"a key of his service account naming its lane", botKeyOf("u-bob", "acct-bob-bot"), "403 personal_account_off: personal accounts are turned off for bob, so a key of their service account cannot run; use a team or project key"},
+		{"a key of alice's service account", botKeyOf("u-alice", ""), ""},
+		{"bob owning a service account", c.ServiceAccountOwnerOn(ctx, bob), "403 personal_account_off: personal accounts are turned off for bob, so a service account they own cannot run; let a team or project own it"},
+		{"alice owning a service account", c.ServiceAccountOwnerOn(ctx, alice), ""},
+		{"a team owning a service account", c.ServiceAccountOwnerOn(ctx, teamOne), ""},
 		{"alice's key with no lane", keyIn("u-alice", ""), ""},
 		{"a new provider account of bob's", providerOf(bob, "h-1"), "403 personal_account_off: personal accounts are turned off for bob, so they cannot own a provider account; create it in a team or project"},
 		{"a new provider account of alice's", providerOf(alice, "h-1"), ""},
 		{"a new provider account of a team", providerOf(teamOne, "h-1"), ""},
 		{"a caller account of bob's", providerOf(bob, ""), ""},
 		{"a share with bob", c.newShare(ctx, src, account.Share(src, account.Receiver{Kind: account.ReceiverUser, ID: "u-bob"}, bob, "bob")), "403 personal_account_off: personal accounts are turned off for bob, so a share with them would serve nothing; share with their team or project instead"},
+		{"a share with bob's service account", c.newShare(ctx, src, account.Share(src, account.Receiver{Kind: account.ReceiverServiceAccount, ID: "sa-of-u-bob"}, bob, "bob-bot")), "403 personal_account_off: personal accounts are turned off for bob, so a share with them would serve nothing; share with their team or project instead"},
 	} {
 		wantRefused(t, tc.name, tc.err, tc.want)
 	}
@@ -330,6 +399,8 @@ func TestAccountPayloadLogging(t *testing.T) {
 	member := account.Member("u-1", "alice", projectOne, "p-1", "")
 	teamAcct := account.ForTeam("t-1", "t-1", "")
 	provider := &account.Account{Meta: meta.Metadata{Owner: alice}, Spec: account.Spec{HostID: "h-1"}}
+	bot := account.ForServiceAccount("sa-u1", "bot", "", meta.Owner{Kind: meta.OwnerUser, ID: "u-1"})
+	projectBot := account.ForServiceAccount("sa-p1", "ci", "", projectOne)
 	for _, tc := range []struct {
 		name     string
 		ctx      context.Context
@@ -345,6 +416,11 @@ func TestAccountPayloadLogging(t *testing.T) {
 		{"member, by its holder", as("u-1"), hiding(), member, true, "403: authz: forbidden: spec.payloadLogging of your own member account is set by an admin of its project"},
 		{"member, by someone else in the scope", as("u-2"), hiding(), member, true, ""},
 		{"team account", as("u-1"), hiding(), teamAcct, true, ""},
+		{"a user's service account, by its user", as("u-1"), hiding(), bot, true, "403: authz: forbidden: spec.payloadLogging of a personal service account's account is set by an admin"},
+		{"a user's service account, by a global binding", as("u-2"), hiding(), bot, true, "403: authz: forbidden: spec.payloadLogging of a personal service account's account is set by an admin"},
+		{"a user's service account, unchanged", as("u-1"), hiding(), bot, false, ""},
+		{"a user's service account, by an admin", adminRole("u-9"), hiding(), bot, true, ""},
+		{"a project's service account", as("u-1"), hiding(), projectBot, true, ""},
 		{"provider account", as("u-1"), hiding(), provider, true, ""},
 	} {
 		incoming := *tc.existing

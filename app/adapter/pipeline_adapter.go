@@ -36,24 +36,30 @@ var (
 	_ pipeline.Adapter            = (*specAdapter)(nil)
 	_ pipeline.ResponseSummarizer = (*specAdapter)(nil)
 	_ pipeline.CallTimeouter      = (*specAdapter)(nil)
+	_ pipeline.TranslatorProvider = (*specAdapter)(nil)
 )
 
-// Call issues POST {baseURL}{path}: the host's own path when set (hostPath
-// non-nil, verbatim — an explicit "" appends nothing), else the shape default
-// (spec.UpstreamPathFn / spec.DefaultPath). Auth headers are set per spec.Auth
+// Call issues POST {up.BaseURL}{path}: the host's own path when set (up.Path
+// non-nil — an explicit "" appends nothing), else the shape default
+// (spec.UpstreamPathFn / spec.DefaultPath), with its {key} placeholders filled
+// from up.Backend. Auth headers are set per spec.Auth
 // (or spec.OAuthAuth when oauth is true and the spec defines an OAuth
 // variant); forwarded headers are applied first so Relay's own headers win on
 // conflict.
-func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
+func (a *specAdapter) Call(ctx context.Context, up pipeline.Upstream, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
 	path := a.spec.DefaultPath
 	if a.spec.UpstreamPathFn != nil {
 		path = a.spec.UpstreamPathFn(pathSegment(upstreamModel), stream)
 	}
-	if hostPath != nil {
-		path = *hostPath
+	if up.Path != nil {
+		path = *up.Path
+	}
+	path, err := FillPath(path, up.Backend)
+	if err != nil {
+		return nil, err
 	}
 	callCtx, cancel := a.callContext(ctx, stream)
-	req, releaseBody, err := a.newRequest(callCtx, baseURL+path, apiKey, body, hdr, oauth)
+	req, releaseBody, err := a.newRequest(callCtx, up.BaseURL+path, apiKey, body, hdr, oauth)
 	if err != nil {
 		cancelIfSet(cancel)
 		return nil, err
@@ -77,6 +83,48 @@ func pathSegment(model string) string {
 	return url.PathEscape(model)
 }
 
+// FillPath replaces each {key} in path with backend[key] as one path segment. A placeholder the backend leaves unset or empty, a { or } that is not part of a well-formed placeholder, or a placeholder after the ? (a path segment's escaping is wrong in a query) is a *pipeline.PathPlaceholderError: the request must not go out to a malformed URL.
+func FillPath(path string, backend map[string]string) (string, error) {
+	next := strings.IndexAny(path, "{}")
+	if next < 0 {
+		return path, nil
+	}
+	query := strings.IndexByte(path, '?')
+	var b strings.Builder
+	b.Grow(len(path))
+	done := 0
+	for next >= 0 {
+		at := done + next
+		n := placeholderKeyLen(path[at+1:])
+		end := at + 1 + n
+		if path[at] != '{' || (query >= 0 && at > query) || n == 0 || end >= len(path) || path[end] != '}' {
+			return "", &pipeline.PathPlaceholderError{Path: path}
+		}
+		key := path[at+1 : end]
+		v := backend[key]
+		if v == "" {
+			return "", &pipeline.PathPlaceholderError{Path: path, Key: key}
+		}
+		b.WriteString(path[done:at])
+		b.WriteString(pathSegment(v))
+		done = end + 1
+		next = strings.IndexAny(path[done:], "{}")
+	}
+	b.WriteString(path[done:])
+	return b.String(), nil
+}
+
+// placeholderKeyLen is the length of the [A-Za-z0-9_] run s starts with.
+func placeholderKeyLen(s string) int {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_') {
+			return i
+		}
+	}
+	return len(s)
+}
+
 // newRequest builds one POST to url carrying body: the caller's forwarded headers first, then relay's own, so a caller can never override the upstream credential or the content type. releaseBody must be called once Do returns, so the transport stops pinning body while the response streams.
 func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body []byte, hdr http.Header, oauth bool) (req *http.Request, releaseBody func(), err error) {
 	req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
@@ -89,10 +137,23 @@ func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body [
 	if hdr != nil {
 		req.Header = hdr.Clone()
 	}
+	if env := a.spec.Envelope; env != nil {
+		joinHeaderLines(req.Header, env.JoinHeaders)
+	}
 
 	req.Header.Set("Content-Type", "application/json")
 	a.spec.setAuth(req.Header, apiKey, oauth)
 	return req, releaseBody, nil
+}
+
+// joinHeaderLines replaces each named header sent on more than one line with one comma-joined line.
+func joinHeaderLines(h http.Header, names []string) {
+	for _, name := range names {
+		key := http.CanonicalHeaderKey(name)
+		if vs := h[key]; len(vs) > 1 {
+			h[key] = []string{strings.Join(vs, ",")}
+		}
+	}
 }
 
 // setAuth sets the credential header and the shape's static auth headers on h, the OAuth variant when oauth is set and the spec has one. A static header already in h is kept.
@@ -116,6 +177,9 @@ func (s *Spec) setAuth(h http.Header, apiKey string, oauth bool) {
 		}
 	}
 }
+
+// Translator returns the spec's canonical translator, nil when it has none.
+func (a *specAdapter) Translator() v1.Translator { return a.spec.Translator }
 
 // ExtractTokens delegates to the spec's extractor, or returns nil if unset.
 func (a *specAdapter) ExtractTokens(body []byte) pkgusage.Tokens {

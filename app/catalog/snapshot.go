@@ -32,6 +32,7 @@ import (
 	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Snapshot is the immutable in-memory view. All maps are populated at
@@ -75,10 +76,18 @@ type Snapshot struct {
 	// (e.g. "openai/gpt-5.4-mini" and "openai/gpt-5-4-mini" → one key). Per
 	// snapshot we materialize: provider-qualified ("openai/gpt-5-4-mini"),
 	// host-pinned ("gpt-5-4-mini@openai"), and both ("openai/gpt-5-4-mini@azure").
-	// Host-pinned entries carry the bound HostID so resolution pins that host.
+	// Host-pinned entries exist only at hosts whose binding serves the snapshot,
+	// and carry the bound HostID so resolution pins that host.
 	// Checked AFTER snapshotsByName, so a real snapshot name always wins over
 	// a synthesized alias.
 	snapshotAliases map[string]snapshotRef
+
+	// unservedPins holds the host-pinned keys of snapshotAliases' form that a
+	// snapshot does not get because the host's enabled binding does not serve
+	// it. Resolution answers such a key with nothing rather than falling
+	// through to declared aliases, so dropping the pin never hands the name to
+	// another model's alias.
+	unservedPins map[string]snapshotRef
 
 	// aliasExact indexes declared model aliases (model.Spec.Aliases) by
 	// every slug-normalized exact form (bare, provider-qualified,
@@ -130,6 +139,9 @@ type Snapshot struct {
 	// disabled keys included: the usage read scope answers "the rows my own
 	// keys produced", and disabling a key does not un-own its past traffic.
 	hashesByUser map[string][]string
+	// serviceAccountIDsByOwner holds the sorted ids of every service account a team or a user owns, disabled ones included: their traffic carries no project, so the team's or the user's usage readers find it by principal, and disabling a service account does not hide what it did. serviceAccountOwners maps each of those ids back to its owner.
+	serviceAccountIDsByOwner map[meta.Owner][]string
+	serviceAccountOwners     map[string]meta.Owner
 
 	// tokenVersionByUser mirrors users.token_version of enabled users, so
 	// token verification stays a map read.
@@ -176,8 +188,8 @@ type Snapshot struct {
 
 	serviceAccountsByID   map[string]*serviceaccount.ServiceAccount
 	serviceAccountsByName map[string]*serviceaccount.ServiceAccount
-	// serviceAccountsByProject groups a project's accounts (sorted by name).
-	serviceAccountsByProject map[string][]*serviceaccount.ServiceAccount
+	// serviceAccountsByOwner groups a project's, a team's or a user's own accounts (sorted by name).
+	serviceAccountsByOwner map[meta.Owner][]*serviceaccount.ServiceAccount
 
 	groupsByID   map[string]*group.Group
 	groupsByName map[string]*group.Group

@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
@@ -55,15 +53,18 @@ func registerHostKeyDetectAccount(api huma.API, d Deps, protect huma.Middlewares
 		if err := d.Authz.Authorize(ctx, "host-keys.update", authz.Resource{Kind: "host-key", ID: in.ID, Owner: &k.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		snap := d.Catalog.Current()
-		h, spec, err := probeTarget(snap, d.Adapters, k)
-		if err != nil {
-			return nil, err
+		h, spec, reason := probeTarget(d.Catalog.Current(), d.Adapters, k.Spec.HostID)
+		if spec == nil {
+			return nil, huma.Error422UnprocessableEntity(reason)
 		}
-		org, err := probeKey(ctx, spec, h, k)
-		if err != nil {
-			return nil, err
+		if k.Resolved == "" {
+			return nil, huma.Error422UnprocessableEntity("the key's value cannot be resolved")
 		}
+		check := probeValue(ctx, spec, h, k.Resolved, k.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth)
+		if check.Outcome != keyDetected {
+			return nil, check.detectError()
+		}
+		org := check.Org
 
 		accounts, err := ownerAccountsAt(ctx, d, k)
 		if err != nil {
@@ -84,43 +85,6 @@ func registerHostKeyDetectAccount(api huma.API, d Deps, protect huma.Middlewares
 			CurrentAccountID: k.Spec.AccountID, MatchingAccountID: idOf(matching),
 		}}, nil
 	})
-}
-
-// probeTarget is the key's host and the wire shape to probe it with: the first of the host's bindings, by name, whose shape names organizations.
-func probeTarget(snap *appcatalog.Snapshot, specs *adapter.Registry, k *hostkey.HostKey) (*host.Host, *adapter.Spec, error) {
-	h, ok := snap.Host(k.Spec.HostID)
-	if !ok || !h.Routable() {
-		return nil, nil, huma.Error422UnprocessableEntity("the key's host is not loaded or has no base URL")
-	}
-	for _, b := range snap.AllBindings() {
-		if b.Spec.HostID != h.Meta.ID {
-			continue
-		}
-		if s := specs.Spec(b.Spec.Adapter); s != nil && s.Org != nil {
-			return h, s, nil
-		}
-	}
-	return nil, nil, huma.Error422UnprocessableEntity(fmt.Sprintf("host %q does not name the organization a key belongs to", h.Meta.Name))
-}
-
-// probeKey asks h which organization k belongs to, mapping the failures to the endpoint's answers.
-func probeKey(ctx context.Context, spec *adapter.Spec, h *host.Host, k *hostkey.HostKey) (adapter.Org, error) {
-	if k.Resolved == "" {
-		return adapter.Org{}, huma.Error422UnprocessableEntity("the key's value cannot be resolved")
-	}
-	org, err := spec.ProbeOrg(ctx, h.Spec.BaseURL, k.Resolved, k.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth)
-	var status *adapter.ProbeStatusError
-	switch {
-	case err == nil:
-		return org, nil
-	case errors.Is(err, adapter.ErrNoOrgHeader):
-		return adapter.Org{}, huma.Error422UnprocessableEntity(fmt.Sprintf("host %q answered without naming an organization", h.Meta.Name))
-	case errors.As(err, &status):
-		return adapter.Org{}, huma.Error502BadGateway(fmt.Sprintf("host %q answered %d", h.Meta.Name, status.Status),
-			&huma.ErrorDetail{Message: "upstream status", Location: "upstream.status", Value: status.Status})
-	default:
-		return adapter.Org{}, huma.Error502BadGateway(fmt.Sprintf("host %q could not be reached: %v", h.Meta.Name, err))
-	}
 }
 
 // ownerAccountsAt lists the accounts of k's owner at k's host that the caller can see.

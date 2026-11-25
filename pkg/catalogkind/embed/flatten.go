@@ -82,7 +82,7 @@ func Flatten(snap Source, at time.Time, keep func(*model.Model, *binding.Binding
 					hostEntry.Models = append(hostEntry.Models, sdkcatalog.Binding{
 						MetadataName: snapEntry.Name,
 						Adapter:      string(hb.Spec.Adapter),
-						Name:         snapEntry.Upstream(),
+						Name:         hb.UpstreamNameFor(m, snapEntry.Upstream()),
 						Providers:    providers,
 						// Featured marks only the family's pointer snapshot, so a
 						// featured family yields one shortlist entry, not every

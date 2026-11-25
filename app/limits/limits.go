@@ -30,6 +30,8 @@ const (
 	RungAccount Rung = "account"
 	RungTeam    Rung = "team"
 	RungProject Rung = "project"
+	// RungPersonal is the personal account of the user who owns a service account: the rung above that service account's lane.
+	RungPersonal Rung = "personal"
 	// RungLane is the account a request runs in: a personal, member or service account.
 	RungLane Rung = "lane"
 	// RungSystem marks a relay-wide ceiling no policy binds, such as the proxy-mode limit.

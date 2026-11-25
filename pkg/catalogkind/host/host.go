@@ -77,19 +77,19 @@ type Spec struct {
 
 	// Path overrides the adapter's shape-default upstream path (Spec.DefaultPath)
 	// when this host's endpoint doesn't follow the vendor-canonical layout.
-	// Used verbatim when set — an explicit "" means BaseURL is the complete
+	// Used when set, {key} placeholders filled from Backend — an explicit "" means BaseURL is the complete
 	// endpoint URL and nothing is appended. Unset (nil) keeps the shape default.
-	Path *string `json:"path,omitempty" yaml:"path,omitempty" doc:"Upstream path used instead of the wire shape's default. An empty string means baseURL is the complete endpoint; omitted keeps the default."`
+	Path *string `json:"path,omitempty" yaml:"path,omitempty" doc:"Upstream path used instead of the wire shape's default. An empty string means baseURL is the complete endpoint; omitted keeps the default. Each {key} placeholder (key of letters, digits and _, before any ?) is replaced with backend[key]; a request through the host answers host_misconfigured while one is unset."`
 
 	// Paths overrides Path for single wire shapes, on a host that serves
-	// several under one BaseURL at different locations. Same verbatim
+	// several under one BaseURL at different locations. Same
 	// semantics as Path; a shape it doesn't name falls back to Path.
-	Paths map[adapters.Name]string `json:"paths,omitempty" yaml:"paths,omitempty" doc:"Upstream path per wire shape (adapter name, such as openai), used instead of path for that shape: {openai: /v1beta/openai/chat/completions}. A shape not listed uses path."`
+	Paths map[adapters.Name]string `json:"paths,omitempty" yaml:"paths,omitempty" doc:"Upstream path per wire shape (adapter name, such as openai), used instead of path for that shape: {openai: /v1beta/openai/chat/completions}. A shape not listed uses path. Placeholders are filled as in path."`
 
 	// Backend is the free-form bag of backend-specific config (Bedrock region,
 	// Azure deployment, Vertex project/location, etc.). Each provider client
 	// reads the keys it needs and ignores the rest. Optional.
-	Backend map[string]string `json:"backend,omitempty" yaml:"backend,omitempty" doc:"Backend-specific settings, such as a region or deployment name; each adapter reads the keys it needs."`
+	Backend map[string]string `json:"backend,omitempty" yaml:"backend,omitempty" doc:"Backend-specific settings, such as a region or deployment name; each adapter reads the keys it needs. A {key} placeholder in path or paths takes the value of key here."`
 
 	// PricingStrategies is the menu of billing modes this upstream offers:
 	// "api" (per-token metered) and/or "sub" (flat-rate subscription). A
@@ -196,10 +196,45 @@ func (h *Host) Validate() error {
 	if _, ok := h.Spec.Paths[""]; ok {
 		return fmt.Errorf("host %q: paths: adapter name must not be empty", h.Meta.Name)
 	}
+	if h.Spec.Path != nil {
+		if err := checkPlaceholders(*h.Spec.Path); err != nil {
+			return fmt.Errorf("host %q: path: %w", h.Meta.Name, err)
+		}
+	}
+	for _, shape := range slices.Sorted(maps.Keys(h.Spec.Paths)) {
+		if err := checkPlaceholders(h.Spec.Paths[shape]); err != nil {
+			return fmt.Errorf("host %q: paths[%s]: %w", h.Meta.Name, shape, err)
+		}
+	}
 	if err := validateParamRenames(h.Spec.RequestParamRenames); err != nil {
 		return fmt.Errorf("host %q: %w", h.Meta.Name, err)
 	}
 	return nil
+}
+
+// checkPlaceholders refuses a { or } in path that is not part of a {key} placeholder, key [A-Za-z0-9_]+, and a placeholder after the ?: a value is filled in escaped as a path segment, which is wrong in a query. Whether backend sets the key is left to request time.
+func checkPlaceholders(path string) error {
+	query := strings.IndexByte(path, '?')
+	for i := 0; i < len(path); i++ {
+		switch path[i] {
+		case '}':
+			return fmt.Errorf("%q: } at offset %d closes no placeholder", path, i)
+		case '{':
+			if query >= 0 && i > query {
+				return fmt.Errorf("%q: placeholder at offset %d is in the query", path, i)
+			}
+			end := strings.IndexByte(path[i:], '}')
+			if end <= 1 || strings.IndexFunc(path[i+1:i+end], notKeyRune) >= 0 {
+				return fmt.Errorf("%q: { at offset %d opens no {key} placeholder (key of letters, digits and _)", path, i)
+			}
+			i += end
+		}
+	}
+	return nil
+}
+
+func notKeyRune(r rune) bool {
+	return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '_')
 }
 
 // validateParamRenames refuses a table whose result would depend on the order

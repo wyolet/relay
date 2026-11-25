@@ -28,7 +28,7 @@ type sseAdapter struct {
 	callFn func(ctx context.Context) error
 }
 
-func (a *sseAdapter) Call(ctx context.Context, _ string, _ *string, _ string, _ []byte, _ http.Header, _ string, _, _ bool) (*http.Response, error) {
+func (a *sseAdapter) Call(ctx context.Context, _ pipeline.Upstream, _ string, _ []byte, _ http.Header, _ string, _, _ bool) (*http.Response, error) {
 	if a.callFn != nil {
 		if err := a.callFn(ctx); err != nil {
 			return nil, err
@@ -128,7 +128,7 @@ type pipeAdapter struct {
 	pr *io.PipeReader
 }
 
-func (a *pipeAdapter) Call(ctx context.Context, _ string, _ *string, _ string, _ []byte, _ http.Header, _ string, _, _ bool) (*http.Response, error) {
+func (a *pipeAdapter) Call(ctx context.Context, _ pipeline.Upstream, _ string, _ []byte, _ http.Header, _ string, _, _ bool) (*http.Response, error) {
 	context.AfterFunc(ctx, func() { a.pr.CloseWithError(context.Canceled) })
 	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: a.pr}, nil
 }
@@ -222,7 +222,7 @@ func TestCutResponseChargesTokenFloor(t *testing.T) {
 
 type cutAdapter struct{ sseAdapter }
 
-func (a *cutAdapter) Call(context.Context, string, *string, string, []byte, http.Header, string, bool, bool) (*http.Response, error) {
+func (a *cutAdapter) Call(context.Context, pipeline.Upstream, string, []byte, http.Header, string, bool, bool) (*http.Response, error) {
 	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(&cutReader{r: strings.NewReader(a.body)})}, nil
 }
 

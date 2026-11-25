@@ -9,7 +9,6 @@ import (
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/hostkey"
-	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
@@ -36,7 +35,7 @@ func runSecret(args []string) error {
 		return fmt.Errorf("storage: %w", err)
 	}
 	defer st.Close()
-	sec, err := appsecret.Wire(st.Pool(), cfg.MasterKeys())
+	sec, err := cliSecrets(st.Pool(), cfg)
 	if err != nil {
 		return err
 	}
@@ -48,7 +47,9 @@ func runSecret(args []string) error {
 		return printJSON(status)
 	}
 	if cmd.name == "organization-to-system" {
-		n, err := organizationToSystem(ctx, hostkey.NewStore(st.Pool(), sec.Registry, sec.Stored), sec.Stored)
+		keys := hostkey.NewStore(st.Pool(), sec.Registry, sec.Stored)
+		keys.UseOAuth(sec.OAuth)
+		n, err := organizationToSystem(ctx, keys, sec.Stored)
 		rows := []audit.Row{secretAuditRow("secret-keys.organization-to-system", "", rowCount(n), err)}
 		return errors.Join(err, writeSecretAudit(ctx, st.Pool(), cmd, rows))
 	}

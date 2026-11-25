@@ -265,5 +265,6 @@ func TestProxyEdge_ClientStallIsATimeout(t *testing.T) {
 		}
 		<-e.returned
 		awaitPostFlight(t, e.seen)
+		waitForFreeSlot(t, e.adm)
 	}
 }

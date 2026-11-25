@@ -105,7 +105,7 @@ func TestApplyKeepsBindingAccountsInsideTheOwnersScope(t *testing.T) {
 	other.StampOwner()
 	rows.Projects = append(rows.Projects, other)
 	sa := rows.ServiceAccounts[0]
-	acct := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID)
+	acct := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Meta.Owner)
 	acct.Meta.ID = meta.NewID()
 	rows.Accounts = []*account.Account{acct}
 	rows.Policies = []*policy.Policy{{Meta: meta.Metadata{ID: meta.NewID(), Name: "shared-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}}}}

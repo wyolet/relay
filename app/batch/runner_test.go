@@ -27,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/internal/adapterspecs"
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/kv"
@@ -428,5 +429,103 @@ func TestRun_KeepsThePlanItStartedWith(t *testing.T) {
 	}
 	if plans.Caller(t, k).Refused == nil {
 		t.Fatal("the swapped plans did not refuse the disabled submitter; the test proves nothing")
+	}
+}
+
+// An item in the family's shape, or in the member's own, runs on a route whose first hop binds a member of the family, failing over to a hop of the family's shape: each hop is sent the item in its own form, path and auth.
+func TestRun_FamilyRoute(t *testing.T) {
+	for _, inbound := range []adapters.Name{"shape-base", "shape-member"} {
+		t.Run(string(inbound), func(t *testing.T) { runFamilyRoute(t, inbound) })
+	}
+}
+
+func runFamilyRoute(t *testing.T, inbound adapters.Name) {
+	member := newUpstream(t, answering(http.StatusInternalServerError, `{"error":{"message":"down"}}`))
+	base := newUpstream(t, answering(http.StatusOK, `{"id":"x"}`))
+
+	var w plantest.World
+	m := w.Model(w.Provider("vendor"), "test-model")
+	memberHost, baseHost := w.Host("member", member.URL), w.Host("base", base.URL)
+	w.Bind(m, memberHost, "shape-member")
+	w.Bind(m, baseHost, "shape-base")
+	w.Credential(memberHost, nil, plantest.System, "sk-member")
+	w.Credential(baseHost, nil, plantest.System, "sk-base")
+	u := w.User()
+	k := w.UserKey(u, "rk-secret")
+	rn, _, _ := runnerOver(t, w.Load(t))
+	rn.Specs = adapter.NewRegistry(
+		(&adapter.Spec{Name: "shape-base", DefaultPath: "/base/generate", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}}).Build(),
+		(&adapter.Spec{Name: "shape-member", Family: "shape-base", DefaultPath: "/member/generate", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Token"}, Envelope: &adapter.RequestEnvelope{
+			DropMembers:    []string{"model"},
+			DefaultMembers: []adapter.BodyMember{{Key: "version", Value: []byte(`"v1"`)}},
+		}}).Build(),
+	)
+
+	attr := Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: u.ID, CredentialKind: inference.CredentialKey, CredentialID: k.Meta.ID}
+	if status, _, err := rn.Run(context.Background(), "item-1", k.Spec.KeyHash, TokenClaims{}, attr, inbound, []byte(itemBody)); err != nil || status != http.StatusOK {
+		t.Fatalf("Run: status %d, err %v; want the base hop's 200", status, err)
+	}
+	if d := cmp.Diff([]sent{{"/member/generate", "Token sk-member", `{"version":"v1"}`}}, member.sent()); d != "" {
+		t.Errorf("member hop (-want +got):\n%s", d)
+	}
+	if d := cmp.Diff([]sent{{"/base/generate", "Bearer sk-base", itemBody}}, base.sent()); d != "" {
+		t.Errorf("base hop (-want +got):\n%s", d)
+	}
+}
+
+// A Messages item runs on a cloud binding of the anthropic family as relay registers it: the model moves into the path and the version into the body.
+func TestRun_CloudMessagesBinding(t *testing.T) {
+	cloud := newUpstream(t, answering(http.StatusOK, `{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+
+	var w plantest.World
+	m := w.Model(w.Provider("vendor"), "test-model")
+	h := w.Host("cloud", cloud.URL)
+	h.Spec.Backend = map[string]string{"project": "p1", "location": "global"}
+	b := w.Bind(m, h, adapters.VertexAnthropic)
+	b.Spec.UpstreamName, b.Spec.Snapshots = "claude-test-1@20250101", []string{"test-model"}
+	w.Credential(h, nil, plantest.System, "sk-cloud")
+	u := w.User()
+	k := w.UserKey(u, "rk-secret")
+	rn, _, _ := runnerOver(t, w.Load(t))
+	rn.Specs = adapter.NewRegistry(adapterspecs.Specs()...)
+
+	attr := Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: u.ID, CredentialKind: inference.CredentialKey, CredentialID: k.Meta.ID}
+	item := `{"model":"test-model","max_tokens":16,"messages":[]}`
+	if status, _, err := rn.Run(context.Background(), "item-1", k.Spec.KeyHash, TokenClaims{}, attr, adapters.Anthropic, []byte(item)); err != nil || status != http.StatusOK {
+		t.Fatalf("Run: status %d, err %v; want 200", status, err)
+	}
+	want := sent{"/v1/projects/p1/locations/global/publishers/anthropic/models/claude-test-1@20250101:rawPredict", "Bearer sk-cloud", `{"max_tokens":16,"messages":[],"anthropic_version":"vertex-2023-10-16"}`}
+	if d := cmp.Diff([]sent{want}, cloud.sent()); d != "" {
+		t.Errorf("cloud hop (-want +got):\n%s", d)
+	}
+}
+
+// A failover between hosts that name the model differently sends each its own name: the body is built for the first hop and reset for the next.
+func TestRun_FailoverSendsEachHopItsUpstreamName(t *testing.T) {
+	const wire = "global.vendor/test-model-v1:0"
+	named := newUpstream(t, answering(http.StatusInternalServerError, `{"error":{"message":"down"}}`))
+	direct := newUpstream(t, answering(http.StatusOK, `{"id":"x","usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+
+	var w plantest.World
+	m := w.Model(w.Provider("vendor"), "test-model")
+	cloud, vendor := w.Host("cloud", named.URL), w.Host("vendor", direct.URL)
+	b := w.Bind(m, cloud, adapters.OpenAI)
+	b.Spec.UpstreamName, b.Spec.Snapshots = wire, []string{"test-model"}
+	w.Bind(m, vendor, adapters.OpenAI)
+	w.Credential(cloud, nil, plantest.System, "sk-cloud")
+	w.Credential(vendor, nil, plantest.System, "sk-vendor")
+	u := w.User()
+	k := w.UserKey(u, "rk-secret")
+	rn, _, _ := runnerOver(t, w.Load(t))
+
+	attr := Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: u.ID, CredentialKind: inference.CredentialKey, CredentialID: k.Meta.ID}
+	if status, _, err := rn.Run(context.Background(), "item-1", k.Spec.KeyHash, TokenClaims{}, attr, adapters.OpenAI, []byte(itemBody)); err != nil || status != http.StatusOK {
+		t.Fatalf("Run: status %d, err %v; want the second hop's 200", status, err)
+	}
+	if d := cmp.Diff([]sent{{"/v1/chat/completions", "Bearer sk-cloud", `{"model":"` + wire + `"}`}}, named.sent()); d != "" {
+		t.Errorf("named hop (-want +got):\n%s", d)
+	}
+	if d := cmp.Diff([]sent{{"/v1/chat/completions", "Bearer sk-vendor", itemBody}}, direct.sent()); d != "" {
+		t.Errorf("direct hop (-want +got):\n%s", d)
 	}
 }

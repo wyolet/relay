@@ -36,7 +36,9 @@ Each vendor wire shape has its own path prefix. The bare `/v1` namespace belongs
 | `POST` | `/v1/generate` | Relay canonical. See [Canonical shape](#canonical-shape). |
 | `GET` | `/v1/ws` | WebSocket carrying canonical requests. See [WebSocket](#websocket). |
 
-Gemini is an upstream shape only: bindings with `adapter: gemini` are reachable from any inbound shape above, but there is no inbound Gemini route.
+Gemini is an upstream shape only: bindings with `adapter: gemini` or `adapter: vertex_gemini` are reachable from any inbound shape above, but there is no inbound Gemini route. Host setup for `vertex_gemini`: [Gemini on Vertex AI](/concepts/catalog#gemini-on-vertex-ai).
+
+`vertex_anthropic` (Claude on Google Cloud Vertex AI) is upstream-only too. An `/anthropic/v1/messages` request reaches it as sent, except that `model` moves into the URL and `anthropic_version` is added to the body when the request has none, and a route fails over between its `anthropic` and `vertex_anthropic` bindings. Other inbound shapes are translated. Host setup: [Claude on Google Cloud Vertex AI](/concepts/catalog#claude-on-google-cloud-vertex-ai).
 
 ### Coding-agent clients
 
@@ -322,13 +324,14 @@ Relay writes errors in one envelope:
 | `403` | `policy_disabled`, `subject_disabled`, `duplicate_binding`, `account_closed`, `personal_account_off` | A rung of the caller's ladder refuses. See [Policy refusals](#policy-refusals). |
 | `403` | `account_not_held` | The request names an account its credential may not run in, or the inference token's project has no account for its user. See [Lanes](/concepts/accounts#lanes). |
 | `403` | `model_not_allowed`, `model_disabled` | A policy on the ladder does not allow the model, or the model is disabled. |
-| `403` | `unpriced_under_budget` | The model's binding has no pricing and a budget applies. |
+| `403` | `unpriced_under_budget` | The model's binding has no enabled pricing and a budget applies. |
 | `403` | `passthrough_forbidden`, `proxy_disabled` | Proxy mode: the relay key lacks `passthroughAllowed`, or proxy mode is off. |
 | `404` | `model_not_found` | No model matches the reference. |
 | `408` | `request_timeout` | Proxy mode: the request body sent no bytes for `RELAY_PROXY_BODY_IDLE_S` seconds (default 30). |
 | `413` | `request_too_large` | The body exceeds `RELAY_MAX_REQUEST_BYTES` (default 32 MiB), or in proxy mode has no top-level `model` in its first 32 MiB. |
 | `429` | `rate_limit_exceeded`, `budget_exceeded` | A rate limit or budget on a caller rung is spent, or every host key for the model is over an upstream limit or cooling. `Retry-After` says when it refills, or when the budget's next period starts. |
 | `502` | `upstream_unreachable` | The upstream host could not be dialled. |
+| `502` | `host_misconfigured` | The host's upstream path for the request's wire shape has a `{key}` placeholder its `backend` does not set, so nothing was sent to it. Returned only when no host of the route answered; otherwise the caller gets that host's failure. |
 | `502` | `upstream_stalled` | Proxy mode: the request body stopped moving for `RELAY_PROXY_BODY_IDLE_S` seconds, the upstream no longer reading it. |
 | `502` | `upstream_unavailable`, `upstream_error` | Every key failed without a usable upstream response, or the upstream call failed. |
 | `503` | `no_host_binding` | The model has no enabled host binding. |
@@ -343,7 +346,7 @@ When Relay refuses a request itself, `error.refusal` classes the code into what 
 | `refusal` | Meaning | Codes |
 | --- | --- | --- |
 | `model_not_allowed` | A policy, account or principal refuses the model. Use another model or account. | `policy_disabled`, `model_not_allowed`, `unpriced_under_budget`, `subject_disabled`, `duplicate_binding`, `account_closed`, `personal_account_off`, `account_not_held` |
-| `host_not_reachable` | No host the caller can reach serves the model, including a pinned `@host` none of its pools is at, or none of them accepted a connection. Use another model or host. | `model_not_found`, `model_disabled`, `no_host_binding`, `no_keys`, and `upstream_unreachable` when no candidate host connected |
+| `host_not_reachable` | No host the caller can reach serves the model, including a pinned `@host` none of its pools is at, or none of them accepted a connection. Use another model or host. | `model_not_found`, `model_disabled`, `no_host_binding`, `no_keys`, `host_misconfigured`, and `upstream_unreachable` when no candidate host connected |
 | `no_capacity` | A rate limit, a budget, an account cooldown, or every host key out of rotation. Retry later. | `rate_limit_exceeded`, `budget_exceeded`, `no_healthy_keys` |
 
 `refusal` is absent on every other error, an upstream's own included. `code` stays alongside it with the detail. The same value is recorded on the request's [usage event](/concepts/usage#failed-requests).
@@ -369,13 +372,13 @@ The rung is `team`, `project` or `lane` on the caller side, and `account` for a 
 | Status | `code` | Cause | Fix |
 | --- | --- | --- | --- |
 | `403` | `policy_disabled` | The policy bound on that rung is disabled. Relay does not fall back to another rule. | Enable the policy, or bind the account to another one. |
-| `403` | `subject_disabled` | The caller's team or project is disabled. A disabled user or service account gets `401` instead. | Enable the team or project. |
+| `403` | `subject_disabled` | The caller's team or project is disabled, or the user who owns the caller's service account. A disabled user or service account gets `401` instead. | Enable the team, project or user. |
 | `403` | `duplicate_binding` | Two policy bindings reach one account on that rung. Saving such a binding is normally refused with `409`. | Remove the account from all but one binding. |
 | `403` | `account_closed` | The request's account is a member account whose membership ended: no role binding grants the user that team or project any more. | Grant the membership again, or use another account. |
 | `403` | `personal_account_off` | The request runs in a user's personal account, or a provider account they own personally, while that user's personal accounts are turned off. | Use a key in a team or project account; see [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off). |
 | `403` | `account_not_held` | The request names an account its credential may not run in, or one that does not exist. A key's default account that stopped taking its keys answers the same. | Name an account the credential may use; see [Lanes](/concepts/accounts#lanes). |
 | `403` | `model_not_allowed` | A policy on the ladder does not allow the model. The message names the rung and the policy: `model "<model>" is not allowed by the <rung> policy <policy-id>`. | Add the model to that policy's `models`, or empty the list. |
-| `403` | `unpriced_under_budget` | A budget applies on that rung and the binding has no pricing. | Add pricing for the binding. |
+| `403` | `unpriced_under_budget` | A budget applies on that rung and the binding has no enabled pricing. | Add or enable pricing for the binding. |
 | `429` | `budget_exceeded` | A hard budget on a caller rung is spent for this period. `Retry-After` is the time to the next period. | Raise the cap, or wait. |
 | `429` | `rate_limit_exceeded` | A rate limit on a caller rung is spent, or every host key is over an upstream limit or its account is cooling. | Wait for `Retry-After`. |
 | `503` | `no_keys` | No pool the caller reaches is at a host serving the model. When a caller policy links pools, its rung is the one named in the logs. | Link a pool at a serving host in the caller's policy, or give the caller's scope a host key there. |

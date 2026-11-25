@@ -373,7 +373,7 @@ func (q *Queries) GetSCIMClientByTokenHash(ctx context.Context, tokenHash string
 }
 
 const getServiceAccount = `-- name: GetServiceAccount :one
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts WHERE id = $1
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version, team_id, user_id FROM service_accounts WHERE id = $1
 `
 
 func (q *Queries) GetServiceAccount(ctx context.Context, id string) (ServiceAccount, error) {
@@ -389,6 +389,8 @@ func (q *Queries) GetServiceAccount(ctx context.Context, id string) (ServiceAcco
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResourceVersion,
+		&i.TeamID,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -807,7 +809,7 @@ func (q *Queries) ListSCIMClients(ctx context.Context) ([]ScimClient, error) {
 }
 
 const listServiceAccounts = `-- name: ListServiceAccounts :many
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts ORDER BY name
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version, team_id, user_id FROM service_accounts ORDER BY name
 `
 
 func (q *Queries) ListServiceAccounts(ctx context.Context) ([]ServiceAccount, error) {
@@ -829,6 +831,8 @@ func (q *Queries) ListServiceAccounts(ctx context.Context) ([]ServiceAccount, er
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResourceVersion,
+			&i.TeamID,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -1315,23 +1319,27 @@ func (q *Queries) UpsertRoleBinding(ctx context.Context, arg UpsertRoleBindingPa
 }
 
 const upsertServiceAccount = `-- name: UpsertServiceAccount :execrows
-INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
+INSERT INTO service_accounts (id, name, display_name, project_id, team_id, user_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name         = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
     project_id   = EXCLUDED.project_id,
+    team_id      = EXCLUDED.team_id,
+    user_id      = EXCLUDED.user_id,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
-WHERE $7::bigint IS NULL OR service_accounts.resource_version = $7::bigint
+WHERE $9::bigint IS NULL OR service_accounts.resource_version = $9::bigint
 `
 
 type UpsertServiceAccountParams struct {
 	ID              string
 	Name            string
 	DisplayName     string
-	ProjectID       string
+	ProjectID       pgtype.Text
+	TeamID          pgtype.Text
+	UserID          pgtype.Text
 	Metadata        []byte
 	Spec            []byte
 	ExpectedVersion pgtype.Int8
@@ -1343,6 +1351,8 @@ func (q *Queries) UpsertServiceAccount(ctx context.Context, arg UpsertServiceAcc
 		arg.Name,
 		arg.DisplayName,
 		arg.ProjectID,
+		arg.TeamID,
+		arg.UserID,
 		arg.Metadata,
 		arg.Spec,
 		arg.ExpectedVersion,

@@ -38,13 +38,15 @@ The `model` field of an inference request resolves against the catalog. These fo
 
 Names are normalized before lookup, so dotted and hyphenated forms match (`gpt-5.5` and `gpt-5-5` are the same name). A dated snapshot name the model lists (for example `gpt-4o-2024-08-06`) selects that snapshot.
 
+A binding whose `snapshots` lists some of the model's snapshots serves only those, so a name routes only to hosts whose binding serves the snapshot it selects. At a host whose binding does not serve the snapshot, its `@host` form answers `model_not_found`.
+
 When a model has bindings on several hosts and you don't pin one, Relay tries the pools your caller policy links in their order (without one, the host keys your scopes own), keeping those at a host that serves the model, so that order decides the host order and later pools are the failover. See [Failover](/concepts/key-pooling#failover). Pin a host with `@host` in the model name, or send `X-WR-Upstream-Host: <host>`; Relay appends the header's host to the model name unless the name already contains `@`. A pin limits routing to that host; it does not grant access the policies don't give, and a host none of your pools is at is refused with `host_not_reachable`. See [Policies](/concepts/policies) for how grants are written.
 
 `GET /v1/models` lists the models your credential can reach. `GET /api/catalog/resolve?ref=<ref>` on the control API shows what a reference expands to: a [policy grant](/concepts/policies#granting-models) such as `anthropic`, or a request's `claude-sonnet-4-6@anthropic`.
 
 ## Model aliases
 
-A model can declare **aliases** in `spec.aliases`: extra names that resolve to it. Aliases are checked last, after every catalog name and its provider- and host-qualified forms miss, so they never shadow a real model. An alias may contain one `*` after a literal prefix (`claude-fable-5[*]`). When a request matches an alias, Relay routes to the model and sends the name from the request upstream unchanged; this is how a client can send `claude-fable-5[1m]` to a provider that understands that suffix.
+A model can declare **aliases** in `spec.aliases`: extra names that resolve to it. Aliases are checked last, after every catalog name and its provider- and host-qualified forms miss, so they never shadow a real model. An alias may contain one `*` after a literal prefix (`claude-fable-5[*]`). When a request matches an alias, Relay routes to the model and sends the name from the request upstream unchanged; this is how a client can send `claude-fable-5[1m]` to a provider that understands that suffix. An adapter that names the model in the URL (`gemini`, `vertex_anthropic`, `vertex_gemini`) would put that name, suffix included, in the upstream path; set the binding's `upstreamName` and that name is sent instead. `upstreamName` applies only while the binding serves exactly one snapshot of the model (its `snapshots` lists one, or the model has only one).
 
 Aliases are lookup keys only: they are not valid in policy grants, and usage records the model's catalog name. To add an alias to a catalog model without losing it on the next catalog update, use an [overlay](/concepts/overlays).
 
@@ -82,6 +84,60 @@ The base URL is the server root; the binding's shape adds the path (`/v1/chat/co
 A `noAuth` host needs no host key, and Relay sends no auth header to it. Because no host key gates it, a caller reaches it only through a pool at that host linked by a caller policy; the pool needs no keys. See [Keyless hosts](/concepts/key-pooling#keyless-hosts).
 
 For any other OpenAI-compatible server, create your own `Host` with its `baseURL` (and `noAuth: true` if it takes no key), the `Model` rows, and a `HostBinding` per model with `adapter: openai`, through the control API or [`relay apply`](/concepts/gitops). If the server serves several wire shapes at different locations under one `baseURL`, give each its path in `spec.paths`, keyed by adapter name; a shape not listed uses `spec.path`, else the shape's default. If the server expects a request key under another name than the shape uses, declare it in `spec.requestParamRenames`; see [Renamed parameters](/reference/inference-api#renamed-parameters).
+
+## Claude on Google Cloud Vertex AI
+
+The `vertex_anthropic` adapter calls `/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model}:rawPredict` (`:streamRawPredict` when streaming). The host fills `{project}` and `{location}` from its `backend`; a missing one answers `502 host_misconfigured` and nothing is sent.
+
+1. Create a `Host` with `backend.project` (the Google Cloud project id) and `backend.location`, and a `baseURL` that matches the location:
+
+   | `location` | `baseURL` |
+   | --- | --- |
+   | `global` | `https://aiplatform.googleapis.com` |
+   | `us` or `eu` (multi-region) | `https://aiplatform.us.rep.googleapis.com`, `https://aiplatform.eu.rep.googleapis.com` |
+   | a region, such as `us-east5` | `https://us-east5-aiplatform.googleapis.com` |
+
+   Google serves Claude Sonnet 4.6 and older models on regional endpoints; newer models need `global` or a multi-region location. Leave `spec.path` unset: it would replace the adapter's path. A `spec.paths` entry for another adapter on the same host does not affect it.
+
+2. Add a [service-account host key](/concepts/key-pooling#service-account-keys) for the host, with the `https://www.googleapis.com/auth/cloud-platform` scope. Relay exchanges it only at token hosts listed in [`RELAY_OAUTH_TOKEN_HOSTS`](/configuration): add the host of the key file's `token_uri` (`oauth2.googleapis.com` in a Google key file).
+
+3. Bind each model with `adapter: vertex_anthropic` and the model id as Vertex names it in `upstreamName`: the Claude API id for Claude 4.6 and later (`claude-sonnet-4-6`), and `@` before the snapshot date for older models (`claude-sonnet-4-5@20250929`). `upstreamName` applies only while the binding serves one snapshot, so list that snapshot in `snapshots` when the model has several. Without it the snapshot's name goes into the URL.
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Host
+metadata:
+  name: vertex-claude
+spec:
+  baseURL: https://aiplatform.googleapis.com
+  backend:
+    project: <project-id>
+    location: global
+---
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: HostBinding
+metadata:
+  name: <model>-vertex-claude
+spec:
+  model: <model>
+  host: vertex-claude
+  adapter: vertex_anthropic
+  upstreamName: <vertex model id>
+  snapshots: [<snapshot>]
+```
+
+### Gemini on Vertex AI
+
+The `vertex_gemini` adapter calls `/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent` (`:streamGenerateContent?alt=sse` when streaming). It takes the same host as Claude: `backend.project`, `backend.location`, a `baseURL` from the table above, and a service-account host key; one host can carry bindings of both adapters.
+
+Bind each model with `adapter: vertex_gemini`. Without `upstreamName` the snapshot's name goes into the URL, so set it only when that name is not the id Vertex uses for the model.
+
+Vertex rejects a file URL sent without a media type, so Relay gives every image and file URL one:
+
+- An image takes the type its extension names (`.png`, `.jpg`, `.webp`, `.heic`, `.heif`), else `image/*`.
+- A file takes its own media type, else `video/mp4` for a YouTube URL, else the type its extension names (common image, audio and video extensions, and `.pdf`). For a `gs://` URI the extension is read from the object name as written. A file URL with none of these answers `400 unsupported_request` and nothing is sent.
+
+A route does not fail over between a `gemini` and a `vertex_gemini` binding of one model: the two send different requests.
 
 ## System rate limits
 

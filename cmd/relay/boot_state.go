@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/kv"
 	secretoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	"github.com/wyolet/relay/secret"
@@ -66,36 +67,30 @@ func kvPoolBusy(s kv.Store) func() bool {
 	return nil
 }
 
-func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, stores *appcatalog.Stores, kvStore kv.Store) {
+func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, stores *appcatalog.Stores, kvStore kv.Store, plans *engine.Engine) {
 	// Proactive OAuth renewal: keeps subscription tokens fresh ahead of
 	// expiry so requests never pay refresh latency. Cluster-safe via the kv
 	// lock; outcomes persist on the hostkey status (UI-visible on the same
 	// key) and broadcast through the catalog hostkey NOTIFY so every pod
 	// reloads the credential (secret_values has no trigger of its own).
+	oauthNotify := func(ctx context.Context, id string) error {
+		_, err := st.Pool().Exec(ctx, "select pg_notify('catalog_events', $1)", "hostkey:upsert:"+id)
+		return err
+	}
 	oauthRefs := func(ctx context.Context) ([]secret.Ref, error) {
 		keys, err := stores.HostKey.List(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var refs []secret.Ref
-		for _, k := range keys {
-			if k.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
-				continue
+		refs, changed := oauthRenewals(keys, func(id string) *hostkey.HostKey {
+			return engine.Get[hostkey.HostKey](plans.View(), id)
+		})
+		for _, id := range changed {
+			if err := oauthNotify(ctx, id); err != nil {
+				slog.Error("oauth refresher: announce re-resolved credential", "id", id, "err", err)
 			}
-			// Revoked grants wait for operator re-auth (a value update
-			// clears the status) — the refresher contract excludes them.
-			if c := k.Status.Credential; c != nil && c.State == hostkey.CredentialRevoked {
-				continue
-			}
-			refs = append(refs, secret.Ref{
-				Kind: secret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
-			})
 		}
 		return refs, nil
-	}
-	oauthNotify := func(ctx context.Context, id string) error {
-		_, err := st.Pool().Exec(ctx, "select pg_notify('catalog_events', $1)", "hostkey:upsert:"+id)
-		return err
 	}
 	oauthHooks := secretoauth.Hooks{
 		OnRenewed: func(ctx context.Context, id string, expiresAt time.Time) error {
@@ -118,6 +113,27 @@ func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, st
 	}
 	go secretoauth.NewRefresher(oauthRefs, stores.OAuthResolver, kvStore, oauthHooks, slog.Default()).
 		Run(listenerCtx)
+}
+
+// oauthRenewals picks, from the listed host keys, the oauth credentials the refresher renews and the ones whose resolved value differs from the copy the published plans hold. Listing re-mints an expired token without a NOTIFY, and Renew then finds nothing due, so a key dropped while its token endpoint was down would stay out of routing until its next renewal; a revoked key re-minted by listing is announced too.
+func oauthRenewals(keys []*hostkey.HostKey, published func(id string) *hostkey.HostKey) (refs []secret.Ref, changed []string) {
+	for _, k := range keys {
+		if k.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
+			continue
+		}
+		if p := published(k.Meta.ID); p != nil && p.Resolved != k.Resolved {
+			changed = append(changed, k.Meta.ID)
+		}
+		// Revoked grants wait for operator re-auth (a value update
+		// clears the status) — the refresher contract excludes them.
+		if c := k.Status.Credential; c != nil && c.State == hostkey.CredentialRevoked {
+			continue
+		}
+		refs = append(refs, secret.Ref{
+			Kind: secret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
+		})
+	}
+	return refs, changed
 }
 
 // healthChecks names the backends the control plane's /healthz pings; the in-memory kv has nothing to ping.

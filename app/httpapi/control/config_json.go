@@ -22,6 +22,7 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
 )
 
@@ -67,6 +68,11 @@ func withFeatures(rc RuntimeConfig, d Deps) RuntimeConfig {
 		f["oidc"] = true
 	}
 	rc.Features = f
+	rc.PseudoKinds = enabledPseudoKinds(d.PseudoKinds)
+	rc.ServiceAccountOwnerKinds = make([]string, len(serviceaccount.OwnerKinds))
+	for i, k := range serviceaccount.OwnerKinds {
+		rc.ServiceAccountOwnerKinds[i] = string(k)
+	}
 	return rc
 }
 
@@ -76,14 +82,16 @@ func withFeatures(rc RuntimeConfig, d Deps) RuntimeConfig {
 // so the UI prompts rather than guessing. The object is additive — the UI
 // reads keys it knows and ignores the rest.
 type RuntimeConfig struct {
-	ControlAPIURL   string          `json:"controlApiUrl,omitempty"   doc:"Base URL of the control API; empty means /api on the UI's own origin."`
-	InferenceAPIURL string          `json:"inferenceApiUrl,omitempty" doc:"Public base URL of the inference API; empty when not configured."`
-	Mode            string          `json:"mode,omitempty"            enum:"oss,cloud" doc:"Deployment flavour the UI adapts to."` // "oss" | "cloud"
-	Version         string          `json:"version,omitempty"         doc:"Relay build version."`
-	Features        map[string]bool `json:"features,omitempty"        doc:"Feature flags the UI gates on: tokens, users, audit and accessReview are always present; oidc only when enabled."`
-	Telemetry       *Telemetry      `json:"telemetry,omitempty"       doc:"Public client-side error reporting config."`
-	DocsURL         string          `json:"docsUrl,omitempty"         doc:"Documentation link shown in the UI."`
-	SupportURL      string          `json:"supportUrl,omitempty"      doc:"Support link shown in the UI."`
+	ControlAPIURL            string          `json:"controlApiUrl,omitempty"   doc:"Base URL of the control API; empty means /api on the UI's own origin."`
+	InferenceAPIURL          string          `json:"inferenceApiUrl,omitempty" doc:"Public base URL of the inference API; empty when not configured."`
+	Mode                     string          `json:"mode,omitempty"            enum:"oss,cloud" doc:"Deployment flavour the UI adapts to."` // "oss" | "cloud"
+	Version                  string          `json:"version,omitempty"         doc:"Relay build version."`
+	Features                 map[string]bool `json:"features,omitempty"        doc:"Feature flags the UI gates on: tokens, users, audit and accessReview are always present; oidc only when enabled."`
+	PseudoKinds              []string        `json:"pseudoKinds"               doc:"The pseudo kinds this relay serves, such as agents for POST /pseudo-agents; always present, empty when none. A kind not listed has no route."`
+	ServiceAccountOwnerKinds []string        `json:"serviceAccountOwnerKinds" doc:"The kinds of metadata.owner a service account takes on this relay, in order: project, then team and user where accepted; always present. A relay that answers without the field takes project only."`
+	Telemetry                *Telemetry      `json:"telemetry,omitempty"       doc:"Public client-side error reporting config."`
+	DocsURL                  string          `json:"docsUrl,omitempty"         doc:"Documentation link shown in the UI."`
+	SupportURL               string          `json:"supportUrl,omitempty"      doc:"Support link shown in the UI."`
 }
 
 // Telemetry carries PUBLIC client-side telemetry config only.

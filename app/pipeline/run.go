@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -38,21 +39,35 @@ type runState struct {
 	att attempt
 	// host is the last host called, for the reachability record of a failure.
 	host *host.Host
-	// body is what bodyHop's attempts send, with the keys HopBody dropped from it.
+	// body is what bodyHop's attempts send, with the keys HopBody dropped from it; adapter calls them in shape, and reads the served response in post-flight.
 	bodyHop     *plan.RouteHop
 	body        []byte
 	bodyDropped []string
+	adapter     Adapter
+	shape       adapters.Name
 }
 
-// bodyFor sets st.body to what hop is sent, asking req.HopBody once per hop.
+// bodyFor sets st.body to what hop is sent and st.adapter to what calls it, asking req.HopBody once per hop.
 func (st *runState) bodyFor(req *Request, hop *plan.RouteHop) {
 	if st.bodyHop == hop {
 		return
 	}
+	st.adapter, st.shape = req.hopCall(hop)
 	st.bodyHop, st.body, st.bodyDropped = hop, req.Body, nil
 	if req.HopBody != nil {
-		st.body, st.bodyDropped = req.HopBody(hop, req.BodyShape, req.Body)
+		st.body, st.bodyDropped = req.HopBody(hop, st.shape, req.Body)
 	}
+}
+
+// hopCall returns the adapter that calls hop and the shape it is called in: the hop's own with HopAdapters set, else the request's.
+func (req *Request) hopCall(hop *plan.RouteHop) (Adapter, adapters.Name) {
+	if req.HopAdapters != nil {
+		name := hop.Binding.Spec.Adapter
+		if a := req.HopAdapters.PipelineAdapter(name); a != nil {
+			return a, name
+		}
+	}
+	return req.Adapter, req.BodyShape
 }
 
 // Run orchestrates one request over req.Hops. Caller MUST Close the returned Result.Body to release the connection and trigger post-flight.
@@ -204,6 +219,10 @@ hops:
 	if err == nil {
 		err = ErrAllKeysExhausted
 	}
+	// An upstream that answered is the caller's verdict, not another hop's configuration fault: host_misconfigured answers only a route where none connected.
+	if _, ok := errors.AsType[*PathPlaceholderError](err); ok && connected {
+		err = ErrAllKeysExhausted
+	}
 	if errors.Is(err, ErrAllKeysExhausted) && lastStatus != 0 {
 		err = &UpstreamFailureError{Status: lastStatus, Header: lastHeader, Body: lastBody, Cause: err}
 	}
@@ -218,7 +237,7 @@ type attemptAction int
 
 const (
 	actNextKey attemptAction = iota // fail over to another credential of the hop
-	actNextHop                      // the hop's host is unreachable: go on to the next hop
+	actNextHop                      // the hop's host is unreachable or its path unfilled: go on to the next hop
 	actStop                         // stop; surface the upstream error
 )
 
@@ -237,24 +256,37 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 	keyValue := slot.Credential.Resolved
 	// An OAuth-kind credential authenticates differently upstream; the adapter picks the auth variant per credential, so a failover between kinds authenticates each correctly.
 	oauth := slot.Credential.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth
+	upstreamModel := hop.UpstreamModel
+	if upstreamModel == "" {
+		upstreamModel = req.UpstreamModel
+	}
 	connAttempts := 0
+	a := st.adapter
+	up := Upstream{BaseURL: hop.Host.Spec.BaseURL, Path: hop.Host.Spec.PathFor(st.shape), Backend: hop.Host.Spec.Backend}
 	var out callOutcome
 	for {
 		req.Lifecycle.MarkUpstreamStart()
-		call := newUpstreamCall(ctx, callTimeout(req.Adapter, req.Stream))
-		resp, err := req.Adapter.Call(call.ctx, hop.Host.Spec.BaseURL, hop.Host.Spec.PathFor(req.BodyShape), keyValue, st.body, req.Headers, req.UpstreamModel, req.Stream, oauth)
-		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
+		call := newUpstreamCall(ctx, callTimeout(a, req.Stream))
+		resp, err := a.Call(call.ctx, up, keyValue, st.body, req.Headers, upstreamModel, req.Stream, oauth)
+		if err == nil && resp != nil && !shouldRetry(a, resp) {
 			call.accepted.Store(true)
 			st.cur.reached, st.callerReached = true, true
-			p.observeOrg(req.Adapter, slot, resp.Header)
+			p.observeOrg(a, slot, resp.Header)
 			out.result = p.makeResult(req, st, resp, call)
 			return actStop, out
+		}
+		// Every credential of the hop would build the same path, and the host was never dialled.
+		if unfilled, ok := errors.AsType[*PathPlaceholderError](err); ok {
+			unfilled.Host = hop.Host.Meta.Name
+			call.release()
+			out.err = err
+			return actNextHop, out
 		}
 		// A caller leaving mid-call can surface as a broken pipe or a reset instead of the context error; either way the key did nothing wrong.
 		if cerr := ctx.Err(); err != nil && cerr != nil && !errors.Is(err, cerr) {
 			err = fmt.Errorf("%w: %w", cerr, err)
 		}
-		retry, kind, retryAfter := classify(req.Adapter, resp, err)
+		retry, kind, retryAfter := classify(a, resp, err)
 		if kind != keypool.FailureUpstreamUnreachable {
 			st.cur.reached, st.callerReached = true, true
 		}

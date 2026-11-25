@@ -44,7 +44,7 @@ func (s *Store) Stores() directory.Stores {
 	return directory.Stores{
 		Users:  userStore{s},
 		Groups: kindStore[directory.Group]{s: s, t: s.groups, check: s.checkGroup},
-		Teams:  kindStore[directory.Team]{s: s, t: s.teams, onDelete: s.cascadeTeam},
+		Teams:  kindStore[directory.Team]{s: s, t: s.teams, checkDelete: s.checkTeamDelete, onDelete: s.cascadeTeam},
 		Projects: kindStore[directory.Project]{s: s, t: s.projects, check: s.checkProject, onDelete: s.cascadeProject,
 			prepare: (*directory.Project).StampOwner},
 		ServiceAccounts: kindStore[directory.ServiceAccount]{s: s, t: s.serviceAccounts, check: s.checkServiceAccount, onDelete: s.dropServiceAccount,
@@ -86,8 +86,36 @@ func (s *Store) checkProject(p *directory.Project) error {
 }
 
 func (s *Store) checkServiceAccount(sa *directory.ServiceAccount) error {
-	if _, ok := s.projects.rows[sa.Spec.ProjectID]; !ok {
-		return invalid("service account %q: project %q does not exist", sa.Meta.Name, sa.Spec.ProjectID)
+	n := 0
+	for _, id := range []string{sa.Spec.ProjectID, sa.Spec.TeamID, sa.Spec.UserID} {
+		if id != "" {
+			n++
+		}
+	}
+	if n != 1 {
+		return invalid("service account %q: exactly one of project, team and user is set", sa.Meta.Name)
+	}
+	var found bool
+	switch o := sa.Meta.Owner; o.Kind {
+	case directory.OwnerProject:
+		_, found = s.projects.rows[o.ID]
+	case directory.OwnerTeam:
+		_, found = s.teams.rows[o.ID]
+	case directory.OwnerUser:
+		_, found = s.users[o.ID]
+	}
+	if !found {
+		return invalid("service account %q: %s %q does not exist", sa.Meta.Name, sa.Meta.Owner.Kind, sa.Meta.Owner.ID)
+	}
+	return nil
+}
+
+// checkTeamDelete stands in for the restricting foreign key: a team that owns service accounts is not deleted.
+func (s *Store) checkTeamDelete(id string) error {
+	for _, sa := range s.serviceAccounts.rows {
+		if sa.Spec.TeamID == id {
+			return invalid("team %q still owns service account %q", id, sa.Meta.Name)
+		}
 	}
 	return nil
 }
@@ -155,6 +183,12 @@ func (s *Store) cascadeRole(id string) {
 func (s *Store) dropServiceAccount(id string) { s.dropSubject(directory.SubjectServiceAccount, id) }
 
 func (s *Store) dropUser(id string) {
+	for said, sa := range s.serviceAccounts.rows {
+		if sa.Spec.UserID == id {
+			delete(s.serviceAccounts.rows, said)
+			s.dropServiceAccount(said)
+		}
+	}
 	for _, g := range s.groups.rows {
 		g.Spec.MemberIDs = slices.DeleteFunc(g.Spec.MemberIDs, func(m string) bool { return m == id })
 		if len(g.Spec.MemberIDs) == 0 {

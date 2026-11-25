@@ -42,6 +42,10 @@ func TestInferenceOpenAPIIsDocumented(t *testing.T) {
 				}
 			}
 		}
+		r401, _ := responses["401"].(map[string]any)
+		if desc, _ := r401["description"].(string); !strings.Contains(desc, "service account is disabled") {
+			t.Errorf("POST %s: 401 does not name a disabled service account", path)
+		}
 		r429, _ := responses["429"].(map[string]any)
 		headers, _ := r429["headers"].(map[string]any)
 		if _, ok := headers["Retry-After"]; !ok {

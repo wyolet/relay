@@ -10,7 +10,7 @@ import (
 // ---- SerializeRequest ----
 
 // SerializeRequest encodes a canonical *v1.Request to a Gemini generateContent body.
-func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
+func (t GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	out := &geminiRequest{}
 
 	modelKey := ""
@@ -129,7 +129,7 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	// stay in contents (marker-wrapped user turns) so the prefix stays
 	// cache-stable.
 	input, hoistedSys := v1.SplitHoistedSystem(req.Input)
-	contents, extraSys, err := canonicalItemsToGemini(input)
+	contents, extraSys, err := t.canonicalItemsToGemini(input)
 	if err != nil {
 		return nil, fmt.Errorf("gemini serialize_request: %w", err)
 	}

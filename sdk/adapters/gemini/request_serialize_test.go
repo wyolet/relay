@@ -266,6 +266,77 @@ func TestSerializeRequest_UnsendableImageOrFilePart(t *testing.T) {
 	}
 }
 
+// Vertex rejects a fileData without a mimeType. The variant sends an image's extension type, else image/*; a file's own bare media type, else video/mp4 for a YouTube URL, else its extension's, and refuses a file with none. The Gemini API form sends the URL and the part's media type as they are.
+func TestSerializeRequest_VertexFileMediaType(t *testing.T) {
+	image := func(url string) v1.Part { return &v1.ImagePart{ImageURL: url} }
+	file := func(url, mediaType string) v1.Part { return &v1.FilePart{FileURL: url, MediaType: mediaType} }
+	cases := []struct {
+		name   string
+		part   v1.Part
+		vertex string // the mimeType the variant sends, "" when it refuses the part
+	}{
+		{"image with a known extension, query and fragment", image("https://example.com/a/cat.JPG?sig=x.pdf#y"), "image/jpeg"},
+		{"image with params after its extension", image("https://example.com/cat.png;v=1"), "image/png"},
+		{"image without an extension", image("https://example.com/cat"), "image/*"},
+		{"image whose extension names no image type", image("https://example.com/cat.mp4"), "image/*"},
+		{"file with a media type", file("https://example.com/clip", "video/mp4"), "video/mp4"},
+		{"file whose media type outranks its extension", file("gs://b/a.pdf", "text/plain"), "text/plain"},
+		{"file media type with parameters", file("https://example.com/doc", "application/pdf; charset=binary"), "application/pdf"},
+		{"blank file media type", file("https://example.com/a.pdf", "  "), "application/pdf"},
+		{"gs object with a known extension", file("gs://b/talk.mp3", ""), "audio/mp3"},
+		{"gs object name holding ? and #", file("gs://b/scan?v=2#1.pdf", ""), "application/pdf"},
+		{"URL that does not parse", file("https://example.com/a%zz.wav?x=1.txt", ""), "audio/wav"},
+		{"URL with params after its extension", file("https://example.com/doc.pdf;jsessionid=1", ""), "application/pdf"},
+		{"aac", file("https://example.com/s.aac", ""), "audio/x-aac"},
+		{"mpga", file("https://example.com/s.mpga", ""), "audio/mpga"},
+		{"avi", file("https://example.com/v.avi", ""), "video/avi"},
+		{"YouTube watch URL", file("https://www.youtube.com/watch?v=abc", ""), "video/mp4"},
+		{"YouTube short URL", file("https://youtu.be/abc", ""), "video/mp4"},
+		{"YouTube mobile URL", file("https://m.youtube.com/watch?v=abc", ""), "video/mp4"},
+		{"watch URL on another host", file("https://example.com/watch?v=abc", ""), ""},
+		{"text file", file("https://example.com/notes.txt", ""), ""},
+		{"opus, which Vertex does not list", file("https://example.com/s.opus", ""), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := &v1.Request{Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{c.part}}}}
+			url, mediaType := "", ""
+			switch p := c.part.(type) {
+			case *v1.ImagePart:
+				url = p.ImageURL
+			case *v1.FilePart:
+				url, mediaType = p.FileURL, p.MediaType
+			}
+			fileData := func(mimeType string) string {
+				uri, _ := json.Marshal(url)
+				if mimeType == "" {
+					return `{"contents":[{"role":"user","parts":[{"fileData":{"fileUri":` + string(uri) + `}}]}]}`
+				}
+				mt, _ := json.Marshal(mimeType)
+				return `{"contents":[{"role":"user","parts":[{"fileData":{"mimeType":` + string(mt) + `,"fileUri":` + string(uri) + `}}]}]}`
+			}
+
+			body, err := GeminiTranslator{Vertex: true}.SerializeRequest(req)
+			switch {
+			case c.vertex == "":
+				if !errors.Is(err, v1.ErrUnsupportedRequest) {
+					t.Errorf("Vertex: serialized to %s (err %v), want ErrUnsupportedRequest", body, err)
+				}
+			case err != nil:
+				t.Errorf("Vertex: %v", err)
+			default:
+				assertJSON(t, body, fileData(c.vertex))
+			}
+
+			body, err = GeminiTranslator{}.SerializeRequest(req)
+			if err != nil {
+				t.Fatalf("Gemini API: %v", err)
+			}
+			assertJSON(t, body, fileData(mediaType))
+		})
+	}
+}
+
 func TestToolChoice_RoundTrip(t *testing.T) {
 	const fAndG = `[{"functionDeclarations":[{"name":"f","parametersJsonSchema":{}},{"name":"g","parametersJsonSchema":{}}]}]`
 	cases := []struct {

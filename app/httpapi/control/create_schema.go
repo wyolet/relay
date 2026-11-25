@@ -12,11 +12,15 @@ import (
 // createMetadataSchema names Metadata with name optional, shared by every create body.
 const createMetadataSchema = "MetadataCreate"
 
+// specOptionalOnCreate are the kinds whose every spec field is optional, so a create may omit spec. A service account needs spec.projectId only when metadata.owner is not given, which its Validate answers with 400. Update keeps spec required: an omitted spec there would reset the stored row, re-enabling a disabled one.
+var specOptionalOnCreate = map[string]bool{"team": true, "group": true, "service-account": true}
+
 // createRequestBody is the create body for T: a named component, <T>Create,
 // with T's shape but metadata.name optional, since create derives the slug
-// from displayName. Update and responses keep T's schema, where name is
-// required. Nil (huma's default body) when T has no metadata requiring a name.
-func createRequestBody[T any](api huma.API) *huma.RequestBody {
+// from displayName, and spec optional for the kinds specOptionalOnCreate
+// names. Update and responses keep T's schema, where both are required. Nil
+// (huma's default body) when T has no metadata requiring a name.
+func createRequestBody[T any](api huma.API, singular string) *huma.RequestBody {
 	reg := api.OpenAPI().Components.Schemas
 	ref := reg.Schema(reflect.TypeFor[T](), true, "").Ref
 	body := reg.SchemaFromRef(ref)
@@ -42,6 +46,9 @@ func createRequestBody[T any](api huma.API) *huma.RequestBody {
 		createBody := *body
 		createBody.Properties = maps.Clone(body.Properties)
 		createBody.Properties["metadata"] = &huma.Schema{Ref: path.Dir(ref) + "/" + createMetadataSchema, Description: metadataDescription}
+		if specOptionalOnCreate[singular] {
+			createBody.Required = slices.DeleteFunc(slices.Clone(body.Required), func(f string) bool { return f == "spec" })
+		}
 		createBody.PrecomputeMessages()
 		schemas[name] = &createBody
 	}

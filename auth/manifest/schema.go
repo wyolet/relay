@@ -107,7 +107,12 @@ func (r *Registry) specSchema(kind string) (map[string]any, bool) {
 	case KindProject:
 		props, required = map[string]any{"team": described(str(), "The team's name."), "enabled": boolean()}, []string{"team"}
 	case KindServiceAccount:
-		props, required = map[string]any{"project": described(str(), "The project's name."), "enabled": boolean()}, []string{"project"}
+		props = map[string]any{
+			"project": described(str(), "The owning project's name. Exactly one of project, team and user is set."),
+			"team":    described(str(), "The owning team's name. Exactly one of project, team and user is set."),
+			"user":    described(str(), "The owning user's username. Exactly one of project, team and user is set."),
+			"enabled": boolean(),
+		}
 	case KindRole:
 		rules := array(objectSchema(map[string]any{"kinds": terms(r.cfg.RuleKinds), "verbs": terms(r.cfg.RuleVerbs)}, "kinds", "verbs"))
 		rules["minItems"] = 1
@@ -140,7 +145,11 @@ func (r *Registry) specSchema(kind string) (map[string]any, bool) {
 		}
 		props[f.Name] = s
 	}
-	return objectSchema(props, required...), true
+	o := objectSchema(props, required...)
+	if kind == KindServiceAccount {
+		o["oneOf"] = []any{map[string]any{"required": []string{"project"}}, map[string]any{"required": []string{"team"}}, map[string]any{"required": []string{"user"}}}
+	}
+	return o, true
 }
 
 // clearing is the null and "" a User field takes to clear the stored value.

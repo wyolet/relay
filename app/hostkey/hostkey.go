@@ -11,9 +11,10 @@
 //     (Spec.Value), encrypted by the storage layer with
 //     RELAY_MASTER_KEY, and persisted as opaque bytes.
 //   - ValueKindOAuth:  Spec.Value carries an OAuth token blob (access +
-//     refresh + expiry). Stored encrypted exactly like ValueKindStored; the
-//     resolver returns the access token and refreshes it on expiry via the
-//     oauth:<Provider> settings section. Spec.ValueFrom.Provider selects it.
+//     refresh + expiry) or a service-account key file. Stored encrypted
+//     exactly like ValueKindStored; the resolver returns the access token and
+//     renews it on expiry, a token blob via the oauth:<Provider> settings
+//     section, a service account with the JWT-bearer grant from its key.
 //
 // Spec.Value is intentionally tagged `json:"-"` so cleartext never appears in
 // JSONB or in API responses. Loading from YAML is the only path that carries
@@ -43,6 +44,8 @@ type HostKey struct {
 	Resolved string `json:"-" yaml:"-"`
 	// KeyHash is sha256 hex (first 6 bytes) of Resolved, for telemetry.
 	KeyHash string `json:"-" yaml:"-"`
+	// KeepStoredValue marks a stored or oauth write that carries no value and keeps the stored one, even when it resolves to nothing (an oauth credential stored without a token). Runtime-only.
+	KeepStoredValue bool `json:"-" yaml:"-"`
 
 	// Derived: populated by the control-API enrich step from the stores; not
 	// stored and not loaded from YAML. Lists every Policy whose pools reach
@@ -120,19 +123,20 @@ type Spec struct {
 	// never repopulates it, and marshalSpec strips it before any JSONB
 	// persistence. The `omitempty` tag combined with that read-side
 	// invariant keeps cleartext out of GET responses.
-	Value string `json:"value,omitempty" yaml:"value,omitempty" writeOnly:"true" doc:"The secret, for valueFrom.kind stored or oauth (an OAuth token blob). Sealed at rest and never returned. Set on create only: an update keeps the stored value and refuses a new one (use POST /host-keys/by-id/{id}/rotate)."`
+	Value string `json:"value,omitempty" yaml:"value,omitempty" writeOnly:"true" doc:"The secret, for valueFrom.kind stored or oauth. For oauth: an OAuth token blob, or a service-account key file (JSON with type service_account) with an added scopes array, which relay exchanges for access tokens; an endpoint that rejects the key refuses the write. Sealed at rest and never returned. Set on create only: an update keeps the stored value and refuses a new one (use POST /host-keys/by-id/{id}/rotate)."`
 }
 
 // ValueFrom is the value-mode discriminator. For ValueKindEnv, Env names the
 // environment variable. For ValueKindStored, Env is empty. For ValueKindOAuth,
-// Provider names the oauth:<provider> settings section used to refresh the
-// token, and Spec.Value (on write) carries the initial token blob.
+// Provider names the oauth:<provider> settings section used to refresh a
+// token blob (only a label for a service-account key), and Spec.Value (on
+// write) carries the initial token blob or key file.
 type ValueFrom struct {
-	Kind ValueKind `json:"kind"          yaml:"kind"          validate:"required,oneof=env stored oauth" enum:"env,stored,oauth" doc:"env reads the secret from an environment variable; stored seals the value sent in spec.value; oauth stores an OAuth token blob from spec.value and refreshes it."`
+	Kind ValueKind `json:"kind"          yaml:"kind"          validate:"required,oneof=env stored oauth" enum:"env,stored,oauth" doc:"env reads the secret from an environment variable; stored seals the value sent in spec.value; oauth stores an OAuth token blob or service-account key file from spec.value and renews its access token."`
 	Env  string    `json:"env,omitempty" yaml:"env,omitempty" doc:"Environment variable holding the secret, for kind env. RELAY_* and WYOLET_* names are refused."`
 	// Provider selects the oauth:<provider> settings section (refresh
 	// endpoints + client). Required for ValueKindOAuth, empty otherwise.
-	Provider string `json:"provider,omitempty" yaml:"provider,omitempty" doc:"OAuth provider whose settings section refreshes the token, for kind oauth."`
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty" doc:"For kind oauth: the OAuth provider whose settings section refreshes a token blob. Required; a service-account key renews from the key itself, so here it is only a label."`
 }
 
 // ValueKind enumerates the supported value-storage modes.
@@ -157,6 +161,12 @@ var ErrReservedEnv = errors.New("valueFrom.env names a variable reserved for rel
 
 // ErrNoAccount refuses a key that names no provider account.
 var ErrNoAccount = errors.New("a host key needs a provider account; create one at this host first")
+
+// ValueRefusedError is an oauth value a write refused before storing anything: it does not parse, its service-account grant is invalid, or the token endpoint rejected it. Its text never quotes the value.
+type ValueRefusedError struct{ Err error }
+
+func (e *ValueRefusedError) Error() string { return "the oauth value was refused: " + e.Err.Error() }
+func (e *ValueRefusedError) Unwrap() error { return e.Err }
 
 // reservedEnv reports whether name falls under relay's own configuration. Case is ignored because some platforms resolve env names case-insensitively.
 func reservedEnv(name string) bool {
@@ -219,18 +229,8 @@ func (k *HostKey) Validate() error {
 	if err := meta.Validator.Struct(k); err != nil {
 		return err
 	}
-	switch k.Meta.Owner.Kind {
-	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject:
-	case meta.OwnerOrganization:
-		if k.Meta.Owner.ID != "" {
-			return fmt.Errorf("hostkey %q: an organization owner carries no id", k.Meta.Name)
-		}
-	case meta.OwnerTeam:
-		if k.Meta.Owner.ID == "" {
-			return fmt.Errorf("hostkey %q: a team owner needs the team's id", k.Meta.Name)
-		}
-	default:
-		return fmt.Errorf("hostkey %q: owner.kind must be user, organization, system, team or project, got %q", k.Meta.Name, k.Meta.Owner.Kind)
+	if err := ValidateOwner(k.Meta.Name, k.Meta.Owner); err != nil {
+		return err
 	}
 	if k.Spec.HostID == "" {
 		return fmt.Errorf("hostkey %q: spec.hostId is required", k.Meta.Name)
@@ -247,14 +247,14 @@ func (k *HostKey) Validate() error {
 			return fmt.Errorf("hostkey %q: value must be empty for env mode", k.Meta.Name)
 		}
 	case ValueKindStored:
-		if k.Spec.Value == "" && k.Resolved == "" {
+		if k.Spec.Value == "" && k.Resolved == "" && !k.KeepStoredValue {
 			return fmt.Errorf("hostkey %q: value required for stored mode", k.Meta.Name)
 		}
 		if k.Spec.ValueFrom.Env != "" {
 			return fmt.Errorf("hostkey %q: valueFrom.env must be empty for stored mode", k.Meta.Name)
 		}
 	case ValueKindOAuth:
-		if k.Spec.Value == "" && k.Resolved == "" {
+		if k.Spec.Value == "" && k.Resolved == "" && !k.KeepStoredValue {
 			return fmt.Errorf("hostkey %q: value (oauth token blob) required for oauth mode", k.Meta.Name)
 		}
 		if k.Spec.ValueFrom.Env != "" {
@@ -263,6 +263,24 @@ func (k *HostKey) Validate() error {
 		if k.Spec.ValueFrom.Provider == "" {
 			return fmt.Errorf("hostkey %q: valueFrom.provider required for oauth mode", k.Meta.Name)
 		}
+	}
+	return nil
+}
+
+// ValidateOwner refuses an owner a host key named name cannot have: one of no kind user, organization, system, team or project, an organization with an id, a team without one.
+func ValidateOwner(name string, o meta.Owner) error {
+	switch o.Kind {
+	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject:
+	case meta.OwnerOrganization:
+		if o.ID != "" {
+			return fmt.Errorf("hostkey %q: an organization owner carries no id", name)
+		}
+	case meta.OwnerTeam:
+		if o.ID == "" {
+			return fmt.Errorf("hostkey %q: a team owner needs the team's id", name)
+		}
+	default:
+		return fmt.Errorf("hostkey %q: owner.kind must be user, organization, system, team or project, got %q", name, o.Kind)
 	}
 	return nil
 }
