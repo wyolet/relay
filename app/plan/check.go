@@ -192,6 +192,9 @@ func (c *Check) Find(ctx context.Context, live *engine.View, read, proposed []an
 			wctx, cancel := context.WithTimeout(ctx, c.timeout)
 			defer cancel()
 			_, err := bounded(ctx, c, h, func() (struct{}, error) { return struct{}{}, work(wctx) })
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				return ErrCheckTimeout
+			}
 			return err
 		}
 		return Findings{Errors: found, Warnings: newWarnings(beforeIssues, afterIssues), Result: after, baseline: baseline, within: within}, nil
